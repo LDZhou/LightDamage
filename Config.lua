@@ -1,0 +1,1101 @@
+--[[
+    LD Combat Stats v2.0 - Config.lua
+    纯粹极简风设置面板 — 无多余边框
+]]
+
+local addonName, ns = ...
+local L = ns.L
+
+local SCROLL_EXTRA_PAD = 150
+local Config = {}
+
+
+-- 10名玩家，数值写死，每次预览完全相同
+local PREVIEW_MOCK = {
+    {name="Arcsmith",    class="MAGE",        damage=14200000, dps=21300, healing= 320000, hps=  480, damageTaken=2800000, deaths=0, interrupts=8, dispels=3},
+    {name="Ironhide",    class="WARRIOR",     damage=12800000, dps=19200, healing= 180000, hps=  270, damageTaken=3200000, deaths=1, interrupts=5, dispels=0},
+    {name="Thornwood",   class="DRUID",       damage=11500000, dps=17250, healing=9800000, hps=14700, damageTaken=1200000, deaths=0, interrupts=2, dispels=4},
+    {name="Voidweaver",  class="WARLOCK",     damage=10900000, dps=16350, healing= 420000, hps=  630, damageTaken=1900000, deaths=0, interrupts=0, dispels=1},
+    {name="Swiftbolt",   class="HUNTER",      damage= 9800000, dps=14700, healing= 280000, hps=  420, damageTaken=2100000, deaths=2, interrupts=3, dispels=0},
+    {name="Dawnstrike",  class="PALADIN",     damage= 8600000, dps=12900, healing=8200000, hps=12300, damageTaken=1800000, deaths=0, interrupts=6, dispels=5},
+    {name="Frostmantle", class="DEATHKNIGHT", damage= 7900000, dps=11850, healing= 150000, hps=  225, damageTaken=4100000, deaths=1, interrupts=0, dispels=0},
+    {name="Embercrest",  class="ROGUE",       damage= 7200000, dps=10800, healing= 200000, hps=  300, damageTaken=1600000, deaths=0, interrupts=9, dispels=0},
+    {name="Silvermist",  class="PRIEST",      damage= 5100000, dps= 7650, healing=12400000,hps=18600, damageTaken= 900000, deaths=4, interrupts=1, dispels=8},
+    {name="Stonehowl",   class="SHAMAN",      damage= 5800000, dps= 8700, healing=6800000, hps=10200, damageTaken=1500000, deaths=0, interrupts=4, dispels=2},
+}
+
+local PREVIEW_SCENES = {
+    { id="mplus",    labelKey="大秘境",  hasSumm=true,  hasOvr=true  },
+    { id="instance", labelKey="其他副本", hasSumm=false, hasOvr=true  },
+    { id="outdoor",  labelKey="非副本",  hasSumm=false, hasOvr=false },
+}
+
+ns.Config = Config
+
+local PANEL_W   = 500
+local PANEL_H   = 480
+local SIDEBAR_W = 110
+local CAT_H     = 34
+
+local categories = {
+    {id="layout", labelKey="布局",   icon="-"},
+    {id="data",   labelKey="数据",   icon="-"},
+    {id="mplus",  labelKey="大秘境", icon="-"},
+    {id="look",   labelKey="外观",   icon="-"},
+    {id="perf",   labelKey="性能",   icon="-"},
+    {id="profiles", labelKey="配置管理", icon="-"},
+}
+
+-- ============================================================
+-- 原生颜色选择器封装
+-- ============================================================
+local function OpenColorPicker(r, g, b, a, onApply, onCancel)
+    local prev = { r=r, g=g, b=b, a=a }
+
+    local function Apply()
+        local nr, ng, nb = ColorPickerFrame:GetColorRGB()
+        local na         = ColorPickerFrame:GetColorAlpha()  -- 0=全透明 1=不透明
+        onApply(nr, ng, nb, na)
+    end
+
+    ColorPickerFrame:SetupColorPickerAndShow({
+        r           = r,
+        g           = g,
+        b           = b,
+        opacity     = a,        -- 直接传 alpha，0=透明 1=不透明
+        hasOpacity  = true,
+        swatchFunc  = Apply,
+        opacityFunc = Apply,
+        cancelFunc  = function()
+            onCancel(prev.r, prev.g, prev.b, prev.a)
+        end,
+    })
+end
+
+-- ============================================================
+-- 工具
+-- ============================================================
+function Config:FillBg(f, r, g, b, a)
+    local t = f:CreateTexture(nil, "BACKGROUND"); t:SetAllPoints()
+    t:SetColorTexture(r, g, b, a); return t
+end
+
+function Config:CreateBorder(f, r, g, b, a, size)
+    local s = size or 1
+    -- ★ 修复：将层级改为 BACKGROUND，且 sublevel 设为 -8，确保实心边框永远垫在最底层
+    local t = f:CreateTexture(nil, "BACKGROUND", nil, -8)
+    t:SetPoint("TOPLEFT", -s, s); t:SetPoint("BOTTOMRIGHT", s, -s)
+    t:SetColorTexture(r, g, b, a); return t
+end
+
+function Config:Toggle()
+    if not self.panel then self:Build() end
+    if self.panel:IsShown() then self.panel:Hide() else self.panel:Show() end
+end
+
+function Config:BuildPreviewBtn()
+    local titleFrame = self._configTitle
+    if not titleFrame then return end
+
+    local btn = CreateFrame("Button", nil, titleFrame)  -- 父级改为 title
+    btn:SetSize(52, 22)
+    -- X关闭按钮在 RIGHT -4，宽24；预览按钮紧靠其左侧
+    btn:SetPoint("RIGHT", titleFrame, "RIGHT", -32, 0)
+
+    self:FillBg(btn, 0.05, 0.20, 0.35, 1)
+    self:CreateBorder(btn, 0.1, 0.45, 0.75, 1)
+
+    local bt = btn:CreateFontString(nil, "OVERLAY")
+    bt:SetFont(STANDARD_TEXT_FONT, 10, "OUTLINE")
+    bt:SetPoint("CENTER"); bt:SetText(L["预览"]); bt:SetTextColor(0.4, 0.85, 1)
+
+    btn:SetScript("OnClick", function() self:TogglePreview() end)
+    btn:SetScript("OnEnter", function() bt:SetTextColor(1, 1, 1) end)
+    btn:SetScript("OnLeave", function() bt:SetTextColor(0.4, 0.85, 1) end)
+
+    self._previewBtn  = btn
+    self._previewBtnT = bt
+end
+
+function Config:Build()
+    local p = CreateFrame("Frame", "LDStatsConfig", UIParent, "BackdropTemplate")
+    p:SetSize(PANEL_W, PANEL_H); p:SetPoint("CENTER")
+    p:SetFrameStrata("DIALOG"); p:SetFrameLevel(100)
+    p:SetMovable(true); p:EnableMouse(true); p:SetClampedToScreen(true)
+    
+    -- 极简底色
+    p:SetBackdrop({ bgFile="Interface\\Buttons\\WHITE8X8", edgeFile=nil, edgeSize=0 })
+    p:SetBackdropColor(0.05, 0.05, 0.06, 0.98)
+    p:Hide(); self.panel = p
+
+    -- 标题栏使用主题色
+    local tc = ns.db.window.themeColor or {0.08, 0.08, 0.12, 1}
+    local title = CreateFrame("Frame", nil, p)
+    title:SetHeight(30); title:SetPoint("TOPLEFT", 0, 0); title:SetPoint("TOPRIGHT", 0, 0)
+    title:EnableMouse(true); title:RegisterForDrag("LeftButton")
+    title:SetScript("OnDragStart", function() p:StartMoving() end)
+    title:SetScript("OnDragStop", function() p:StopMovingOrSizing() end)
+    self.titleBg = self:FillBg(title, unpack(tc))
+    self._configTitle = title   -- ← 新增：保存引用供预览按钮使用
+    
+    local tt = title:CreateFontString(nil, "OVERLAY")
+    tt:SetFont(STANDARD_TEXT_FONT, 12, "OUTLINE"); tt:SetPoint("LEFT", 12, 0)
+    tt:SetText(L["|cff00ccffLD Combat Stats|r 设置"])
+
+    local cb = CreateFrame("Button", nil, title); cb:SetSize(24, 24); cb:SetPoint("RIGHT", -4, 0)
+    local ct = cb:CreateFontString(nil, "OVERLAY")
+    ct:SetFont(STANDARD_TEXT_FONT, 14, "OUTLINE"); ct:SetPoint("CENTER"); ct:SetText("X"); ct:SetTextColor(0.5, 0.5, 0.5)
+    cb:SetScript("OnClick", function() p:Hide() end)
+    cb:SetScript("OnEnter", function() ct:SetTextColor(1, 0.2, 0.2) end)
+    cb:SetScript("OnLeave", function() ct:SetTextColor(0.5, 0.5, 0.5) end)
+
+    local sidebar = CreateFrame("Frame", nil, p)
+    sidebar:SetWidth(SIDEBAR_W)
+    sidebar:SetPoint("TOPLEFT", 0, -30); sidebar:SetPoint("BOTTOMLEFT", 0, 0)
+    self:FillBg(sidebar, 0.03, 0.03, 0.04, 1)
+
+    local content = CreateFrame("Frame", nil, p)
+    content:SetPoint("TOPLEFT", sidebar, "TOPRIGHT", 0, 0)
+    content:SetPoint("BOTTOMRIGHT", p, "BOTTOMRIGHT", 0, 0)
+    self.contentArea = content
+
+    self.catBtns = {}; self.pages = {}
+    for i, cat in ipairs(categories) do
+        local btn = CreateFrame("Button", nil, sidebar)
+        btn:SetSize(SIDEBAR_W, CAT_H)
+        btn:SetPoint("TOPLEFT", sidebar, "TOPLEFT", 0, -((i-1)*CAT_H))
+
+        btn.activeBg = btn:CreateTexture(nil, "BORDER"); btn.activeBg:SetAllPoints()
+        btn.activeBg:SetColorTexture(0, 0.65, 1, 0.15); btn.activeBg:Hide()
+
+        local icon = btn:CreateFontString(nil, "OVERLAY")
+        icon:SetFont(STANDARD_TEXT_FONT, 13, "OUTLINE")
+        icon:SetPoint("LEFT", 14, 0); icon:SetText(cat.icon); icon:SetTextColor(0.5, 0.5, 0.5)
+
+        local label = btn:CreateFontString(nil, "OVERLAY")
+        label:SetFont(STANDARD_TEXT_FONT, 11, "")
+        label:SetPoint("LEFT", icon, "RIGHT", 8, 0)
+        label:SetText(L[cat.labelKey]); label:SetTextColor(0.6, 0.6, 0.6)
+
+        btn.icon = icon; btn.label = label
+        btn:SetScript("OnClick", function() self:ShowPage(cat.id) end)
+        btn:SetScript("OnEnter", function() if self.activeCat ~= cat.id then label:SetTextColor(1,1,1); icon:SetTextColor(0.8,0.8,0.8) end end)
+        btn:SetScript("OnLeave", function() if self.activeCat ~= cat.id then label:SetTextColor(0.6,0.6,0.6); icon:SetTextColor(0.5,0.5,0.5) end end)
+
+        self.catBtns[cat.id] = btn
+
+        local page = CreateFrame("ScrollFrame", nil, content)
+        page:SetPoint("TOPLEFT", 12, -12)
+        page:SetPoint("BOTTOMRIGHT", -8, 12)
+
+        local inner = CreateFrame("Frame", nil, page)
+        inner:SetWidth(PANEL_W - SIDEBAR_W - 30)
+        inner:SetHeight(800)
+        page:SetScrollChild(inner)
+
+        -- 极简细滑动条
+        local sb = CreateFrame("Slider", nil, page)
+        sb:SetWidth(4)
+        sb:SetPoint("TOPRIGHT",    page, "TOPRIGHT",    0,  0)
+        sb:SetPoint("BOTTOMRIGHT", page, "BOTTOMRIGHT", 0,  0)
+        sb:SetOrientation("VERTICAL")
+        sb:SetMinMaxValues(0, 0); sb:SetValue(0)
+        
+        local sbTrack = sb:CreateTexture(nil, "BACKGROUND")
+        sbTrack:SetAllPoints(); sbTrack:SetColorTexture(0.05, 0.05, 0.06, 1)
+        
+        sb:SetThumbTexture("Interface\\Buttons\\WHITE8X8")
+        local sbThumb = sb:GetThumbTexture()
+        sbThumb:SetVertexColor(0.3, 0.3, 0.35, 1); sbThumb:SetSize(4, 30)
+        
+        -- 增加悬停交互
+        sb:SetScript("OnEnter", function() sbThumb:SetVertexColor(0.4, 0.4, 0.45, 1) end)
+        sb:SetScript("OnLeave", function() sbThumb:SetVertexColor(0.3, 0.3, 0.35, 1) end)
+
+        page:SetScript("OnMouseWheel", function(_, delta)
+            local cur = sb:GetValue()
+            local _, mx = sb:GetMinMaxValues()
+            sb:SetValue(math.max(0, math.min(mx, cur - delta * 32)))
+        end)
+        sb:SetScript("OnValueChanged", function(_, val) page:SetVerticalScroll(val) end)
+
+        page:Hide()
+        self.pages[cat.id] = { scroll = page, inner = inner, sb = sb }
+    end
+
+    self:BuildLayoutPage(); self:BuildDataPage(); self:BuildMPlusPage()
+    self:BuildLookPage(); self:BuildPerfPage(); self:BuildProfilesPage()
+    self:ShowPage("layout")
+
+    -- 预览按钮 & 关闭时联动
+    self:BuildPreviewBtn()
+    self:BuildSceneSwitcher()
+    p:HookScript("OnHide", function() self:ClosePreview() end)
+    tinsert(UISpecialFrames, "LDStatsConfig")
+end
+
+function Config:ShowPage(id)
+    self.activeCat = id
+    for cid, btn in pairs(self.catBtns) do
+        if cid == id then
+            btn.activeBg:Show(); btn.icon:SetTextColor(0, 0.75, 1); btn.label:SetTextColor(1, 1, 1)
+        else
+            btn.activeBg:Hide(); btn.icon:SetTextColor(0.5, 0.5, 0.5); btn.label:SetTextColor(0.6, 0.6, 0.6)
+        end
+    end
+    for pid, page in pairs(self.pages) do
+        if pid == id then page.scroll:Show() else page.scroll:Hide() end
+    end
+    -- 新增：切到配置管理时刷新列表
+    if id == "profiles" then self:RefreshProfilesPage() end
+    self:UpdatePageScroll(id)
+end
+
+function Config:UpdatePageScroll(id)
+    local pg = self.pages[id]
+    if not pg or not pg.sb then return end
+    local page = pg.scroll
+    local sb   = pg.sb
+    local viewH    = page:GetHeight()
+    local contentH = pg.inner:GetHeight()
+    local maxScroll = math.max(0, contentH + SCROLL_EXTRA_PAD - viewH)
+    sb:SetMinMaxValues(0, maxScroll)
+    if maxScroll > 0 then sb:Show() else sb:Hide(); sb:SetValue(0) end
+end
+
+function Config:BuildLayoutPage()
+    local inner = self.pages["layout"].inner
+    
+    -- 区域1：语言与布局模式（常驻显示）
+    local sec1 = CreateFrame("Frame", nil, inner)
+    sec1:SetWidth(PANEL_W); sec1:SetPoint("TOPLEFT")
+    local y1 = 0
+    
+    y1 = self:H(sec1, L["界面语言"], y1)
+    y1 = self:Dropdown(sec1, L["语言 (需要重载UI生效)"], y1, {
+        {l=L["跟随客户端"], v="auto"},
+        {l="简体中文", v="zhCN"},
+        {l="繁体中文", v="zhTW"},
+        {l="English", v="enUS"}
+    }, 
+    function() return ns.db.display.language or "auto" end, 
+    function(v) ns.db.display.language = v; ReloadUI() end)
+    
+    y1 = y1 - 12
+    y1 = self:H(sec1, L["布局模式"], y1)
+    y1 = self:Radio(sec1, L["分栏模式 (同时显示两种数据)"], y1, 
+        function() return ns.db.split.enabled end, 
+        function() ns.db.split.enabled = true; if ns.db.display.mode ~= "split" then ns.db.display.mode = "split" end; self:RefreshUI(); self:UpdateLayoutVisibility() end)
+    y1 = self:Radio(sec1, L["单栏模式 (底部标签切换)"], y1, 
+        function() return not ns.db.split.enabled end, 
+        function() ns.db.split.enabled = false; if ns.db.display.mode == "split" then ns.db.display.mode = ns.db.split.primaryMode or "damage" end; self:RefreshUI(); self:UpdateLayoutVisibility() end)
+    
+    sec1:SetHeight(math.abs(y1))
+    self.laySec1 = sec1
+
+    -- 区域2：数据显示设定 (仅分栏模式显示)
+    local sec2 = CreateFrame("Frame", nil, inner)
+    sec2:SetWidth(PANEL_W)
+    local y2 = 0
+    
+    y2 = self:H(sec2, L["数据显示"], y2)
+    local allModes = { {l=L["伤害"], v="damage"}, {l=L["治疗"], v="healing"}, {l=L["承伤"], v="damageTaken"}, {l=L["死亡"], v="deaths"}, {l=L["打断"], v="interrupts"}, {l=L["驱散"], v="dispels"} }
+    y2 = self:Dropdown(sec2, L["主栏显示"], y2, allModes, function() return ns.db.split.primaryMode end, function(v) ns.db.split.primaryMode=v; self:RefreshUI() end)
+    y2 = self:Dropdown(sec2, L["副栏显示"], y2, allModes, function() return ns.db.split.secondaryMode end, function(v) ns.db.split.secondaryMode=v; self:RefreshUI() end)
+    
+    y2 = y2 - 12
+    y2 = self:H(sec2, L["自适应布局比例"], y2)
+    y2 = self:Slider(sec2, L["主栏 (上方) 高度占比"], y2, 0.2, 0.8, 0.05, function() return ns.db.split.priRatio or 0.60 end, function(v) ns.db.split.priRatio = v; self:RefreshUI() end, true)
+    
+    sec2:SetHeight(math.abs(y2))
+    self.laySec2 = sec2
+
+    self:UpdateLayoutVisibility()
+end
+
+function Config:UpdateLayoutVisibility()
+    local inner = self.pages["layout"].inner
+    local isSplit = ns.db.split.enabled
+    
+    self.laySec1:SetPoint("TOPLEFT", inner, "TOPLEFT", 0, 0)
+    
+    if isSplit then
+        self.laySec2:Show()
+        self.laySec2:SetPoint("TOPLEFT", self.laySec1, "BOTTOMLEFT", 0, -12)
+        inner:SetHeight(self.laySec1:GetHeight() + self.laySec2:GetHeight() + 32)
+    else
+        self.laySec2:Hide()
+        inner:SetHeight(self.laySec1:GetHeight() + 20)
+    end
+    self:UpdatePageScroll("layout")
+end
+
+function Config:BuildDataPage()
+    local inner = self.pages["data"].inner; local y = 0
+    y = self:H(inner, L["数据显示格式"], y)
+    y = self:Check(inner, L["同时显示伤害总量和DPS"], y, function() return ns.db.display.showPerSecond end, function(v) ns.db.display.showPerSecond=v; self:RefreshUI() end)
+    y = self:Check(inner, L["显示排名序号"], y, function() return ns.db.display.showRank end, function(v) ns.db.display.showRank=v; self:RefreshUI() end)
+    y = self:Check(inner, L["在最左侧显示专精图标"], y, function() return ns.db.display.showSpecIcon end, function(v) ns.db.display.showSpecIcon=v; self:RefreshUI() end)
+    y = self:Check(inner, L["显示玩家服务器"], y, function() return ns.db.display.showRealm end, function(v) ns.db.display.showRealm=v; self:RefreshUI() end)
+    inner:SetHeight(math.abs(y) + 20)
+end
+
+function Config:BuildMPlusPage()
+    local inner = self.pages["mplus"].inner
+    
+    -- 区域1：大秘境核心设置
+    local sec1 = CreateFrame("Frame", nil, inner)
+    sec1:SetWidth(PANEL_W); sec1:SetPoint("TOPLEFT")
+    local y1 = 0
+    
+    y1 = self:H(sec1, L["大秘境与副本自适应"], y1)
+    y1 = self:Check(sec1, L["启用自适应模式 (自动归档段落)"], y1, function() return ns.db.mythicPlus.enabled end, function(v) ns.db.mythicPlus.enabled=v end)
+    
+    -- 新增强化说明文本
+    local descText = L["如果开启，则离开副本后，会把副本中所有发生的所有战斗进行汇总，并生成“全程”的战斗段落，同时副本中所有的战斗段落，会删除所有的小怪战斗段落，只保留Boss战。\n特别的，在团队副本（Raid）中，“全程”战斗段落会去掉所有的小怪战斗，只汇总所有Boss战。而其他任何副本中，“全程”段落包含小怪+Boss战的所有战斗。"]
+    y1 = self:Desc(sec1, y1, descText)
+
+    y1 = y1 - 8
+    y1 = self:H(sec1, L["全程数据双列显示"], y1)
+    y1 = self:Dropdown(sec1, L["右侧独立排行榜显示场景"], y1, { {l = L["仅大秘境开启"], v = "mplus"}, {l = L["所有副本开启"], v = "instance"}, {l = L["全部关闭"], v = "off"} }, function() return ns.db.mythicPlus.overallColumnMode or "mplus" end, function(v) ns.db.mythicPlus.overallColumnMode = v; self:RefreshUI(); self:UpdateMPlusVisibility() end)
+    y1 = self:Check(sec1, L["标题下方显示全程摘要行"], y1, function() return ns.db.mythicPlus.dualDisplay end, function(v) ns.db.mythicPlus.dualDisplay=v; self:RefreshUI() end)
+    
+    sec1:SetHeight(math.abs(y1))
+    self.mplusSec1 = sec1
+
+    -- 区域2：自适应布局比例 (全部关闭时隐藏)
+    local sec2 = CreateFrame("Frame", nil, inner)
+    sec2:SetWidth(PANEL_W)
+    local y2 = 0
+    
+    y2 = self:H(sec2, L["自适应布局比例"], y2)
+    y2 = self:Slider(sec2, L["右侧全程列宽度占比"], y2, 0.2, 0.7, 0.05, function() return ns.db.split.ovrRatio or 0.45 end, function(v) ns.db.split.ovrRatio = v; self:RefreshUI() end, true)
+    
+    sec2:SetHeight(math.abs(y2))
+    self.mplusSec2 = sec2
+
+    self:UpdateMPlusVisibility()
+end
+
+function Config:UpdateMPlusVisibility()
+    local mode = ns.db.mythicPlus.overallColumnMode or "mplus"
+    local inner = self.pages["mplus"].inner
+    if mode == "off" then
+        self.mplusSec2:Hide()
+        inner:SetHeight(self.mplusSec1:GetHeight() + 20)
+    else
+        self.mplusSec2:Show()
+        self.mplusSec2:SetPoint("TOPLEFT", self.mplusSec1, "BOTTOMLEFT", 0, -12)
+        inner:SetHeight(self.mplusSec1:GetHeight() + self.mplusSec2:GetHeight() + 32)
+    end
+    self:UpdatePageScroll("mplus")
+end
+
+function Config:BuildLookPage()
+    local inner = self.pages["look"].inner; local y = 0
+
+    -- ── 全局尺寸 ───────────────────────────────────────────────
+    y = self:H(inner, L["全局尺寸"], y)
+    y = self:Slider(inner, L["窗口缩放 (Scale)"], y, 0.5, 2.0, 0.05,
+        function() return ns.db.window.scale end,
+        function(v) ns.db.window.scale = v; if ns.UI and ns.UI.frame then ns.UI.frame:SetScale(v) end end)
+    y = self:Check(inner, L["锁定窗口位置"], y,
+        function() return ns.db.window.locked end,
+        function(v) ns.db.window.locked=v end)
+
+    -- ── 颜色 ──────────────────────────────────────────────────
+    y = y - 12; y = self:H(inner, L["界面颜色"], y)
+
+    -- 主题色
+    y = self:ColorSwatch(inner, L["标题栏/页签主题色"], y,
+        function()
+            local c = ns.db.window.themeColor or {0.08, 0.08, 0.12, 1}
+            return c[1], c[2], c[3], c[4]
+        end,
+        function(r, g, b, a)
+            ns.db.window.themeColor = {r, g, b, a}
+            if ns.UI and ns.UI.ApplyTheme then ns.UI:ApplyTheme() end
+        end)
+
+    -- 数据背景色
+    y = self:ColorSwatch(inner, L["数据区背景色"], y,
+        function()
+            local c = ns.db.window.bgColor or {0.04, 0.04, 0.05, 0.90}
+            return c[1], c[2], c[3], c[4]
+        end,
+        function(r, g, b, a)
+            ns.db.window.bgColor = {r, g, b, a}
+            if ns.UI and ns.UI.ApplyTheme then ns.UI:ApplyTheme() end
+        end)
+
+    -- 右侧全程列背景色
+    y = self:ColorSwatch(inner, L["右侧全程列背景色"], y,
+        function()
+            local c = ns.db.window.ovrBgColor or {0.02, 0.04, 0.08, 0.95}
+            return c[1], c[2], c[3], c[4]
+        end,
+        function(r, g, b, a)
+            ns.db.window.ovrBgColor = {r, g, b, a}
+            if ns.UI and ns.UI.ApplyTheme then ns.UI:ApplyTheme() end
+        end)
+
+    -- ── 名称颜色 ───────────────────────────────────────────────
+    y = y - 12; y = self:H(inner, L["名称颜色"], y)
+    local colorModes = {
+        {l=L["职业颜色"], v="class"},
+        {l=L["纯白"],     v="white"},
+        {l=L["自定义"],   v="custom"},
+    }
+    y = self:Dropdown(inner, L["名称颜色模式"], y, colorModes,
+        function() return ns.db.display.textColorMode or "class" end,
+        function(v)
+            ns.db.display.textColorMode = v
+            ns:SyncCurrentProfile()
+            self:RefreshUI()
+        end)
+
+    -- 自定义文字颜色（无透明度）
+    y = self:ColorSwatchNoAlpha(inner, L["自定义名称颜色"], y,
+        function()
+            local c = ns.db.display.textColor or {1.0, 1.0, 1.0}
+            return c[1], c[2], c[3]
+        end,
+        function(r, g, b)
+            ns.db.display.textColor = {r, g, b}
+            ns:SyncCurrentProfile()
+            self:RefreshUI()
+        end)
+
+    -- ── 字体设置 ───────────────────────────────────────────────
+    y = y - 12; y = self:H(inner, L["字体设置"], y)
+    
+    -- ★ 替换开始：使用系统自带的字体选项
+    local chatFont = select(1, ChatFontNormal:GetFont())
+    local fonts = { 
+        {l=L["系统默认"], v=STANDARD_TEXT_FONT}, 
+        {l=L["伤害数字"], v=DAMAGE_TEXT_FONT},
+        {l=L["聊天框字体"], v=chatFont},
+        {l=L["单位名称"], v=UNIT_NAME_FONT}
+    }
+    y = self:Dropdown(inner, L["全局字体"], y, fonts,
+        function() return ns.db.display.font or STANDARD_TEXT_FONT end,
+        function(v) ns.db.display.font=v; self:RefreshUI() end)
+    -- ★ 替换结束
+    y = self:Slider(inner, L["字体基础大小"], y, 8, 20, 1,
+        function() return ns.db.display.fontSizeBase or 10 end,
+        function(v) ns.db.display.fontSizeBase=v; self:RefreshUI() end)
+
+    local outlines = { {l=L["无"], v=""}, {l=L["发光描边 (Outline)"], v="OUTLINE"}, {l=L["加粗描边"], v="THICKOUTLINE"} }
+    y = self:Dropdown(inner, L["字体描边"], y, outlines,
+        function() return ns.db.display.fontOutline or "OUTLINE" end,
+        function(v) ns.db.display.fontOutline=v; self:RefreshUI() end)
+    y = self:Check(inner, L["开启文字阴影"], y,
+        function() return ns.db.display.fontShadow end,
+        function(v) ns.db.display.fontShadow=v; self:RefreshUI() end)
+
+    -- ── 数据条外观 ─────────────────────────────────────────────
+    y = y - 12; y = self:H(inner, L["数据条外观"], y)
+    y = self:Slider(inner, L["数据条高度"], y, 10, 30, 1,
+        function() return ns.db.display.barHeight end,
+        function(v) ns.db.display.barHeight=v; self:RefreshUI() end)
+    y = self:Slider(inner, L["数据条间距 (行高)"], y, 0, 10, 1,
+        function() return ns.db.display.barGap or 1 end,
+        function(v) ns.db.display.barGap=v; self:RefreshUI() end)
+    y = self:Slider(inner, L["数据条透明度"], y, 0.1, 1.0, 0.05,
+        function() return ns.db.display.barAlpha or 0.85 end,
+        function(v) ns.db.display.barAlpha=v; self:RefreshUI() end)
+
+    local textures = {
+        {l=L["极简纯色 (Minimal Flat)"], v="Interface\\Buttons\\WHITE8X8"},
+        {l=L["暴雪默认 (Blizz Default)"], v="Interface\\TargetingFrame\\UI-StatusBar"},
+        {l=L["平滑渐变 (Smooth)"], v="Interface\\RaidFrame\\Raid-Bar-Hp-Fill"}
+    }
+    y = self:Dropdown(inner, L["数据条材质"], y, textures,
+        function() return ns.db.display.barTexture or "Interface\\Buttons\\WHITE8X8" end,
+        function(v) ns.db.display.barTexture=v; self:RefreshUI() end)
+
+    inner:SetHeight(math.abs(y) + 20)
+end
+
+function Config:BuildPerfPage()
+    local inner = self.pages["perf"].inner; local y = 0
+    y = self:H(inner, L["智能刷新"], y)
+    y = self:Slider(inner, L["战斗中刷新间隔 (秒)"], y, 0.1, 1.0, 0.1,
+        function() return ns.db.smartRefresh.combatInterval end,
+        function(v) ns.db.smartRefresh.combatInterval=v end)
+    y = self:Slider(inner, L["脱战刷新间隔 (秒)"], y, 0.5, 5.0, 0.5,
+        function() return ns.db.smartRefresh.idleInterval end,
+        function(v) ns.db.smartRefresh.idleInterval=v end)
+    inner:SetHeight(math.abs(y) + 20)
+end
+
+-- ============================================================
+-- 极简风控件渲染
+-- ============================================================
+function Config:H(p, text, y)
+    local h = p:CreateFontString(nil, "OVERLAY")
+    h:SetFont(STANDARD_TEXT_FONT, 12, "OUTLINE")
+    h:SetPoint("TOPLEFT", 0, y); h:SetTextColor(0, 0.8, 1); h:SetText(text)
+    return y - 24
+end
+
+function Config:Desc(p, y, text)
+    local d = p:CreateFontString(nil, "OVERLAY")
+    d:SetFont(STANDARD_TEXT_FONT, 10, "")
+    d:SetPoint("TOPLEFT", 4, y)
+    d:SetWidth(PANEL_W - SIDEBAR_W - 40)
+    d:SetJustifyH("LEFT")
+    d:SetTextColor(0.5, 0.5, 0.5)
+    d:SetText(text)
+    
+    local h = d:GetStringHeight()
+    if h == 0 then h = ((select(2, text:gsub("\n","\n")) + 1) * 13 + 6) end
+    return y - h - 12
+end
+
+function Config:Check(p, label, y, getter, setter)
+    local btn = CreateFrame("Button", nil, p); btn:SetSize(14, 14); btn:SetPoint("TOPLEFT", 4, y)
+    self:FillBg(btn, 0.1, 0.1, 0.15, 1); self:CreateBorder(btn, 0.3, 0.3, 0.4, 1)
+    
+    local fill = btn:CreateTexture(nil, "ARTWORK"); fill:SetPoint("TOPLEFT", 3, -3); fill:SetPoint("BOTTOMRIGHT", -3, 3)
+    fill:SetColorTexture(0, 0.75, 1, 1); fill:SetShown(getter())
+    
+    local hl = btn:CreateTexture(nil, "HIGHLIGHT"); hl:SetAllPoints(); hl:SetColorTexture(1, 1, 1, 0.1)
+    
+    local t = btn:CreateFontString(nil, "OVERLAY"); t:SetFont(STANDARD_TEXT_FONT, 11, ""); t:SetPoint("LEFT", btn, "RIGHT", 8, 0); t:SetTextColor(0.8, 0.8, 0.8); t:SetText(label)
+    btn:SetScript("OnClick", function() local nxt = not getter(); fill:SetShown(nxt); setter(nxt) end); return y - 24
+end
+
+function Config:Radio(p, label, y, getter, setter)
+    local btn = CreateFrame("Button", nil, p); btn:SetSize(300, 16); btn:SetPoint("TOPLEFT", 4, y)
+    local box = btn:CreateTexture(nil, "BACKGROUND"); box:SetSize(14, 14); box:SetPoint("LEFT", 0, 0); box:SetColorTexture(0.1, 0.1, 0.15, 1)
+    -- ★ 修复：单选框的边框同样垫底
+    local border = btn:CreateTexture(nil, "BACKGROUND", nil, -8); border:SetPoint("TOPLEFT", box, "TOPLEFT", -1, 1); border:SetPoint("BOTTOMRIGHT", box, "BOTTOMRIGHT", 1, -1); border:SetColorTexture(0.3, 0.3, 0.4, 1)    
+    local fill = btn:CreateTexture(nil, "ARTWORK"); fill:SetPoint("TOPLEFT", box, "TOPLEFT", 3, -3); fill:SetPoint("BOTTOMRIGHT", box, "BOTTOMRIGHT", -3, 3); fill:SetColorTexture(0, 0.75, 1, 1)
+    
+    -- 悬停效果绑定在整行上，提升手感
+    local hl = btn:CreateTexture(nil, "HIGHLIGHT"); hl:SetPoint("TOPLEFT", box, "TOPLEFT"); hl:SetPoint("BOTTOMRIGHT", box, "BOTTOMRIGHT"); hl:SetColorTexture(1, 1, 1, 0.1)
+    
+    local t = btn:CreateFontString(nil, "OVERLAY"); t:SetFont(STANDARD_TEXT_FONT, 11, ""); t:SetPoint("LEFT", box, "RIGHT", 8, 0); t:SetTextColor(0.8, 0.8, 0.8); t:SetText(label)
+    
+    local function upd() fill:SetShown(getter()) end; upd(); btn.update = upd
+    if not self.radioBtns then self.radioBtns = {} end; table.insert(self.radioBtns, btn)
+    btn:SetScript("OnClick", function() setter(); for _, b in ipairs(self.radioBtns) do b.update() end end); return y - 22
+end
+
+function Config:Slider(p, label, y, mn, mx, step, getter, setter, isPercent)
+    local lt = p:CreateFontString(nil, "OVERLAY"); lt:SetFont(STANDARD_TEXT_FONT, 10, ""); lt:SetPoint("TOPLEFT", 6, y); lt:SetTextColor(0.7, 0.7, 0.7); lt:SetText(label)
+    local vt = p:CreateFontString(nil, "OVERLAY"); vt:SetFont(STANDARD_TEXT_FONT, 10, "OUTLINE"); vt:SetPoint("TOPRIGHT", p, "TOPRIGHT", -20, y); vt:SetTextColor(0, 0.75, 1)
+    y = y - 16
+    local s = CreateFrame("Slider", nil, p); s:SetSize(280, 12); s:SetPoint("TOPLEFT", 6, y); s:SetOrientation("HORIZONTAL")
+    
+    -- 滑轨底色
+    local track = s:CreateTexture(nil, "BACKGROUND"); track:SetHeight(2); track:SetPoint("LEFT"); track:SetPoint("RIGHT"); track:SetColorTexture(0.2, 0.2, 0.25, 1)
+    
+    -- 现代 Web 风格：滑块左侧的高亮填充轨迹
+    s:SetThumbTexture("Interface\\Buttons\\WHITE8X8"); local thumb = s:GetThumbTexture(); thumb:SetSize(10, 10); thumb:SetVertexColor(0, 0.75, 1, 1)
+    local fill = s:CreateTexture(nil, "ARTWORK")
+    fill:SetHeight(2); fill:SetPoint("LEFT", track, "LEFT"); fill:SetPoint("RIGHT", thumb, "CENTER"); fill:SetColorTexture(0, 0.75, 1, 1)
+    
+    -- 悬停交互：滑块变亮
+    s:SetScript("OnEnter", function() thumb:SetVertexColor(0.2, 0.85, 1, 1); fill:SetColorTexture(0.2, 0.85, 1, 1) end)
+    s:SetScript("OnLeave", function() thumb:SetVertexColor(0, 0.75, 1, 1); fill:SetColorTexture(0, 0.75, 1, 1) end)
+
+    s:SetMinMaxValues(mn, mx); s:SetValueStep(step); s:SetObeyStepOnDrag(true); s:SetValue(getter())
+    local function upd(v) if isPercent then vt:SetText(string.format("%.0f%%", v * 100)) else vt:SetText(step < 1 and string.format("%.2f", v) or string.format("%.0f", v)) end end
+    upd(getter()); s:SetScript("OnValueChanged", function(_, v) setter(v); upd(v) end); return y - 26
+end
+
+function Config:Dropdown(p, label, y, opts, getter, setter)
+    local lt = p:CreateFontString(nil, "OVERLAY"); lt:SetFont(STANDARD_TEXT_FONT, 10, ""); lt:SetPoint("TOPLEFT", 6, y); lt:SetTextColor(0.7, 0.7, 0.7); lt:SetText(label)
+    y = y - 16
+    local btn = CreateFrame("Button", nil, p); btn:SetSize(220, 20); btn:SetPoint("TOPLEFT", 6, y); self:FillBg(btn, 0.1, 0.1, 0.15, 1); self:CreateBorder(btn, 0.3, 0.3, 0.4, 1)
+    
+    local bt = btn:CreateFontString(nil, "OVERLAY"); bt:SetFont(STANDARD_TEXT_FONT, 11, ""); bt:SetPoint("LEFT", 6, 0); bt:SetTextColor(0.9, 0.9, 0.9)
+    -- 使用几何倒三角替换原本的英文字母 "v"
+    local arrow = btn:CreateFontString(nil, "OVERLAY"); arrow:SetFont(STANDARD_TEXT_FONT, 9, ""); arrow:SetPoint("RIGHT", -8, 0); arrow:SetTextColor(0.5, 0.5, 0.5); arrow:SetText("▼")
+    
+    local hlBtn = btn:CreateTexture(nil, "HIGHLIGHT"); hlBtn:SetAllPoints(); hlBtn:SetColorTexture(1, 1, 1, 0.05)
+    
+    local function refreshText() local cur = getter(); for _, o in ipairs(opts) do if o.v == cur then bt:SetText(o.l); return end end; bt:SetText(opts[1].l) end; refreshText()
+    
+    local blocker = CreateFrame("Button", nil, p); blocker:SetAllPoints(UIParent); blocker:SetFrameStrata("TOOLTIP"); blocker:SetFrameLevel(90); blocker:Hide(); blocker:SetScript("OnClick", function() blocker:Hide() end)
+    local list = CreateFrame("Frame", nil, blocker); list:SetPoint("TOPLEFT", btn, "BOTTOMLEFT", 0, -2); list:SetPoint("TOPRIGHT", btn, "BOTTOMRIGHT", 0, -2); list:SetHeight(#opts * 20 + 4); list:SetFrameLevel(95); self:FillBg(list, 0.08, 0.08, 0.1, 1); self:CreateBorder(list, 0.3, 0.3, 0.4, 1)
+    
+    -- 下拉列表内选项增加悬停高亮
+    for i, o in ipairs(opts) do
+        local item = CreateFrame("Button", nil, list); item:SetHeight(20); item:SetPoint("TOPLEFT", list, "TOPLEFT", 2, -((i-1)*20 + 2)); item:SetPoint("TOPRIGHT", list, "TOPRIGHT", -2, -((i-1)*20 + 2))
+        local hl = item:CreateTexture(nil, "HIGHLIGHT"); hl:SetAllPoints(); hl:SetColorTexture(0, 0.75, 1, 0.2)
+        local itx = item:CreateFontString(nil, "OVERLAY"); itx:SetFont(STANDARD_TEXT_FONT, 11, ""); itx:SetPoint("LEFT", 6, 0); itx:SetTextColor(0.8, 0.8, 0.8); itx:SetText(o.l)
+        item:SetScript("OnClick", function() setter(o.v); bt:SetText(o.l); blocker:Hide() end)
+    end
+    btn:SetScript("OnClick", function() if blocker:IsShown() then blocker:Hide() else blocker:Show() end end); return y - 28
+end
+
+-- ============================================================
+-- 颜色色块按钮（带透明度）
+-- ============================================================
+-- getter() → r, g, b, a
+-- setter(r, g, b, a)
+function Config:ColorSwatch(p, label, y, getter, setter)
+    -- 标签文字
+    local lt = p:CreateFontString(nil, "OVERLAY")
+    lt:SetFont(STANDARD_TEXT_FONT, 10, "")
+    lt:SetPoint("TOPLEFT", 6, y)
+    lt:SetTextColor(0.7, 0.7, 0.7)
+    lt:SetText(label)
+
+    -- 色块按钮
+    local btn = CreateFrame("Button", nil, p)
+    btn:SetSize(48, 16)
+    btn:SetPoint("TOPLEFT", 6, y - 18)
+
+    -- 棋盘格背景（象征透明度）
+    local checker = btn:CreateTexture(nil, "BACKGROUND")
+    checker:SetAllPoints()
+    checker:SetTexture("Interface\\Buttons\\WHITE8X8")
+    checker:SetVertexColor(0.15, 0.15, 0.15, 1)
+
+    -- 颜色预览层
+    local swatch = btn:CreateTexture(nil, "ARTWORK")
+    swatch:SetAllPoints()
+    swatch:SetTexture("Interface\\Buttons\\WHITE8X8")
+
+    -- 细边框
+    self:CreateBorder(btn, 0.4, 0.4, 0.5, 1)
+
+    -- 悬停高亮
+    local hl = btn:CreateTexture(nil, "HIGHLIGHT")
+    hl:SetAllPoints()
+    hl:SetColorTexture(1, 1, 1, 0.12)
+
+    -- 初始化色块颜色
+    local function UpdateSwatch()
+        local r, g, b, a = getter()
+        swatch:SetVertexColor(r, g, b, a)
+    end
+    UpdateSwatch()
+    if not self.colorSwatches then self.colorSwatches = {} end
+    table.insert(self.colorSwatches, UpdateSwatch)
+
+    btn:SetScript("OnClick", function()
+        local r, g, b, a = getter()
+        OpenColorPicker(r, g, b, a,
+            function(nr, ng, nb, na)
+                setter(nr, ng, nb, na)
+                swatch:SetVertexColor(nr, ng, nb, na)
+            end,
+            function(pr, pg, pb, pa)
+                setter(pr, pg, pb, pa)
+                swatch:SetVertexColor(pr, pg, pb, pa)
+            end
+        )
+    end)
+
+    return y - 42
+end
+
+-- ============================================================
+-- 颜色色块按钮（不带透明度）
+-- ============================================================
+-- getter() → r, g, b
+-- setter(r, g, b)
+function Config:ColorSwatchNoAlpha(p, label, y, getter, setter)
+    local lt = p:CreateFontString(nil, "OVERLAY")
+    lt:SetFont(STANDARD_TEXT_FONT, 10, "")
+    lt:SetPoint("TOPLEFT", 6, y)
+    lt:SetTextColor(0.7, 0.7, 0.7)
+    lt:SetText(label)
+
+    local btn = CreateFrame("Button", nil, p)
+    btn:SetSize(48, 16)
+    btn:SetPoint("TOPLEFT", 6, y - 18)
+
+    local swatch = btn:CreateTexture(nil, "ARTWORK")
+    swatch:SetAllPoints()
+    swatch:SetTexture("Interface\\Buttons\\WHITE8X8")
+
+    self:CreateBorder(btn, 0.4, 0.4, 0.5, 1)
+
+    local hl = btn:CreateTexture(nil, "HIGHLIGHT")
+    hl:SetAllPoints()
+    hl:SetColorTexture(1, 1, 1, 0.12)
+
+    local function UpdateSwatch()
+        local r, g, b = getter()
+        swatch:SetVertexColor(r, g, b, 1)
+    end
+    UpdateSwatch()
+    if not self.colorSwatches then self.colorSwatches = {} end
+    table.insert(self.colorSwatches, UpdateSwatch)
+
+    btn:SetScript("OnClick", function()
+        local r, g, b = getter()
+        -- 无透明度版本：hasOpacity = false
+        ColorPickerFrame:SetupColorPickerAndShow({
+            r          = r,
+            g          = g,
+            b          = b,
+            hasOpacity = false,
+            swatchFunc = function()
+                local nr, ng, nb = ColorPickerFrame:GetColorRGB()
+                setter(nr, ng, nb)
+                swatch:SetVertexColor(nr, ng, nb, 1)
+            end,
+            cancelFunc = function()
+                setter(r, g, b)
+                swatch:SetVertexColor(r, g, b, 1)
+            end,
+        })
+    end)
+
+    return y - 42
+end
+
+-- ============================================================
+
+function Config:RefreshUI() 
+    ns:SyncCurrentProfile()
+    
+    -- 刷新所有已注册的颜色方块显示
+    if self.colorSwatches then
+        for _, updateFn in ipairs(self.colorSwatches) do updateFn() end
+    end
+    
+    if ns.UI and ns.UI.frame and ns.UI.frame:IsShown() then ns.UI:Layout() end
+    -- 预览窗口同步刷新
+    if self._previewFrame and self._previewFrame:IsShown() then
+        self:RefreshPreviewTheme()
+        self:UpdatePreviewScene(self._previewSceneId or "mplus")
+    end
+end
+
+function Config:BuildProfilesPage()
+    -- 只建容器，内容由 RefreshProfilesPage 动态填充
+    local inner = self.pages["profiles"].inner
+    self._profileInner = inner
+end
+
+function Config:RefreshProfilesPage()
+    local inner = self._profileInner
+    if not inner then return end
+
+    -- 清空旧内容
+    for _, child in ipairs({inner:GetChildren()}) do child:Hide() end
+    for _, region in ipairs({inner:GetRegions()}) do region:Hide() end
+
+    local y = 0
+    y = self:H(inner, L["已存档角色配置"], y)
+
+    local profiles = LDCombatStatsProfiles or {}
+    local currentChar = UnitName("player") .. "-" .. GetRealmName()
+    local hasAny = false
+
+    for charKey, _ in pairs(profiles) do
+        hasAny = true
+        local isSelf = (charKey == currentChar)
+        local label = isSelf and (charKey .. " |cff888888[当前]|r") or charKey
+
+        -- 角色名标签
+        local txt = inner:CreateFontString(nil, "OVERLAY")
+        txt:SetFont(STANDARD_TEXT_FONT, 10, "OUTLINE")
+        txt:SetPoint("TOPLEFT", 4, y)
+        txt:SetTextColor(isSelf and 0.5 or 0.85, isSelf and 0.8 or 0.85, isSelf and 1.0 or 0.85)
+        txt:SetText(label)
+        y = y - 18
+
+        if not isSelf then
+            -- 应用按钮
+            local btn = CreateFrame("Button", nil, inner)
+            btn:SetSize(120, 18); btn:SetPoint("TOPLEFT", 4, y)
+            self:FillBg(btn, 0.05, 0.18, 0.30, 1)
+            self:CreateBorder(btn, 0.1, 0.4, 0.7, 1)
+            local bt = btn:CreateFontString(nil, "OVERLAY")
+            bt:SetFont(STANDARD_TEXT_FONT, 10, "OUTLINE")
+            bt:SetPoint("CENTER"); bt:SetText(L["应用此角色配置"]); bt:SetTextColor(0.4, 0.85, 1)
+            local ck = charKey
+            btn:SetScript("OnClick", function()
+                ns:ApplyProfile(ck)
+                self:RefreshProfilesPage()
+            end)
+            btn:SetScript("OnEnter", function() bt:SetTextColor(1, 1, 1) end)
+            btn:SetScript("OnLeave", function() bt:SetTextColor(0.4, 0.85, 1) end)
+            y = y - 26
+        end
+
+        y = y - 4
+    end
+
+    if not hasAny then
+        local txt = inner:CreateFontString(nil, "OVERLAY")
+        txt:SetFont(STANDARD_TEXT_FONT, 10, "")
+        txt:SetPoint("TOPLEFT", 4, y)
+        txt:SetTextColor(0.4, 0.4, 0.4)
+        txt:SetText(L["暂无其他角色存档\n登录其他角色并打开插件后会自动存档"])
+        y = y - 32
+    end
+
+    inner:SetHeight(math.abs(y) + 20)
+end
+
+-- ============================================================
+-- 预览窗口
+-- ============================================================
+function Config:TogglePreview()
+    if self._previewFrame and self._previewFrame:IsShown() then
+        self:ClosePreview()
+    else
+        self:OpenPreview()
+    end
+end
+
+function Config:ClosePreview()
+    if self._previewFrame then self._previewFrame:Hide() end
+    if self._previewBtnT  then self._previewBtnT:SetText(L["预览"]) end
+end
+
+function Config:OpenPreview()
+    self:BuildPreviewWindow()
+    self._previewFrame:Show()
+    if self._previewBtnT then self._previewBtnT:SetText(L["取消预览"]) end
+    self:UpdatePreviewScene(self._previewSceneId or "mplus")
+end
+
+-- ============================================================
+-- 预览系统 — 直接使用真实 ns.UI，只注入假数据
+-- ============================================================
+
+-- 构建场景切换条（只建一次，轻量）
+-- ============================================================
+-- 构建场景切换条（独立悬浮窗版本）
+-- ============================================================
+function Config:BuildSceneSwitcher()
+    if self._pvSwitcher then return end
+
+    -- 创建独立的悬浮窗口，层级设为 DIALOG，确保在最上层
+    local sw = CreateFrame("Frame", "LDStatsPreviewSwitcher", UIParent, "BackdropTemplate")
+    sw:SetSize(320, 36)
+    sw:SetFrameStrata("DIALOG")
+    sw:SetFrameLevel(110)
+    
+    -- 应用与设置主面板完全一致的极简底色
+    sw:SetBackdrop({ bgFile="Interface\\Buttons\\WHITE8X8", edgeFile=nil, edgeSize=0 })
+    sw:SetBackdropColor(0.05, 0.05, 0.06, 0.98)
+    self:CreateBorder(sw, 0.15, 0.15, 0.2, 1) -- 加上细边框增加精致感
+    
+    sw:Hide()
+    self._pvSwitcher = sw
+
+    -- 左侧说明文字
+    local hint = sw:CreateFontString(nil, "OVERLAY")
+    hint:SetFont(STANDARD_TEXT_FONT, 11, "OUTLINE")
+    hint:SetPoint("LEFT", 14, 0)
+    hint:SetText(L["|cff00ccff预览场景:|r"])
+
+    -- 按钮布局配置
+    local btnW  = 76
+    local btnGap = 6
+    local rightOffset = -12
+
+    self._pvSceneBtns = {}
+    for i = #PREVIEW_SCENES, 1, -1 do
+        local sc  = PREVIEW_SCENES[i]
+        local btn = CreateFrame("Button", nil, sw)
+        btn:SetSize(btnW, 22)
+        btn:SetPoint("RIGHT", sw, "RIGHT", rightOffset - (btnW + btnGap) * (#PREVIEW_SCENES - i), 0)
+
+        -- 按钮底色和边框（与设置里的 Dropdown 风格一致）
+        self:FillBg(btn, 0.1, 0.1, 0.15, 1)
+        self:CreateBorder(btn, 0.3, 0.3, 0.4, 1)
+
+        local bt = btn:CreateFontString(nil, "OVERLAY")
+        bt:SetFont(STANDARD_TEXT_FONT, 10, "")
+        bt:SetPoint("CENTER")
+        bt:SetText(L[sc.labelKey])
+        bt:SetTextColor(0.6, 0.6, 0.6)
+        
+        btn._label   = bt
+        btn._sceneId = sc.id
+
+        btn:SetScript("OnClick", function()
+            self:ApplyPreviewScene(sc.id)
+        end)
+        btn:SetScript("OnEnter", function()
+            if self._previewSceneId ~= sc.id then bt:SetTextColor(1, 1, 1) end
+        end)
+        btn:SetScript("OnLeave", function()
+            if self._previewSceneId ~= sc.id then bt:SetTextColor(0.6, 0.6, 0.6) end
+        end)
+
+        self._pvSceneBtns[i]     = btn
+        self._pvSceneBtns[sc.id] = btn
+    end
+end
+
+function Config:TogglePreview()
+    if self._previewActive then
+        self:ClosePreview()
+    else
+        self:OpenPreview()
+    end
+end
+
+function Config:OpenPreview()
+    if not ns.UI or not ns.Segments then return end
+    ns.UI:EnsureCreated()
+
+    -- 保存真实状态
+    self._pvSave = {
+        inCombat     = ns.state.inCombat,
+        isInInstance = ns.state.isInInstance,
+        inMythicPlus = ns.state.inMythicPlus,
+        viewIndex    = ns.Segments.viewIndex,
+        current      = ns.Segments.current,
+        overall      = ns.Segments.overall,
+        history      = ns.Segments.history,
+        locked       = ns.Segments._locked,
+        uiPoint      = ns.db.window.point,
+        uiRelPoint   = ns.db.window.relPoint,
+        uiX          = ns.db.window.x,
+        uiY          = ns.db.window.y,
+    }
+
+    self._pvRefreshBlocked = true
+    ns.Segments._locked    = false
+    self._previewActive    = true
+    self._previewSceneId   = "mplus"
+
+    if self._previewBtnT then self._previewBtnT:SetText(L["取消预览"]) end
+
+    -- 预览窗口（纯粹的真实 UI）对齐到配置面板右侧
+    ns.UI.frame:ClearAllPoints()
+    ns.UI.frame:SetPoint("TOPLEFT", self.panel, "TOPRIGHT", 8, 0)
+    ns.UI.frame:Show()
+
+    -- ★ 显示独立场景切换窗，并吸附在预览窗口的正上方间距 8px 处
+    if self._pvSwitcher then 
+        self._pvSwitcher:ClearAllPoints()
+        self._pvSwitcher:SetPoint("BOTTOM", ns.UI.frame, "TOP", 0, 8)
+        self._pvSwitcher:Show() 
+    end
+
+    self:ApplyPreviewScene("mplus")
+end
+
+function Config:ClosePreview()
+    if not self._pvSave then return end
+
+    ns.state.inCombat     = self._pvSave.inCombat
+    ns.state.isInInstance = self._pvSave.isInInstance
+    ns.state.inMythicPlus = self._pvSave.inMythicPlus
+    ns.Segments.viewIndex = self._pvSave.viewIndex
+    ns.Segments.current   = self._pvSave.current
+    ns.Segments.overall   = self._pvSave.overall
+    ns.Segments.history   = self._pvSave.history
+    ns.Segments._locked   = self._pvSave.locked
+
+    ns.UI.frame:ClearAllPoints()
+    ns.UI.frame:SetPoint(
+        self._pvSave.uiPoint, UIParent, self._pvSave.uiRelPoint,
+        self._pvSave.uiX, self._pvSave.uiY)
+
+    -- ★ 隐藏独立场景切换窗
+    if self._pvSwitcher then self._pvSwitcher:Hide() end
+
+    self._pvSave           = nil
+    self._previewActive    = false
+    self._pvRefreshBlocked = false
+
+    if self._previewBtnT then self._previewBtnT:SetText(L["预览"]) end
+
+    if ns.Analysis then ns.Analysis:InvalidateCache() end
+    ns.UI:Layout()
+end
+
+
+
+-- 切换场景：注入假数据 → 刷新真实 UI
+function Config:ApplyPreviewScene(sceneId)
+    if not self._previewActive then return end
+    self._previewSceneId = sceneId
+
+    local scene
+    for _, sc in ipairs(PREVIEW_SCENES) do
+        if sc.id == sceneId then scene = sc; break end
+    end
+    if not scene then return end
+
+    -- 场景按钮高亮
+    for id, btn in pairs(self._pvSceneBtns) do
+        if type(id) == "string" then
+            local active = (id == sceneId)
+            btn._label:SetTextColor(active and 0 or 0.6, active and 0.75 or 0.6, active and 1 or 0.6)
+        end
+    end
+
+    -- 注入假的全局状态
+    ns.state.inCombat     = false
+    ns.state.isInInstance = (sceneId ~= "outdoor")
+    ns.state.inMythicPlus = (sceneId == "mplus")
+
+    -- 构造假段落
+    local mockCurrent = self:BuildMockSegment(false)   -- 当前段（普通时长）
+    local mockOverall = self:BuildMockSegment(true)    -- 全程（更长时长）
+
+    ns.Segments.current   = nil
+    ns.Segments.history   = { mockCurrent }
+    ns.Segments.viewIndex = 1
+    ns.Segments.overall   = mockOverall
+
+    if ns.Analysis then ns.Analysis:InvalidateCache() end
+
+    -- 用真实 UI 渲染，什么参数都不改，和正常脱战后完全一样
+    ns.UI:Layout()
+end
+
+-- 构造一个完全符合 Analysis:GetSorted 期望的假段落
+function Config:BuildMockSegment(isOverall)
+    local seg = ns.Segments:NewSegment("history", isOverall and L["模拟全程"] or L["模拟战斗"])
+    seg.isActive  = false
+    seg.duration  = isOverall and 330 or 225   -- 5:30 / 3:45
+
+    local totalDmg, totalHeal, totalTaken = 0, 0, 0
+
+    for i, mock in ipairs(PREVIEW_MOCK) do
+        local guid = "pvGUID_" .. i
+        local pd   = ns.Segments:NewPlayerData(guid, mock.name, mock.class)
+        pd.damage         = isOverall and math.floor(mock.damage  * 1.45) or mock.damage
+        pd.healing        = isOverall and math.floor(mock.healing * 1.45) or mock.healing
+        pd.damageTaken    = mock.damageTaken
+        pd.deaths         = mock.deaths
+        pd.interrupts     = mock.interrupts
+        pd.dispels        = mock.dispels
+        pd.damagePerSec   = mock.dps
+        pd.healingPerSec  = mock.hps
+        pd.damageTakenPerSec = 0
+        pd.pets           = {}
+        seg.players[guid] = pd
+        totalDmg   = totalDmg   + pd.damage
+        totalHeal  = totalHeal  + pd.healing
+        totalTaken = totalTaken + pd.damageTaken
+    end
+
+    seg.totalDamage      = totalDmg
+    seg.totalHealing     = totalHeal
+    seg.totalDamageTaken = totalTaken
+
+    -- 简单死亡日志，供死亡模式展示
+    seg.deathLog = {
+        { playerName="Ironhide", playerGUID="pvGUID_2", playerClass="WARRIOR",
+          isSelf=false, killingAbility="Shadow Bolt", killerName="Big Boss",
+          events={}, totalDamageTaken=450000, totalHealingReceived=0,
+          timeSpan=3.2, timestamp=time(), gameTime=GetTime() },
+        { playerName="Frostmantle", playerGUID="pvGUID_7", playerClass="DEATHKNIGHT",
+          isSelf=false, killingAbility="Cleave", killerName="Big Boss",
+          events={}, totalDamageTaken=380000, totalHealingReceived=0,
+          timeSpan=2.1, timestamp=time(), gameTime=GetTime() },
+    }
+
+    return seg
+end
+

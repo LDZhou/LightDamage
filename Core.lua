@@ -1,0 +1,939 @@
+--[[
+    Light Damage Combat Stats v1.0 - Core.lua
+
+    修复:
+    - ZONE_CHANGED_NEW_AREA 时检测是否离开了副本，触发 MythicPlus:OnLeaveInstance
+    - 这样从副本出来后，开放世界的 session 会正确隔离
+]]
+
+local addonName, ns = ...
+local L = ns.L
+
+ns.version   = "1.0"
+ns.addonName = addonName
+
+local Core = CreateFrame("Frame", "LDCombatStatsCore", UIParent)
+ns.Core = Core
+
+-- ============================================================
+-- 默认配置
+-- ============================================================
+ns.defaults = {
+    window = {
+        width = 400, height = 280,
+        point = "BOTTOMRIGHT", relPoint = "BOTTOMRIGHT", x = -20, y = 180,
+        alpha = 0.92, scale = 1.0, locked = false,
+        themeColor = {0, 0.85, 0.85, 0.05},
+        bgColor    = {0, 0.7, 0.7, 0},
+        ovrBgColor = {1, 1, 1, 0.05},
+    },
+    display = {
+        mode          = "split",
+        showPerSecond = true,
+        showPercent   = true,
+        showRank      = true,
+        showSpecIcon  = true,
+        showRealm     = false,
+        classColors   = true,
+        -- ★ 新增和完善的外观默认项
+        barHeight     = 19,
+        barGap        = 1,
+        barAlpha      = 0.85, -- 透明度默认调高，解决太淡的问题
+        barTexture    = "Interface\\Buttons\\WHITE8X8",
+        font          = STANDARD_TEXT_FONT,
+        fontSizeBase  = 13,
+        fontOutline   = "OUTLINE",
+        fontShadow    = false,
+        textColorMode = "white",       -- "class" / "white" / "custom"
+        textColor     = {1.0, 1.0, 1.0},
+    },
+    split = {
+        enabled           = true,
+        primaryMode       = "damage",
+        secondaryMode     = "healing",
+        primaryRows       = 5,
+        secondaryRows     = 3,
+        collapsePrimary   = false,
+        collapseSecondary = false,
+    },
+    mythicPlus = {
+        enabled           = true,
+        dualDisplay       = true,
+        overallColumnMode = "instance",
+        autoSegment       = true,
+    },
+    tracking = {
+        mergePlayerPets = true,
+        autoReset       = false,
+        minCombatTime   = 2,
+        deathLogSize    = 15,
+        maxSegments     = 20,
+    },
+    smartRefresh = {
+        combatInterval = 0.3,
+        idleInterval   = 2.0,
+    },
+    useBlizzMeter = true,
+}
+
+-- ============================================================
+-- 运行时状态
+-- ============================================================
+ns.state = {
+    inCombat         = false,
+    combatStartTime  = 0,
+    combatEndTime    = 0,
+    isInInstance     = false,
+    wasInInstance    = false,  -- 上一帧是否在副本内（用于检测离开）
+    instanceType     = nil,
+    inMythicPlus     = false,
+    mythicPlusLevel  = 0,
+    playerGUID       = nil,
+    playerName       = nil,
+    playerClass      = nil,
+}
+
+
+-- ============================================================
+-- 初始化
+-- ============================================================
+function Core:OnInitialize()
+    if not self._initialized then
+        self._initialized = true
+
+        if not LDCombatStatsDB then
+            LDCombatStatsDB = CopyTable(ns.defaults)
+        else
+            ns:MergeDefaults(LDCombatStatsDB, ns.defaults)
+        end
+        ns.db = LDCombatStatsDB
+
+        -- Profile 初始化
+        if not LDCombatStatsProfiles then LDCombatStatsProfiles = {} end
+        ns.profiles = LDCombatStatsProfiles
+        ns:SyncCurrentProfile()
+
+
+        ns.state.playerGUID = UnitGUID("player")
+        ns.state.playerName = UnitName("player")
+        local _, classEng   = UnitClass("player")
+        ns.state.playerClass = classEng
+
+        if ns.Segments then
+            ns.Segments:Init()
+            ns:LoadSessionHistory()
+        else
+            print(L["|cffff3333[Light Damage Combat Stats] ERROR:|r Segments 模块未加载"])
+            return
+        end
+
+        if ns.MythicPlus   then ns.MythicPlus:Init()   end
+        if ns.DeathTracker then ns.DeathTracker:Init()  end
+        if ns.Analysis     then ns.Analysis:Init()     end
+
+        C_Timer.After(3, function()
+            if ns.CombatTracker and not ns.state.isInInstance then
+                local ss  = C_DamageMeter.GetAvailableCombatSessions()
+                local cnt = ss and #ss or 0
+                if cnt > 0 and ns.CombatTracker._baselineSessionCount == 0 then
+                    -- ★ 如果在这 3 秒内玩家已经进战，最新的那个 session 其实是当前正在打的，必须从历史基线中剔除！
+                    local offset = ns.state.inCombat and 1 or 0
+                    ns.CombatTracker._baselineSessionCount = math.max(0, cnt - offset)
+                    ns.CombatTracker._lastProcessedCount   = math.max(0, cnt - offset)
+                    
+                    if ns.Segments and ns.Segments.overall then
+                        local hasData = ns.Segments.overall.totalDamage > 0
+                                     or ns.Segments.overall.totalHealing > 0
+                        if not hasData then
+                            ns.Segments.overall.players = {}
+                        end
+                    end
+                end
+            end
+        end)
+        ns:StartSmartRefresh()
+        
+        -- ★ 自动关闭暴雪统计的自动重置功能，避免误删数据
+        C_Timer.After(2, function()
+            local possibleCVars = {
+                "damageMeterAutoReset",
+                "damageMeterResetOnInstance",
+                "autoClearDamageMeter",
+                "damageMeterAutoClear"
+            }
+            local setter = (C_CVar and C_CVar.SetCVar) or SetCVar
+            for _, cvar in ipairs(possibleCVars) do
+                -- 使用 pcall 闭着眼睛全量写入 0，静默关闭它
+                pcall(setter, cvar, "0")
+            end
+        end)
+
+        print("|cff00ccff[Light Damage Combat Stats]|r v" .. ns.version .. L[" 已加载 | /ldcs show · /ldcs help"])
+    end
+
+    local events = {
+        "ZONE_CHANGED_NEW_AREA",
+        "ENCOUNTER_START",
+        "ENCOUNTER_END",
+        "GROUP_ROSTER_UPDATE",
+        "CHALLENGE_MODE_START",
+        "CHALLENGE_MODE_COMPLETED",
+        "CHALLENGE_MODE_RESET",
+        "PLAYER_DEAD",
+        "PLAYER_LOGOUT",
+    }
+    for _, ev in ipairs(events) do
+        self:RegisterEvent(ev)
+    end
+
+    if ns.CombatTracker then
+        ns.CombatTracker:RegisterEvents()
+    end
+
+    do
+        local cleuFrame = CreateFrame("Frame")
+        cleuFrame:RegisterEvent("COMBAT_LOG_EVENT_UNFILTERED")
+        cleuFrame:SetScript("OnEvent", function()
+            if not ns.DeathTracker then return end
+            local ts, sub, _, sg, sn, sf, dg, dn, df = CombatLogGetCurrentEventInfo()
+            local p1, p2, p3, p4 = select(10, CombatLogGetCurrentEventInfo())
+
+            if sub == "SWING_DAMAGE" then
+                ns.DeathTracker:RecordIncomingDamage(dg, dn, df, p1, 0, L["近战"], p3 or 1, sg, sn)
+            elseif sub == "SPELL_DAMAGE" or sub == "SPELL_PERIODIC_DAMAGE"
+                or sub == "RANGE_DAMAGE" then
+                ns.DeathTracker:RecordIncomingDamage(dg, dn, df, p4, p1, p2, p3, sg, sn)
+            elseif sub == "SPELL_HEAL" or sub == "SPELL_PERIODIC_HEAL" then
+                ns.DeathTracker:RecordIncomingHeal(dg, dn, df, p4, p1, p2, sg, sn)
+            elseif sub == "UNIT_DIED" then
+                ns.DeathTracker:OnUnitDied(dg, dn, df, ts)
+            end
+        end)
+    end
+
+    SLASH_LDCS1 = "/ldcs"
+    SLASH_LDCS2 = "/ldstats"
+    SlashCmdList["LDCS"] = function(msg) ns:HandleSlashCommand(msg) end
+
+    ns:UpdateInstanceStatus()
+    ns:InvalidateGUIDCache()
+
+    C_Timer.After(0.1, function()
+        if ns.UI then ns.UI:EnsureCreated() end
+    end)
+end
+
+-- ============================================================
+-- 事件路由
+-- ============================================================
+function Core:OnEvent(event, ...)
+    if event == "PLAYER_LOGIN" or event == "PLAYER_ENTERING_WORLD" then
+        Core:OnInitialize()
+        if event == "PLAYER_LOGIN" then return end
+    end
+
+    if event == "ENCOUNTER_START" then
+        ns:OnEncounterStart(...)
+    elseif event == "ENCOUNTER_END" then
+        ns:OnEncounterEnd(...)
+
+    elseif event == "PLAYER_ENTERING_WORLD" then
+        ns:InvalidateGUIDCache()
+        -- ★ 修复「进副本右侧列不显示」：ZONE_CHANGED_NEW_AREA 在加载屏幕期间
+        --   触发时 frame:IsShown()=false，Layout() 直接 return。
+        --   PLAYER_ENTERING_WORLD 在加载结束后触发，此处补一次强制刷新。
+        C_Timer.After(0.3, function()
+            ns:UpdateInstanceStatus()
+            ns:InvalidateGUIDCache()
+            if ns.UI and ns.UI:IsVisible() then
+                ns.UI:Layout()
+            end
+        end)
+
+    elseif event == "ZONE_CHANGED_NEW_AREA" then
+        local wasInInstance = ns.state.isInInstance
+        ns:UpdateInstanceStatus()
+        ns:InvalidateGUIDCache()
+
+        -- 出副本 → 开放世界
+        if wasInInstance and not ns.state.isInInstance then
+            if ns.MythicPlus and ns.MythicPlus:IsActive() then
+                ns.MythicPlus:OnLeaveInstance()
+            else
+                -- ★ 修复：不在这里调 CT:ResetBaselineToCurrentCount()！
+                --   原来的调用会把 _lastProcessedCount 推到最新值，
+                --   导致 processArchivedSessions 找不到未处理的 session。
+                --   Reset 放到 mergeAndCleanInstance 完成后执行。
+                if ns.Segments then
+                    ns.Segments.overall = ns.Segments:NewSegment("overall", L["总计"])
+                end
+            end
+            if ns.UI then
+                C_Timer.After(0.1, function() ns.UI:Layout() end)
+            end
+        end
+
+        -- 开放世界 → 进副本
+        -- ★ Layout() 交给 PLAYER_ENTERING_WORLD 的 0.3s timer 负责，
+        --   这里不调用（加载屏幕期间 frame 不可见）
+        if not wasInInstance and ns.state.isInInstance then
+            if not ns.state.inMythicPlus then
+                if ns.CombatTracker then
+                    ns.CombatTracker:ResetBaselineToCurrentCount()
+                end
+                if ns.Segments then
+                    local name = GetInstanceInfo() or L["副本"]
+                    ns.Segments.overall = ns.Segments:NewSegment("overall", name .. " [全程]")
+                end
+            end
+        end
+
+    elseif event == "GROUP_ROSTER_UPDATE" then
+        ns:InvalidateGUIDCache()
+    elseif event == "CHALLENGE_MODE_START" then
+        if ns.MythicPlus then ns.MythicPlus:OnStart(...) end
+    elseif event == "CHALLENGE_MODE_COMPLETED" then
+        if ns.MythicPlus then ns.MythicPlus:OnCompleted(...) end
+    elseif event == "CHALLENGE_MODE_RESET" then
+        if ns.MythicPlus then ns.MythicPlus:OnReset() end
+    elseif event == "PLAYER_DEAD" then
+        if ns.DeathTracker then ns.DeathTracker:OnPlayerDead() end
+    elseif event == "PLAYER_LOGOUT" then
+        ns:SaveSessionHistory()
+    end
+end
+
+Core:SetScript("OnEvent", Core.OnEvent)
+Core:RegisterEvent("PLAYER_LOGIN")
+Core:RegisterEvent("PLAYER_ENTERING_WORLD")
+
+-- ============================================================
+-- 战斗状态管理
+-- ============================================================
+function ns:EnterCombat()
+    ns.state.inCombat        = true
+    ns.state.combatStartTime = GetTime()
+    if ns.Segments then ns.Segments:OnCombatStart() end
+    if ns.UI       then ns.UI:OnCombatStateChanged(true) end
+end
+
+function ns:LeaveCombat()
+    ns.state.inCombat      = false
+    ns.state.combatEndTime = GetTime()
+    if ns.Segments then ns.Segments:OnCombatEnd() end
+    if ns.UI       then ns.UI:OnCombatStateChanged(false) end
+end
+
+function ns:OnEncounterStart(encounterID, name, difficultyID, groupSize)
+    LoggingCombat(true)
+    if ns.Segments then
+        ns.Segments:OnEncounterStart(encounterID, name, difficultyID, groupSize)
+    end
+end
+
+function ns:OnEncounterEnd(encounterID, name, difficultyID, groupSize, success)
+    if ns.Segments then
+        ns.Segments:OnEncounterEnd(encounterID, name, difficultyID, groupSize, success)
+    end
+end
+
+-- ============================================================
+-- 智能刷新系统
+-- ============================================================
+function ns:StartSmartRefresh()
+    local elapsed      = 0
+    local refreshFrame = CreateFrame("Frame")
+
+    refreshFrame:SetScript("OnUpdate", function(self, delta)
+        elapsed = elapsed + delta
+
+        local interval = ns.state.inCombat
+            and ns.db.smartRefresh.combatInterval
+            or  ns.db.smartRefresh.idleInterval
+
+        if interval < 0.1 then interval = 0.1 end
+
+        if elapsed >= interval then
+            elapsed = 0
+
+            if ns.CombatTracker then
+                ns.CombatTracker:PullCurrentData()
+            end
+
+            if ns.DetailView and ns.DetailView:IsVisible() then
+                pcall(function() ns.DetailView:Refresh() end)
+            end
+        end
+    end)
+end
+
+-- ============================================================
+-- 副本状态检测
+-- ============================================================
+function ns:UpdateInstanceStatus()
+    local inInstance, instanceType = IsInInstance()
+
+    -- 保存上一帧的状态（供事件处理使用）
+    ns.state.wasInInstance = ns.state.isInInstance
+
+    ns.state.isInInstance = inInstance
+    ns.state.instanceType = instanceType
+
+    local wasInMPlus      = ns.state.inMythicPlus
+    ns.state.inMythicPlus = false
+
+    if C_ChallengeMode and C_ChallengeMode.GetActiveChallengeMapID then
+        local mapID = C_ChallengeMode.GetActiveChallengeMapID()
+        ns.state.inMythicPlus = (mapID ~= nil)
+
+        if mapID and C_ChallengeMode.GetActiveKeystoneInfo then
+            local ok, level = pcall(function()
+                local info = { C_ChallengeMode.GetActiveKeystoneInfo() }
+                local lv = info[1]
+                if type(lv) ~= "number" or lv <= 0 then lv = info[8] end
+                return type(lv) == "number" and lv or 0
+            end)
+            ns.state.mythicPlusLevel = ok and level or 0
+        end
+    else
+        local _, _, difficultyID = GetInstanceInfo()
+        ns.state.inMythicPlus = (difficultyID == 8)
+    end
+
+    if ns.state.inMythicPlus and not wasInMPlus then
+        if ns.MythicPlus then ns.MythicPlus:OnEnterDungeon() end
+    end
+end
+
+-- ============================================================
+-- 工具函数
+-- ============================================================
+function ns:MergeDefaults(target, defaults)
+    for k, v in pairs(defaults) do
+        if type(v) == "table" then
+            if type(target[k]) ~= "table" then
+                target[k] = CopyTable(v)
+            else
+                ns:MergeDefaults(target[k], v)
+            end
+        elseif target[k] == nil then
+            target[k] = v
+        end
+    end
+end
+
+-- ============================================================
+-- 斜杠命令
+-- ============================================================
+function ns:HandleSlashCommand(msg)
+    msg = (msg or ""):lower():trim()
+
+    if msg == "" or msg == "help" then
+        print(L["|cff00ccff[Light Damage Combat Stats]|r 命令:"])
+        print(L["  /ldcs show    - 显示/隐藏窗口"])
+        print(L["  /ldcs reset   - 重置所有数据"])
+        print(L["  /ldcs config  - 配置面板"])
+        print(L["  /ldcs lock    - 锁定/解锁窗口"])
+        print(L["  /ldcs report [n] - 报告前N名到聊天频道"])
+
+    elseif msg == "show" or msg == "toggle" then
+        if ns.UI then ns.UI:Toggle() end
+
+    elseif msg == "reset" then
+        if ns.Segments then ns.Segments:ResetAll() end
+        if ns.db then ns.db.savedHistory = nil end
+        print(L["|cff00ccff[Light Damage Combat Stats]|r 数据已重置"])
+
+    elseif msg == "config" then
+        if ns.Config then ns.Config:Toggle() end
+
+    elseif msg == "lock" then
+        ns.db.window.locked = not ns.db.window.locked
+        if ns.UI then ns.UI:UpdateLock() end
+        -- 避免拼接陷阱，这里直接用条件判断输出完整的翻译句子
+        if ns.db.window.locked then
+            print(L["|cff00ccff[Light Damage Combat Stats]|r 已锁定"])
+        else
+            print("|cff00ccff[Light Damage Combat Stats]|r " .. L["已解锁"]) 
+        end
+
+    elseif msg:match("^report") then
+        local n = tonumber(msg:match("report%s+(%d+)")) or 5
+        ns:ReportToChat(n)
+
+    -- ============================================================
+    -- 隐藏开发者命令 (不在 help 显示)
+    -- ============================================================
+    
+    -- 强行切换语言测试: /ldcs lang enUS
+    elseif msg:match("^lang") then
+        -- 提取输入的语言代码，注意因为前面用了 :lower()，所以要做一下匹配映射
+        local langInput = msg:match("lang%s+(%w+)"):lower()
+        local targetLang = "zhCN"
+        
+        if langInput == "enus" then targetLang = "enUS"
+        elseif langInput == "zhtw" then targetLang = "zhTW"
+        end
+        
+        if ns.SwitchLanguage then
+            ns:SwitchLanguage(targetLang)
+            -- 如果配置面板开着，强行刷新它
+            if ns.Config and ns.Config.RefreshUI then 
+                ns.Config:RefreshUI() 
+            end
+        end
+
+    elseif msg == "baseline" then
+        if ns.CombatTracker then
+            ns.CombatTracker:ResetBaselineToCurrentCount()
+            if ns.Segments then
+                ns.Segments.overall = ns.Segments:NewSegment("overall", L["总计"])
+            end
+            print(L["|cff00ccff[Light Damage Combat Stats]|r Baseline 已手动重置"])
+        end
+    elseif msg == "debug" then
+        ns:PrintDebugInfo()
+    elseif msg == "api" then
+        if ns.CombatTracker then ns.CombatTracker:DebugAPI() end
+    elseif msg == "sessions" then
+        if ns.CombatTracker then ns.CombatTracker:DebugSessions() end
+    elseif msg == "recap" then
+        ns:DebugRecapFields()
+    elseif msg == "deathdebug" then
+        ns:DebugDeathRecapIDs()
+    elseif msg == "overheal" then
+        local sessions = C_DamageMeter.GetAvailableCombatSessions()
+        local s = sessions and sessions[#sessions]
+        if not s then print(L["无历史 session"]); return end
+        local ok, src = pcall(C_DamageMeter.GetCombatSessionSourceFromID,
+            s.sessionID, Enum.DamageMeterType.HealingDone, UnitGUID("player"))
+        if not ok or not src or not src.combatSpells then
+            print(L["无治疗数据"]); return
+        end
+        local totalOH = 0
+        for _, sp in ipairs(src.combatSpells) do
+            local name = C_Spell and C_Spell.GetSpellName(sp.spellID) or sp.spellID
+            print(string.format("  [%s] heal=%d  overkill=%d",
+                name, sp.totalAmount, sp.overkillAmount or 0))
+            totalOH = totalOH + (sp.overkillAmount or 0)
+        end
+        print(string.format(L["总 overkillAmount 合计: %d"], totalOH))
+    end
+end
+
+function ns:DebugDeathRecapIDs()
+    print(L["=== [Light Damage Combat Stats] 死亡 RecapID 诊断 ==="])
+    local sessions = C_DamageMeter.GetAvailableCombatSessions()
+    local n = sessions and #sessions or 0
+    print(string.format(L["共 %d 个 session"], n))
+
+    for i, s in ipairs(sessions or {}) do
+        local ok, deathSess = pcall(C_DamageMeter.GetCombatSessionFromID,
+            s.sessionID, Enum.DamageMeterType.Deaths)
+        if ok and deathSess and deathSess.combatSources and #deathSess.combatSources > 0 then
+            print(string.format("  [Session %d] dur=%.0fs name=%s",
+                i, s.durationSeconds or 0, tostring(s.name)))
+            for _, src in ipairs(deathSess.combatSources) do
+                print(string.format("    name=%-20s deaths=%s recapID=%s",
+                    tostring(src.name),
+                    tostring(src.totalAmount),
+                    tostring(src.deathRecapID)))
+            end
+        end
+    end
+    print(L["=== 结束 ==="])
+end
+
+function ns:SwitchMode(mode)
+    ns.db.display.mode = mode
+    if ns.UI then ns.UI:Refresh() end
+end
+
+-- ============================================================
+-- 调试信息
+-- ============================================================
+function ns:PrintDebugInfo()
+    print("|cff00ccff[Light Damage Combat Stats Debug]|r")
+    print("  initialized:", Core._initialized)
+    print("  inCombat:", ns.state.inCombat)
+    print("  UnitAffectingCombat:", UnitAffectingCombat("player"))
+    print("  playerGUID:", ns.state.playerGUID)
+    print("  isInInstance:", ns.state.isInInstance)
+    print("  inMythicPlus:", ns.state.inMythicPlus)
+    print("  Segments:", ns.Segments ~= nil)
+    if ns.Segments then
+        print("  Segments.overall:", ns.Segments.overall ~= nil)
+        print("  Segments.current:", ns.Segments.current ~= nil)
+        if ns.Segments.overall then
+            local count = 0
+            for _ in pairs(ns.Segments.overall.players) do count = count + 1 end
+            print("  overall players:", count)
+            print("  overall totalDamage:", ns.Segments.overall.totalDamage)
+            print("  overall totalHealing:", ns.Segments.overall.totalHealing)
+        end
+        if ns.Segments.current then
+            local count = 0
+            for _ in pairs(ns.Segments.current.players) do count = count + 1 end
+            print("  current players:", count)
+            print("  current totalDamage:", ns.Segments.current.totalDamage)
+            print("  current totalHealing:", ns.Segments.current.totalHealing)
+        end
+        print("  history count:", #ns.Segments.history)
+        print("  viewIndex:", tostring(ns.Segments.viewIndex))
+    end
+    print("  CombatTracker baseline:", ns.CombatTracker and ns.CombatTracker._baselineSessionCount or "N/A")
+    print("  CombatTracker lastProcessed:", ns.CombatTracker and ns.CombatTracker._lastProcessedCount or "N/A")
+    print("  UI:", ns.UI ~= nil)
+    if ns.UI then print("  UI visible:", ns.UI:IsVisible()) end
+end
+
+-- ============================================================
+-- 聊天报告
+-- ============================================================
+function ns:ReportToChat(count)
+    local data = ns:GetDisplayData()
+    if not data or #data == 0 then
+        print(L["|cff00ccff[Light Damage Combat Stats]|r 无数据"])
+        return
+    end
+
+    local modeNames = {
+        damage=L["伤害"], healing=L["治疗"], damageTaken=L["承伤"],
+        deaths=L["死亡"], interrupts=L["打断"], dispels=L["驱散"],
+    }
+    local mode     = ns.db.display.mode
+    local seg      = ns.Segments and ns.Segments:GetViewSegment()
+    local duration = seg and seg.duration or 0
+    if seg and seg.isActive then duration = GetTime() - seg.startTime end
+
+    local header = string.format("[Light Damage Combat Stats] %s (%s)",
+        modeNames[mode] or mode, ns:FormatTime(duration))
+
+    local ch   = IsInRaid() and "RAID" or IsInGroup() and "PARTY" or nil
+    local send = ch and function(m) SendChatMessage(m, ch) end
+                    or function(m) print(m) end
+
+    send(header)
+    for i = 1, math.min(count, #data) do
+        local d  = data[i]
+        local ps = duration > 0 and (d.value / duration) or 0
+        send(string.format("%d. %s: %s (%.1f/s, %.0f%%)",
+            i, ns:DisplayName(d.name), ns:FormatNumber(d.value), ps, d.percent or 0)) -- ★ 使用DisplayName
+    end
+end
+
+-- ============================================================
+-- 获取当前显示数据
+-- ============================================================
+function ns:GetDisplayData()
+    local seg = ns.Segments and ns.Segments:GetViewSegment()
+    if not seg then return {} end
+    return ns.Analysis and ns.Analysis:GetSorted(seg, ns.db.display.mode) or {}
+end
+
+function ns:GetOverallData()
+    local seg = ns.Segments and ns.Segments:GetOverallSegment()
+    if not seg then return {} end
+    return ns.Analysis and ns.Analysis:GetSorted(seg, ns.db.display.mode) or {}
+end
+
+function ns:SaveSessionHistory()
+    if not ns.Segments then return end
+    local maxSeg = ns.db and ns.db.tracking and ns.db.tracking.maxSegments or 30  -- ★ 补上定义
+
+    -- ★ 修复核心：判断是否处于预览模式。如果是，取出被藏起来的真实数据
+    local historyToSave = ns.Segments.history
+    local overallToSave = ns.Segments.overall
+    
+    if ns.Config and ns.Config._previewActive and ns.Config._pvSave then
+        historyToSave = ns.Config._pvSave.history or {}
+        overallToSave = ns.Config._pvSave.overall
+    end
+
+    local toSave = {}
+    for i, seg in ipairs(historyToSave) do
+        if i > maxSeg then break end
+        local compact = {
+            type             = seg.type,
+            name             = seg.name,
+            startTime        = seg.startTime,
+            endTime          = seg.endTime,
+            duration         = seg.duration,
+            isActive         = false,
+            totalDamage      = seg.totalDamage,
+            totalHealing     = seg.totalHealing,
+            totalDamageTaken = seg.totalDamageTaken,
+            encounterName    = seg.encounterName,
+            success          = seg.success,
+            mythicLevel      = seg.mythicLevel,
+            mapName          = seg.mapName,
+            _isMerged        = seg._isMerged,
+            _isBoss          = seg._isBoss,
+            _instanceTag     = seg._instanceTag,
+            _preKeystone     = seg._preKeystone,
+            _mythicLevel     = seg._mythicLevel,
+            _mapName         = seg._mapName,
+            _builtByMythicPlus = seg._builtByMythicPlus,  -- ★ 新增，reload后mergeAndCleanInstance能正确识别
+            players          = {},
+            deathLog         = {},
+        }
+        for guid, pd in pairs(seg.players) do
+            compact.players[guid] = {
+                guid            = pd.guid,
+                name            = pd.name,
+                class           = pd.class,
+                specID          = pd.specID,
+                ilvl            = pd.ilvl   or 0,
+                score           = pd.score  or 0,
+                damage          = pd.damage,
+                healing         = pd.healing,
+                damageTaken     = pd.damageTaken,
+                deaths          = pd.deaths,
+                interrupts      = pd.interrupts,
+                dispels         = pd.dispels,
+                spells          = pd.spells or {},
+                damageTakenSpells = pd.damageTakenSpells or {},
+                interruptSpells = pd.interruptSpells or {},
+                dispelSpells    = pd.dispelSpells or {},
+                pets            = pd.pets or {},
+                activeTime      = pd.activeTime,
+                lastActionTime  = 0,
+            }
+        end
+
+        -- ★ 新增：将该段落的死亡日志复制到存档对象中
+        if seg.deathLog then
+            for _, dr in ipairs(seg.deathLog) do
+                table.insert(compact.deathLog, CopyTable(dr))
+            end
+        end
+
+        table.insert(toSave, compact)
+    end
+    ns.db.savedHistory = toSave
+
+    -- ★ 新增：同时保存 overall，reload 后右栏数据得以恢复
+    local ovr = overallToSave
+    if ovr and (ovr.totalDamage > 0 or ovr.totalHealing > 0) then
+        local compactOvr = {
+            name             = ovr.name,
+            duration         = ovr.duration,
+            totalDamage      = ovr.totalDamage,
+            totalHealing     = ovr.totalHealing,
+            totalDamageTaken = ovr.totalDamageTaken,
+            players          = {},
+        }
+        for guid, pd in pairs(ovr.players) do
+            compactOvr.players[guid] = {
+                guid            = pd.guid,
+                name            = pd.name,
+                class           = pd.class,
+                specID          = pd.specID or (ns.PlayerInfoCache[guid] and ns.PlayerInfoCache[guid].specID), -- ★
+                ilvl            = pd.ilvl or (ns.PlayerInfoCache[guid] and ns.PlayerInfoCache[guid].ilvl) or 0, -- ★
+                score           = pd.score or (ns.PlayerInfoCache[guid] and ns.PlayerInfoCache[guid].score) or 0, -- ★
+                damage          = pd.damage,
+                healing         = pd.healing,
+                damageTaken     = pd.damageTaken,
+                deaths          = pd.deaths,
+                interrupts      = pd.interrupts,
+                dispels         = pd.dispels,
+                spells          = pd.spells          or {},
+                damageTakenSpells = pd.damageTakenSpells or {},
+                interruptSpells = pd.interruptSpells or {},
+                dispelSpells    = pd.dispelSpells    or {},
+                pets            = pd.pets            or {},
+                activeTime      = pd.activeTime,
+                lastActionTime  = 0,
+            }
+        end
+
+        -- ★ 新增：保存 Overall 的死亡日志
+        compactOvr.deathLog = {}
+        if ovr.deathLog then
+            for _, dr in ipairs(ovr.deathLog) do
+                table.insert(compactOvr.deathLog, CopyTable(dr))
+            end
+        end
+
+        ns.db.savedOverall = compactOvr
+    else
+        ns.db.savedOverall = nil
+    end
+end
+
+function ns:LoadSessionHistory()
+    if not ns.Segments then return end
+    if not ns.db.savedHistory or #ns.db.savedHistory == 0 then return end
+    ns.Segments.history = {}
+    for _, seg in ipairs(ns.db.savedHistory) do
+        table.insert(ns.Segments.history, seg)
+    end
+    if #ns.Segments.history > 0 then
+        ns.Segments.viewIndex = 1
+    end
+
+    -- ★ 新增：恢复 overall，保证 reload 后右栏立即有数据
+    local saved = ns.db.savedOverall
+    if saved and (saved.totalDamage or 0) > 0 then
+        ns.Segments.overall = ns.Segments:NewSegment("overall", saved.name or L["总计"])
+        ns.Segments.overall.isActive         = false
+        ns.Segments.overall.duration         = saved.duration         or 0
+        ns.Segments.overall.totalDamage      = saved.totalDamage      or 0
+        ns.Segments.overall.totalHealing     = saved.totalHealing     or 0
+        ns.Segments.overall.totalDamageTaken = saved.totalDamageTaken or 0
+        for guid, pd in pairs(saved.players or {}) do
+            -- ★ 确保旧数据也有默认值，防止报错
+            pd.specID = pd.specID or nil
+            pd.ilvl   = pd.ilvl or 0
+            pd.score  = pd.score or 0
+            ns.Segments.overall.players[guid] = pd
+        end
+
+        -- ★ 新增：将存档的死亡记录恢复到 Overall 中
+        if saved.deathLog then
+            for _, dr in ipairs(saved.deathLog) do
+                table.insert(ns.Segments.overall.deathLog, dr)
+            end
+        end
+
+        -- 保存快照，供 RebuildOverall 在新战斗结束后叠加数据
+        ns.Segments._preReloadOverallData = {
+            totalDamage      = saved.totalDamage      or 0,
+            totalHealing     = saved.totalHealing     or 0,
+            totalDamageTaken = saved.totalDamageTaken or 0,
+            duration         = saved.duration         or 0,
+            players          = CopyTable(saved.players or {}),
+        }
+    end
+end
+
+function ns:DebugRecapFields()
+    if not C_DeathRecap then print(L["[Light Damage Combat Stats] C_DeathRecap 不存在"]); return end
+    if not C_DeathRecap.HasRecapEvents or not C_DeathRecap.HasRecapEvents() then
+        print(L["[Light Damage Combat Stats] 没有死亡记录，先死一次"]); return
+    end
+    local events = C_DeathRecap.GetRecapEvents and C_DeathRecap.GetRecapEvents()
+    if not events or #events == 0 then print(L["[Light Damage Combat Stats] 返回空"]); return end
+    local maxHP = C_DeathRecap.GetRecapMaxHealth and C_DeathRecap.GetRecapMaxHealth()
+    print(string.format(L["[Light Damage Combat Stats] maxHealth=%s 共%d条，打印前3条字段:"], tostring(maxHP), #events))
+    for i = 1, math.min(3, #events) do
+        local ev = events[i]
+        print(string.format("  [%d]:", i))
+        for k, v in pairs(ev) do
+            print(string.format("    .%s = %s (%s)", tostring(k), tostring(v), type(v)))
+        end
+    end
+end
+
+-- 配置同到 profiles（登录时、修改设置时调用）
+local PROFILE_KEYS = {"window", "display", "split", "mythicPlus", "tracking", "smartRefresh"}
+
+function ns:SyncCurrentProfile()
+    local key = UnitName("player") .. "-" .. GetRealmName()
+    local snapshot = {}
+    for _, k in ipairs(PROFILE_KEYS) do
+        snapshot[k] = CopyTable(ns.db[k])
+    end
+    LDCombatStatsProfiles[key] = snapshot
+end
+
+function ns:ApplyProfile(charKey)
+    local src = LDCombatStatsProfiles[charKey]
+    if not src then return end
+    for _, k in ipairs(PROFILE_KEYS) do
+        if src[k] then
+            ns.db[k] = CopyTable(src[k])
+        end
+    end
+    ns:MergeDefaults(ns.db, ns.defaults)
+
+    if ns.UI and ns.UI.frame then
+        -- ★ 应用窗口级属性（透明度、缩放），这两项只在 Build() 设置过
+        ns.UI.frame:SetScale(ns.db.window.scale or 1.0)
+        ns.UI.frame:SetAlpha(ns.db.window.alpha or 0.92)
+        -- ★ 应用所有主题色/背景色
+        ns.UI:ApplyTheme()
+        -- ★ 重新布局（含字体刷新）
+        ns.UI:Layout()
+    end
+
+    -- ★ 销毁设置面板，下次打开时用新 ns.db 重建，确保控件值与外观一致
+    if ns.Config and ns.Config.panel then
+        ns.Config.panel:Hide()
+        ns.Config.panel = nil
+    end
+
+    print(L["|cff00ccff[Light Damage Combat Stats]|r 已应用 "] .. charKey .. L["的配置"])
+end
+
+-- ============================================================
+-- ★ 新增：队伍玩家信息扫描器 (装等、大秘境评分、专精)
+-- ============================================================
+ns.PlayerInfoCache = {}
+
+local inspectScanner = CreateFrame("Frame")
+inspectScanner:RegisterEvent("GROUP_ROSTER_UPDATE")
+inspectScanner:RegisterEvent("PLAYER_ENTERING_WORLD")
+inspectScanner:RegisterEvent("INSPECT_READY")
+local currentInspectUnit = nil
+
+inspectScanner:SetScript("OnUpdate", function(self, elapsed)
+    self.timer = (self.timer or 0) + elapsed
+    -- 每 2 秒扫描一次，避免卡顿
+    if self.timer > 2 then
+        self.timer = 0
+        if InCombatLockdown() then return end
+
+        local prefix = IsInRaid() and "raid" or "party"
+        local num = IsInRaid() and GetNumGroupMembers() or GetNumSubgroupMembers()
+        local units = {"player"}
+        for i = 1, num do table.insert(units, prefix..i) end
+
+        for _, unit in ipairs(units) do
+            if UnitExists(unit) and UnitIsConnected(unit) and UnitIsPlayer(unit) then
+                local guid = UnitGUID(unit)
+                if guid then
+                    ns.PlayerInfoCache[guid] = ns.PlayerInfoCache[guid] or { score = 0, ilvl = 0, specID = nil }
+                    local c = ns.PlayerInfoCache[guid]
+
+                    -- 1. 获取大秘境评分 (不需要 Inspect)
+                    if c.score == 0 and C_PlayerInfo.GetPlayerMythicPlusRatingSummary then
+                        local summary = C_PlayerInfo.GetPlayerMythicPlusRatingSummary(unit)
+                        if summary and summary.currentSeasonScore then
+                            c.score = summary.currentSeasonScore
+                        end
+                    end
+
+                    -- 2. 获取专精和装等
+                    if unit == "player" then
+                        local specIdx = GetSpecialization()
+                        if specIdx then c.specID = GetSpecializationInfo(specIdx) end
+                        local _, equipped = GetAverageItemLevel()
+                        c.ilvl = math.floor(equipped or 0)
+                    else
+                        -- 队友需要发起 Inspect 请求
+                        if not c.specID and CanInspect(unit) and (GetTime() - (self.lastInspect or 0) > 2) then
+                            self.lastInspect = GetTime()
+                            currentInspectUnit = unit
+                            NotifyInspect(unit)
+                            break -- 每次只 Inspect 一个
+                        end
+                    end
+                end
+            end
+        end
+    end
+end)
+
+inspectScanner:SetScript("OnEvent", function(self, event, guid)
+    if event == "INSPECT_READY" and currentInspectUnit and UnitGUID(currentInspectUnit) == guid then
+        local c = ns.PlayerInfoCache[guid]
+        if c then
+            c.specID = GetInspectSpecialization(currentInspectUnit)
+            local ilvl = C_PaperDollInfo.GetInspectItemLevel(currentInspectUnit)
+            if ilvl then c.ilvl = math.floor(ilvl) end
+        end
+        ClearInspectPlayer()
+        currentInspectUnit = nil
+    end
+end)

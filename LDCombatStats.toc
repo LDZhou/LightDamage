@@ -1,0 +1,23 @@
+## Interface: 120001
+## Title: Light Damage Combat Stats
+## Notes: Combat Statistics
+## Notes-zhCN: 战斗统计插件
+## Author: Yishi
+## Version: 1.0
+## SavedVariables: LDCombatStatsProfiles
+## SavedVariablesPerCharacter: LDCombatStatsDB
+## Category: Combat
+
+Locale.lua
+Core.lua
+Utils.lua
+Segments.lua
+DeathTracker.lua
+MythicPlus.lua
+HistoryList.lua
+CombatTracker.lua
+Analysis.lua
+UI.lua
+DetailView.lua
+Config.lua
+
