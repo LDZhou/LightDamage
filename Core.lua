@@ -97,6 +97,9 @@ ns.state = {
 -- ============================================================
 -- 初始化
 -- ============================================================
+-- ============================================================
+-- 初始化
+-- ============================================================
 function Core:OnInitialize()
     if not self._initialized then
         self._initialized = true
@@ -112,7 +115,6 @@ function Core:OnInitialize()
         if not LDCombatStatsProfiles then LDCombatStatsProfiles = {} end
         ns.profiles = LDCombatStatsProfiles
         ns:SyncCurrentProfile()
-
 
         ns.state.playerGUID = UnitGUID("player")
         ns.state.playerName = UnitName("player")
@@ -136,7 +138,6 @@ function Core:OnInitialize()
                 local ss  = C_DamageMeter.GetAvailableCombatSessions()
                 local cnt = ss and #ss or 0
                 if cnt > 0 and ns.CombatTracker._baselineSessionCount == 0 then
-                    -- ★ 如果在这 3 秒内玩家已经进战，最新的那个 session 其实是当前正在打的，必须从历史基线中剔除！
                     local offset = ns.state.inCombat and 1 or 0
                     ns.CombatTracker._baselineSessionCount = math.max(0, cnt - offset)
                     ns.CombatTracker._lastProcessedCount   = math.max(0, cnt - offset)
@@ -153,71 +154,68 @@ function Core:OnInitialize()
         end)
         ns:StartSmartRefresh()
         
-        -- ★ 自动关闭暴雪原生统计及其自动重置功能，避免双面板重叠及误删数据
+        -- ★ 自动关闭暴雪原生统计
         C_Timer.After(2, function()
             local possibleCVars = {
                 "damageMeterAutoReset",
                 "damageMeterResetOnNewInstance",
                 "autoClearDamageMeter",
                 "damageMeterAutoClear",
-                -- ★ 新增：只要插件加载，自动将系统设置中的“原生伤害统计”设为关闭(0)
                 "damageMeterEnabled" 
             }
             local setter = (C_CVar and C_CVar.SetCVar) or SetCVar
             for _, cvar in ipairs(possibleCVars) do
-                -- 使用 pcall 闭着眼睛全量写入 0，静默关闭它
                 pcall(setter, cvar, "0")
             end
         end)
 
-        -- print("|cff00ccff[Light Damage Combat Stats]|r v" .. ns.version .. L[" 已加载 | /ldcs show · /ldcs help"])
-    end
-
-    local events = {
-        "ZONE_CHANGED_NEW_AREA",
-        "ENCOUNTER_START",
-        "ENCOUNTER_END",
-        "GROUP_ROSTER_UPDATE",
-        "CHALLENGE_MODE_START",
-        "CHALLENGE_MODE_COMPLETED",
-        "CHALLENGE_MODE_RESET",
-        "PLAYER_DEAD",
-        "PLAYER_LOGOUT",
-    }
-    C_Timer.After(0, function()
+        -- ★ 把所有的 RegisterEvent 放在这里
+        local events = {
+            "ZONE_CHANGED_NEW_AREA",
+            "ENCOUNTER_START",
+            "ENCOUNTER_END",
+            "GROUP_ROSTER_UPDATE",
+            "CHALLENGE_MODE_START",
+            "CHALLENGE_MODE_COMPLETED",
+            "CHALLENGE_MODE_RESET",
+            "PLAYER_DEAD",
+            "PLAYER_LOGOUT",
+        }
         
-        -- 1. 注册主框架事件
-        for _, ev in ipairs(events) do
-            self:RegisterEvent(ev)
-        end
-
-        -- 2. 注册战斗追踪器事件
-        if ns.CombatTracker then
-            ns.CombatTracker:RegisterEvents()
-        end
-
-        -- 3. 注册战斗日志事件 (COMBAT_LOG_EVENT_UNFILTERED 就在这里！)
-        local cleuFrame = CreateFrame("Frame")
-        cleuFrame:RegisterEvent("COMBAT_LOG_EVENT_UNFILTERED")
-        cleuFrame:SetScript("OnEvent", function()
-            if not ns.DeathTracker then return end
-            local ts, sub, _, sg, sn, sf, dg, dn, df, p1, p2, p3, p4 = CombatLogGetCurrentEventInfo()
-
-
-            if sub == "SWING_DAMAGE" then
-                ns.DeathTracker:RecordIncomingDamage(dg, dn, df, p1, 0, L["近战"], p3 or 1, sg, sn)
-            elseif sub == "SPELL_DAMAGE" or sub == "SPELL_PERIODIC_DAMAGE"
-                or sub == "RANGE_DAMAGE" then
-                ns.DeathTracker:RecordIncomingDamage(dg, dn, df, p4, p1, p2, p3, sg, sn)
-            elseif sub == "SPELL_HEAL" or sub == "SPELL_PERIODIC_HEAL" then
-                ns.DeathTracker:RecordIncomingHeal(dg, dn, df, p4, p1, p2, sg, sn)
-            elseif sub == "UNIT_DIED" then
-                ns.DeathTracker:OnUnitDied(dg, dn, df, ts)
+        C_Timer.After(0, function()
+            -- 1. 注册主框架事件
+            for _, ev in ipairs(events) do
+                self:RegisterEvent(ev)
             end
-        end)
-        
-    end)
 
+            -- 2. 注册战斗追踪器事件
+            if ns.CombatTracker then
+                ns.CombatTracker:RegisterEvents()
+            end
+
+            -- 3. 注册战斗日志事件
+            local cleuFrame = CreateFrame("Frame")
+            cleuFrame:RegisterEvent("COMBAT_LOG_EVENT_UNFILTERED")
+            cleuFrame:SetScript("OnEvent", function()
+                if not ns.DeathTracker then return end
+                local ts, sub, _, sg, sn, sf, dg, dn, df, p1, p2, p3, p4 = CombatLogGetCurrentEventInfo()
+
+                if sub == "SWING_DAMAGE" then
+                    ns.DeathTracker:RecordIncomingDamage(dg, dn, df, p1, 0, L["近战"], p3 or 1, sg, sn)
+                elseif sub == "SPELL_DAMAGE" or sub == "SPELL_PERIODIC_DAMAGE" or sub == "RANGE_DAMAGE" then
+                    ns.DeathTracker:RecordIncomingDamage(dg, dn, df, p4, p1, p2, p3, sg, sn)
+                elseif sub == "SPELL_HEAL" or sub == "SPELL_PERIODIC_HEAL" then
+                    ns.DeathTracker:RecordIncomingHeal(dg, dn, df, p4, p1, p2, sg, sn)
+                elseif sub == "UNIT_DIED" then
+                    ns.DeathTracker:OnUnitDied(dg, dn, df, ts)
+                end
+            end)
+        end)
+
+
+    end -- <--- 这是 if not self._initialized then 的结束
+
+    -- 无论是不是第一次进世界，都要执行的常规操作
     SLASH_LDCS1 = "/ldcs"
     SLASH_LDCS2 = "/ldstats"
     SlashCmdList["LDCS"] = function(msg) ns:HandleSlashCommand(msg) end
