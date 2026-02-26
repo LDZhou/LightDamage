@@ -182,35 +182,35 @@ function Core:OnInitialize()
             "PLAYER_LOGOUT",
         }
         
-        C_Timer.After(0, function()
-            -- 1. 注册主框架事件
-            for _, ev in ipairs(events) do
-                self:RegisterEvent(ev)
-            end
 
-            -- 2. 注册战斗追踪器事件
-            if ns.CombatTracker then
-                ns.CombatTracker:RegisterEvents()
-            end
+        -- 1. 注册主框架事件
+        for _, ev in ipairs(events) do
+            self:RegisterEvent(ev)
+        end
 
-            -- 3. 注册战斗日志事件
-            local cleuFrame = CreateFrame("Frame")
-            cleuFrame:RegisterEvent("COMBAT_LOG_EVENT_UNFILTERED")
-            cleuFrame:SetScript("OnEvent", function()
-                if not ns.DeathTracker then return end
-                local ts, sub, _, sg, sn, sf, dg, dn, df, p1, p2, p3, p4 = CombatLogGetCurrentEventInfo()
+        -- 2. 注册战斗追踪器事件
+        if ns.CombatTracker then
+            ns.CombatTracker:RegisterEvents()
+        end
 
-                if sub == "SWING_DAMAGE" then
-                    ns.DeathTracker:RecordIncomingDamage(dg, dn, df, p1, 0, L["近战"], p3 or 1, sg, sn)
-                elseif sub == "SPELL_DAMAGE" or sub == "SPELL_PERIODIC_DAMAGE" or sub == "RANGE_DAMAGE" then
-                    ns.DeathTracker:RecordIncomingDamage(dg, dn, df, p4, p1, p2, p3, sg, sn)
-                elseif sub == "SPELL_HEAL" or sub == "SPELL_PERIODIC_HEAL" then
-                    ns.DeathTracker:RecordIncomingHeal(dg, dn, df, p4, p1, p2, sg, sn)
-                elseif sub == "UNIT_DIED" then
-                    ns.DeathTracker:OnUnitDied(dg, dn, df, ts)
-                end
-            end)
-        end)
+        -- 3. 注册战斗日志事件
+        -- local cleuFrame = CreateFrame("Frame")
+        -- cleuFrame:RegisterEvent("COMBAT_LOG_EVENT_UNFILTERED")
+        -- cleuFrame:SetScript("OnEvent", function()
+        --     if not ns.DeathTracker then return end
+        --     local ts, sub, _, sg, sn, sf, dg, dn, df, p1, p2, p3, p4 = CombatLogGetCurrentEventInfo()
+
+        --     if sub == "SWING_DAMAGE" then
+        --         ns.DeathTracker:RecordIncomingDamage(dg, dn, df, p1, 0, L["近战"], p3 or 1, sg, sn)
+        --     elseif sub == "SPELL_DAMAGE" or sub == "SPELL_PERIODIC_DAMAGE" or sub == "RANGE_DAMAGE" then
+        --         ns.DeathTracker:RecordIncomingDamage(dg, dn, df, p4, p1, p2, p3, sg, sn)
+        --     elseif sub == "SPELL_HEAL" or sub == "SPELL_PERIODIC_HEAL" then
+        --         ns.DeathTracker:RecordIncomingHeal(dg, dn, df, p4, p1, p2, sg, sn)
+        --     elseif sub == "UNIT_DIED" then
+        --         ns.DeathTracker:OnUnitDied(dg, dn, df, ts)
+        --     end
+        -- end)
+
 
 
     end -- <--- 这是 if not self._initialized then 的结束
