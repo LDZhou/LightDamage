@@ -157,10 +157,7 @@ function Core:OnInitialize()
         -- ★ 自动关闭暴雪原生统计
         C_Timer.After(2, function()
             local possibleCVars = {
-                "damageMeterAutoReset",
                 "damageMeterResetOnNewInstance",
-                "autoClearDamageMeter",
-                "damageMeterAutoClear",
                 "damageMeterEnabled" 
             }
             local setter = (C_CVar and C_CVar.SetCVar) or SetCVar
@@ -265,11 +262,12 @@ function Core:OnEvent(event, ...)
             if ns.MythicPlus and ns.MythicPlus:IsActive() then
                 ns.MythicPlus:OnLeaveInstance()
             else
-                -- ★ 修复：不在这里调 CT:ResetBaselineToCurrentCount()！
-                --   原来的调用会把 _lastProcessedCount 推到最新值，
-                --   导致 processArchivedSessions 找不到未处理的 session。
-                --   Reset 放到 mergeAndCleanInstance 完成后执行。
                 if ns.Segments then
+                    -- ★ 核心修复：在清空 overall 之前，打一个深拷贝备份交给 CombatTracker
+                    if ns.CombatTracker and ns.Segments.overall then
+                        ns.CombatTracker._overallSnapshot = CopyTable(ns.Segments.overall)
+                    end
+                    -- 然后再安心地清空它
                     ns.Segments.overall = ns.Segments:NewSegment("overall", L["总计"])
                 end
             end

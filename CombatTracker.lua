@@ -38,6 +38,7 @@ CT._currentInstanceName  = nil  -- ENCOUNTER_START 时记录副本名（GetInsta
 -- 辅助
 -- ============================================================
 local function getAmount(val)
+    if issecretvalue and issecretvalue(val) then return 0 end
     if type(val) == "number" then return val end
     return 0
 end
@@ -254,6 +255,38 @@ local function processArchivedSessions()
                                         table.insert(seg.deathLog, insertIdx, deathRecord)
                                     end
                                     while #seg.deathLog > 50 do table.remove(seg.deathLog) end
+
+                                    -- ▼▼▼ 新增：同步插入到 Overall 的死亡日志中 ▼▼▼
+                                    local ovr = segs.overall
+                                    if ovr then
+                                        ovr.deathLog = ovr.deathLog or {}
+                                        local ovrReplaced = false
+                                        -- 查重：如果在 overall 里已经存在这个 recap 的记录，覆盖它
+                                        for di, existing in ipairs(ovr.deathLog) do
+                                            if existing.playerGUID == guid then
+                                                if not existing._fromRecap then
+                                                    ovr.deathLog[di] = deathRecord
+                                                    ovrReplaced = true
+                                                elseif math.abs((existing.gameTime or 0) - (deathRecord.gameTime or 0)) < 1 then
+                                                    -- 极短时间内的同一个人死亡认为是同一条
+                                                    ovrReplaced = true
+                                                end
+                                                if ovrReplaced then break end
+                                            end
+                                        end
+                                        
+                                        if not ovrReplaced then
+                                            local insertIdx = deathRecord.isSelf and 1 or (#ovr.deathLog + 1)
+                                            if not deathRecord.isSelf then
+                                                for di, dr in ipairs(ovr.deathLog) do
+                                                    if not dr.isSelf then insertIdx = di; break end
+                                                end
+                                            end
+                                            table.insert(ovr.deathLog, insertIdx, deathRecord)
+                                        end
+                                        while #ovr.deathLog > 50 do table.remove(ovr.deathLog) end
+                                    end
+                                    -- ▲▲▲ 新增结束 ▲▲▲
                                 end
                             end
                         end
@@ -479,78 +512,159 @@ local function mergeAndCleanInstance(instanceTag, mythicLevel, mythicMapName, in
     if not segs then return end
 
     mythicLevel = mythicLevel or 0
+    local isRaid = (CT._currentInstanceType == "raid")
 
     local instSegs = {}
     for i, seg in ipairs(segs.history) do
         if seg._instanceTag == instanceTag and not seg._isMerged then
-            -- ★ 修复：排除已合并的全程段（同一副本上轮记录），
-            --   避免重复计入数据，也避免被当作本轮小怪段删除
+            -- 排除已合并的全程段
             table.insert(instSegs, {idx = i, seg = seg})
         end
     end
     if #instSegs == 0 then return end
 
-    -- ★ 修复副本名：优先级：M+专用名 > 进副本时保存的名 > instanceTag解析（兜底）
-    --   原来用 instanceTag:match("^([^|]+)") 解析出来的是大陆名（如"卡兹阿加"）
-    --   因为 GetInstanceInfo() 在 PLAYER_ENTERING_WORLD 某些时机返回的是区域而非实例名
     local zoneName
     if mythicLevel > 0 and mythicMapName and mythicMapName ~= "" then
         zoneName = mythicMapName
     elseif instanceName and instanceName ~= "" then
         zoneName = instanceName
     elseif instSegs[1].seg._instanceDisplayName and instSegs[1].seg._instanceDisplayName ~= "" then
-        -- ★ 兜底：从已归档的 seg 上读，这是进副本时保存的，不受出副本影响
         zoneName = instSegs[1].seg._instanceDisplayName
     else
-        -- 最后兜底：instanceTag 里的原始名（可能不准但总比 nil 好）
         zoneName = instanceTag:match("^([^|]+)") or L["副本"]
     end
 
-    -- ★ 修复：M+完成/放弃时，BuildMythicSegment 已经在 history 里创建了
-    --   正式的 "mythicplus" 汇总段（带层数和成功/失败标记）。
-    --   检测到它存在后，只需清理掉带 _instanceTag 的个人战斗段，
-    --   不再重复创建没有层数的 L["[全程]"] 段。
+    -- ★ 提取公共逻辑：非 Raid 副本（地下城、大秘境等）直接深度克隆现有的 Overall 避免合并误差
+    local function cloneOverallToMerged(merged)
+        -- ★ 优先读取过图时的备份快照，如果没有再读当前的
+        local ovr = CT._overallSnapshot or segs.overall
+        if not ovr then return end
+        
+        merged.totalDamage      = ovr.totalDamage or 0
+        merged.totalHealing     = ovr.totalHealing or 0
+        merged.totalDamageTaken = ovr.totalDamageTaken or 0
+        merged.duration         = (CT._overallDurationSnapshot and CT._overallDurationSnapshot > 0)
+                                  and CT._overallDurationSnapshot or (ovr.duration or 0)
+        
+        merged.players = CopyTable(ovr.players or {})
+        
+        merged.deathLog = CopyTable(ovr.deathLog or {})
+        table.sort(merged.deathLog, function(a, b)
+            if a.isSelf ~= b.isSelf then return a.isSelf end
+            return (a.gameTime or 0) < (b.gameTime or 0)
+        end)
+        -- 保留最后发生的记录
+        while #merged.deathLog > 50 do 
+            -- 尝试删掉第一条不是自己的旧记录
+            local removed = false
+            for i = 1, #merged.deathLog do
+                if not merged.deathLog[i].isSelf then
+                    table.remove(merged.deathLog, i)
+                    removed = true
+                    break
+                end
+            end
+            -- 如果全都是自己的记录（极端情况），删掉最旧的自己
+            if not removed then table.remove(merged.deathLog, 2) end 
+        end
+    end
+
+    -- ================= 分支1：M+ 正常通关 =================
     if mythicLevel > 0 then
         local pending = ns.MythicPlus and ns.MythicPlus._pendingMythicSeg
-        if not pending then
-            -- 没有 pending（极少数 reload 边缘情况），fallthrough 到下面非M+分支兜底
-        else
+        if pending then
             ns.MythicPlus._pendingMythicSeg = nil
 
-            -- ★ 和普通副本完全一样的聚合逻辑，只是最后加 M+ 专属字段
-            local mergedName = string.format("|cff4cb8e8+%d|r %s",
-                pending.level, pending.mapName)
-
+            local mergedName = string.format("|cff4cb8e8+%d|r %s", pending.level, pending.mapName)
             local merged = segs:NewSegment("mythicplus", mergedName)
             merged.isActive           = false
             merged._instanceTag       = nil
             merged._isBoss            = false
             merged._isMerged          = true
             merged._builtByMythicPlus = true
-            -- M+ 专属字段
             merged.success            = pending.success
             merged._mythicLevel       = pending.level
             merged._mapName           = pending.mapName
             merged.mythicLevel        = pending.level
             merged.mapName            = pending.mapName
             merged.mapID              = pending.mapID
+            merged._keystoneTime      = (pending.elapsed or 0) / 1000
 
-            local combatDur = 0
-            for i = #instSegs, 1, -1 do
-                local entry = instSegs[i]
-                
-                local src = entry.seg
-                src._dataLoaded = false
-                CT:LoadSegmentData(src)
-                combatDur = combatDur + (src.duration or 0)
+            -- ★ 直接完美克隆 Overall 数据
+            cloneOverallToMerged(merged)
+
+            -- 删除非 Boss 段，保留 Boss 段
+            local indicesToRemove = {}
+            local bossCount = 0
+            for _, entry in ipairs(instSegs) do
+                if entry.seg._isBoss then bossCount = bossCount + 1
+                else table.insert(indicesToRemove, entry.idx) end
+            end
+            table.sort(indicesToRemove, function(a, b) return a > b end)
+            for _, idx in ipairs(indicesToRemove) do table.remove(segs.history, idx) end
+
+            if merged.totalDamage > 0 or merged.totalHealing > 0 then
+                table.insert(segs.history, 1, merged)
+                segs.viewIndex = 1
+            end
+
+            local maxSeg = ns.db and ns.db.tracking and ns.db.tracking.maxSegments or 30
+            while #segs.history > maxSeg do table.remove(segs.history) end
+
+            if ns.CombatTracker then ns.CombatTracker:ResetBaselineToCurrentCount() end
+            if ns.Segments then 
+                ns.Segments._preReloadOverallData = nil
+            end
+            CT._overallDurationSnapshot = nil
+            CT._exitingInstanceTag = nil
+            CT._overallSnapshot = nil
+
+            if ns.SaveSessionHistory then ns:SaveSessionHistory() end
+            if ns.UI then C_Timer.After(0, function() ns.UI:Layout() end) end
+
+            local bossStr = bossCount > 0 and string.format(L["，保留 %d 个 Boss"], bossCount) or ""
+            print(string.format(L["|cff00ccff[LD Stats]|r 副本 %s 已整理%s + 1 条全程汇总"], pending.mapName, bossStr))
+            return
+        end
+    end
+
+    -- ================= 分支2：非M+ 或 M+中途放弃 =================
+    local mergedName
+    if mythicLevel > 0 then
+        mergedName = string.format(L["|cff4cb8e8+%d|r %s |cffaaaaaa[全程]|r"], mythicLevel, zoneName)
+    else
+        mergedName = string.format(L["%s [全程]"], zoneName)
+    end
+
+    local merged = segs:NewSegment("history", mergedName)
+    merged.isActive     = false
+    merged._instanceTag = nil
+    merged._isBoss      = false
+    merged._isMerged    = true
+    if mythicLevel > 0 then
+        merged._mythicLevel = mythicLevel
+        merged._mapName     = zoneName
+    end
+
+    if not isRaid then
+        -- ★ 如果不是团队副本（即大秘境中途放弃 或 普通地下城），直接完美克隆 Overall 数据！
+        cloneOverallToMerged(merged)
+    else
+        -- ★ 只有团队副本(Raid)，才需要手动挑出包含 _isBoss 的战斗段进行累加合并
+        local totalDur = 0
+        for i = #instSegs, 1, -1 do
+            local entry = instSegs[i]
+            local src = entry.seg
+            src._dataLoaded = false
+            CT:LoadSegmentData(src)
+
+            if src._isBoss then
+                totalDur = totalDur + (src.duration or 0)
 
                 for guid, pd in pairs(src.players) do
                     local mp = segs:GetPlayer(merged, guid, pd.name, nil)
                     if mp then
                         mp.class       = pd.class or mp.class
-                        mp.specID = pd.specID or mp.specID
-                        mp.ilvl   = pd.ilvl   or mp.ilvl
-                        mp.score  = pd.score  or mp.score
                         mp.damage      = (mp.damage      or 0) + (pd.damage      or 0)
                         mp.healing     = (mp.healing     or 0) + (pd.healing     or 0)
                         mp.damageTaken = (mp.damageTaken or 0) + (pd.damageTaken or 0)
@@ -573,12 +687,7 @@ local function mergeAndCleanInstance(instanceTag, mythicLevel, mythicMapName, in
                             end
                             local msd = mp.damageTakenSpells[spellID]
                             msd.damage = (msd.damage or 0) + (sd.damage or 0)
-                            msd.hits   = (msd.hits   or 0) + (sd.hits   or 0)
-
-                            -- ▼▼▼ 新增：合并时保留规避标记 ▼▼▼
-                            if sd.isAvoidable then 
-                                msd.isAvoidable = true 
-                            end
+                            msd.hits   = (msd.hits or 0) + (sd.hits or 0)
                         end
                         for spellID, sd in pairs(pd.interruptSpells or {}) do
                             if not mp.interruptSpells[spellID] then
@@ -586,7 +695,7 @@ local function mergeAndCleanInstance(instanceTag, mythicLevel, mythicMapName, in
                             end
                             local msd = mp.interruptSpells[spellID]
                             msd.damage = (msd.damage or 0) + (sd.damage or 0)
-                            msd.hits   = (msd.hits   or 0) + (sd.hits   or 0)
+                            msd.hits   = (msd.hits or 0) + (sd.hits or 0)
                         end
                         for spellID, sd in pairs(pd.dispelSpells or {}) do
                             if not mp.dispelSpells[spellID] then
@@ -594,7 +703,7 @@ local function mergeAndCleanInstance(instanceTag, mythicLevel, mythicMapName, in
                             end
                             local msd = mp.dispelSpells[spellID]
                             msd.damage = (msd.damage or 0) + (sd.damage or 0)
-                            msd.hits   = (msd.hits   or 0) + (sd.hits   or 0)
+                            msd.hits   = (msd.hits or 0) + (sd.hits or 0)
                         end
                     end
                 end
@@ -604,154 +713,15 @@ local function mergeAndCleanInstance(instanceTag, mythicLevel, mythicMapName, in
                 merged.totalDamageTaken = merged.totalDamageTaken + (src.totalDamageTaken or 0)
 
                 for _, dr in ipairs(src.deathLog or {}) do
-                    local replaced = false
-                    for di, existing in ipairs(merged.deathLog) do
-                        if existing.playerGUID == dr.playerGUID then
-                            if dr._fromRecap and not existing._fromRecap then
-                                merged.deathLog[di] = dr
-                            end
-                            replaced = true; break
-                        end
-                    end
-                    if not replaced then table.insert(merged.deathLog, dr) end
+                    table.insert(merged.deathLog, dr)
                 end
             end
-
-            table.sort(merged.deathLog, function(a, b)
-                if a.isSelf ~= b.isSelf then return a.isSelf end
-                return (a.gameTime or 0) < (b.gameTime or 0)
-            end)
-            while #merged.deathLog > 50 do table.remove(merged.deathLog) end
-
-            merged.duration      = (CT._overallDurationSnapshot and CT._overallDurationSnapshot > 0)
-                                   and CT._overallDurationSnapshot or combatDur
-            merged._keystoneTime = (pending.elapsed or 0) / 1000  -- 通关时间，仅用于展示
-
-            -- 删除非 Boss 段，保留 Boss 段
-            local indicesToRemove = {}
-            local bossCount = 0
-            for _, entry in ipairs(instSegs) do
-                if entry.seg._isBoss then bossCount = bossCount + 1
-                else table.insert(indicesToRemove, entry.idx) end
-            end
-            table.sort(indicesToRemove, function(a, b) return a > b end)
-            for _, idx in ipairs(indicesToRemove) do table.remove(segs.history, idx) end
-
-            if merged.totalDamage > 0 or merged.totalHealing > 0 then
-                table.insert(segs.history, 1, merged)
-                segs.viewIndex = 1
-            end
-
-            local maxSeg = ns.db and ns.db.tracking and ns.db.tracking.maxSegments or 30
-            while #segs.history > maxSeg do table.remove(segs.history) end
-
-            if ns.CombatTracker then ns.CombatTracker:ResetBaselineToCurrentCount() end
-            if ns.Segments then ns.Segments._preReloadOverallData = nil end
-            CT._overallDurationSnapshot = nil
-            CT._exitingInstanceTag = nil
-            if ns.SaveSessionHistory then ns:SaveSessionHistory() end
-            if ns.UI then C_Timer.After(0, function() ns.UI:Layout() end) end
-
-            local bossStr = bossCount > 0 and string.format(L["，保留 %d 个 Boss"], bossCount) or ""
-            print(string.format(L["|cff00ccff[LD Stats]|r 副本 %s 已整理%s + 1 条全程汇总"],
-                pending.mapName, bossStr))
-            return
         end
+        merged.duration = (CT._overallDurationSnapshot and CT._overallDurationSnapshot > 0)
+                          and CT._overallDurationSnapshot or totalDur
     end
 
-    -- 非M+ 或 M+中途放弃（无正式汇总段）：合并所有个人段
-    local mergedName
-    if mythicLevel > 0 then
-        -- M+中途放弃带层数
-        mergedName = string.format(L["|cff4cb8e8+%d|r %s |cffaaaaaa[全程]|r"], mythicLevel, zoneName)
-    else
-        mergedName = string.format(L["%s [全程]"], zoneName)
-    end
-
-    local merged = segs:NewSegment("history", mergedName)
-    merged.isActive     = false
-    merged._instanceTag = nil
-    merged._isBoss      = false
-    merged._isMerged    = true
-    if mythicLevel > 0 then
-        merged._mythicLevel = mythicLevel
-        merged._mapName     = zoneName
-    end
-
-    local totalDur = 0
-    for i = #instSegs, 1, -1 do
-        local entry = instSegs[i]
-        local src = entry.seg
-        src._dataLoaded = false
-        CT:LoadSegmentData(src)
-
-        -- ★ Raid 全程只合并 boss 战数据，小怪段跳过
-        local isRaid = (CT._currentInstanceType == "raid")
-        if not isRaid or src._isBoss then
-            totalDur = totalDur + (src.duration or 0)
-
-            for guid, pd in pairs(src.players) do
-                local mp = segs:GetPlayer(merged, guid, pd.name, nil)
-                if mp then
-                    mp.class       = pd.class or mp.class
-                    mp.damage      = (mp.damage      or 0) + (pd.damage      or 0)
-                    mp.healing     = (mp.healing     or 0) + (pd.healing     or 0)
-                    mp.damageTaken = (mp.damageTaken or 0) + (pd.damageTaken or 0)
-                    mp.interrupts  = (mp.interrupts  or 0) + (pd.interrupts  or 0)
-                    mp.dispels     = (mp.dispels     or 0) + (pd.dispels     or 0)
-                    mp.deaths      = (mp.deaths      or 0) + (pd.deaths      or 0)
-                    for spellID, sd in pairs(pd.spells or {}) do
-                        if not mp.spells[spellID] then
-                            mp.spells[spellID] = segs:NewSpellData(spellID, sd.name, sd.school)
-                        end
-                        local msd = mp.spells[spellID]
-                        msd.damage  = (msd.damage  or 0) + (sd.damage  or 0)
-                        msd.healing = (msd.healing or 0) + (sd.healing or 0)
-                        msd.hits    = (msd.hits    or 0) + (sd.hits    or 0)
-                        msd.crits   = (msd.crits   or 0) + (sd.crits   or 0)
-                    end
-                    for spellID, sd in pairs(pd.damageTakenSpells or {}) do
-                        if not mp.damageTakenSpells[spellID] then
-                            mp.damageTakenSpells[spellID] = segs:NewSpellData(spellID, sd.name, sd.school)
-                        end
-                        local msd = mp.damageTakenSpells[spellID]
-                        msd.damage = (msd.damage or 0) + (sd.damage or 0)
-                        msd.hits   = (msd.hits or 0) + (sd.hits or 0)
-                    end
-                    for spellID, sd in pairs(pd.interruptSpells or {}) do
-                        if not mp.interruptSpells[spellID] then
-                            mp.interruptSpells[spellID] = segs:NewSpellData(spellID, sd.name, sd.school)
-                        end
-                        local msd = mp.interruptSpells[spellID]
-                        msd.damage = (msd.damage or 0) + (sd.damage or 0)
-                        msd.hits   = (msd.hits or 0) + (sd.hits or 0)
-                    end
-                    for spellID, sd in pairs(pd.dispelSpells or {}) do
-                        if not mp.dispelSpells[spellID] then
-                            mp.dispelSpells[spellID] = segs:NewSpellData(spellID, sd.name, sd.school)
-                        end
-                        local msd = mp.dispelSpells[spellID]
-                        msd.damage = (msd.damage or 0) + (sd.damage or 0)
-                        msd.hits   = (msd.hits or 0) + (sd.hits or 0)
-                    end
-                end
-            end
-
-            merged.totalDamage      = merged.totalDamage      + (src.totalDamage      or 0)
-            merged.totalHealing     = merged.totalHealing     + (src.totalHealing     or 0)
-            merged.totalDamageTaken = merged.totalDamageTaken + (src.totalDamageTaken or 0)
-
-            for _, dr in ipairs(src.deathLog or {}) do
-                table.insert(merged.deathLog, dr)
-            end
-        end
-    end
-    merged.duration = (CT._overallDurationSnapshot and CT._overallDurationSnapshot > 0)
-                      and CT._overallDurationSnapshot or totalDur
-
-    -- ★ 修复原始代码 indicesToRemove 作用域 crash：
-    --   原代码在 if mergedSaved 块内定义但 mergedSaved 在后面才声明，
-    --   外层 table.sort(nil) 直接 crash。现在先删后插，顺序明确。
+    -- ==== 收尾整理：删掉小怪，保留 Boss ====
     local indicesToRemove = {}
     local bossCount = 0
     for _, entry in ipairs(instSegs) do
@@ -774,10 +744,15 @@ local function mergeAndCleanInstance(instanceTag, mythicLevel, mythicMapName, in
     local maxSeg = ns.db and ns.db.tracking and ns.db.tracking.maxSegments or 30
     while #segs.history > maxSeg do table.remove(segs.history) end
 
-    -- ★ 修复：merge 完成后再重置 baseline
     if ns.CombatTracker then ns.CombatTracker:ResetBaselineToCurrentCount() end
 
-    if ns.Segments then ns.Segments._preReloadOverallData = nil end
+    if ns.Segments then 
+        ns.Segments._preReloadOverallData = nil 
+        -- ★ 延迟到这里才清空 Overall，确保户外的 overall 变成纯净的
+        if not ns.state.isInInstance then
+            ns.Segments.overall = ns.Segments:NewSegment("overall", L["总计"])
+        end
+    end
     CT._overallDurationSnapshot = nil
     CT._exitingInstanceTag = nil
     
@@ -818,7 +793,10 @@ function CT:RebuildOverall(sessions, sessionCount)
         end
     end
 
-    local function getAmount(amt) return type(amt)=="number" and amt or 0 end
+    local function getAmount(amt) 
+        if issecretvalue and issecretvalue(amt) then return 0 end
+        return type(amt)=="number" and amt or 0 
+    end
 
     -- 内部 GetPlayer，操作 newPlayers 而非 segs.overall.players
     local function getOrCreatePlayer(guid, name)
@@ -970,6 +948,13 @@ function CT:RebuildOverall(sessions, sessionCount)
     segs.overall.totalDamageTaken = newTotalDTaken
     segs.overall.duration = C_DamageMeter.GetSessionDurationSeconds(Enum.DamageMeterSessionType.Overall) or totalDur
     segs.overall.isActive         = false
+
+    -- ▼▼▼ 新增：恢复 Reload 前的死亡记录 ▼▼▼
+    if snap and snap.deathLog then
+        segs.overall.deathLog = CopyTable(snap.deathLog)
+    elseif not segs.overall.deathLog then
+        segs.overall.deathLog = {}
+    end
 end
 
 -- ============================================================
