@@ -1140,8 +1140,6 @@ function CT:RegisterEvents()
     CT._initializingGuard = true
 
     local f = CreateFrame("Frame")
-    f:RegisterEvent("DAMAGE_METER_COMBAT_SESSION_UPDATED")
-    f:RegisterEvent("DAMAGE_METER_RESET")
     f:RegisterEvent("PLAYER_REGEN_DISABLED")
     f:RegisterEvent("PLAYER_REGEN_ENABLED")
     f:RegisterEvent("ENCOUNTER_START")
@@ -1152,10 +1150,9 @@ function CT:RegisterEvents()
     f:RegisterEvent("CHALLENGE_MODE_RESET")
 
     f:SetScript("OnEvent", function(_, event, ...)
-        if event == "DAMAGE_METER_COMBAT_SESSION_UPDATED" then
-            syncCombatState()
 
-        elseif event == "ENCOUNTER_START" then
+
+        if event == "ENCOUNTER_START" then
             local encounterID = ...
             CT._currentEncounterID = encounterID
             local ss = C_DamageMeter.GetAvailableCombatSessions()
@@ -1365,25 +1362,6 @@ function CT:RegisterEvents()
                 ns.state.combatStartTime = 0
                 syncCombatState()
             end
-
-        elseif event == "DAMAGE_METER_RESET" then
-            CT._baselineSessionCount = 0
-            CT._lastProcessedCount   = 0
-            CT._bossSessionIndices   = {}
-            if not CT._internalReset and not CT._initializingGuard then
-                CT._currentMythicLevel   = 0
-                CT._currentMythicMapName = nil
-            end
-
-            if CT._internalReset then
-                CT._internalReset = false
-            elseif CT._initializingGuard then
-                CT._initializingGuard = false
-            else
-                if ns.Segments then ns.Segments:Init() end
-            end
-
-            if ns.UI then C_Timer.After(0, function() ns.UI:Layout() end) end
         end
     end)
 
