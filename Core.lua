@@ -12,7 +12,7 @@ local L = ns.L
 ns.version   = "1.0"
 ns.addonName = addonName
 
-local Core = CreateFrame("Frame", "LDCombatStatsCore", UIParent)
+local Core = CreateFrame("Frame")
 ns.Core = Core
 
 -- ============================================================
@@ -182,21 +182,25 @@ function Core:OnInitialize()
         "PLAYER_DEAD",
         "PLAYER_LOGOUT",
     }
-    for _, ev in ipairs(events) do
-        self:RegisterEvent(ev)
-    end
+    C_Timer.After(0, function()
+        
+        -- 1. 注册主框架事件
+        for _, ev in ipairs(events) do
+            self:RegisterEvent(ev)
+        end
 
-    if ns.CombatTracker then
-        ns.CombatTracker:RegisterEvents()
-    end
+        -- 2. 注册战斗追踪器事件
+        if ns.CombatTracker then
+            ns.CombatTracker:RegisterEvents()
+        end
 
-    do
+        -- 3. 注册战斗日志事件 (COMBAT_LOG_EVENT_UNFILTERED 就在这里！)
         local cleuFrame = CreateFrame("Frame")
         cleuFrame:RegisterEvent("COMBAT_LOG_EVENT_UNFILTERED")
         cleuFrame:SetScript("OnEvent", function()
             if not ns.DeathTracker then return end
-            local ts, sub, _, sg, sn, sf, dg, dn, df = CombatLogGetCurrentEventInfo()
-            local p1, p2, p3, p4 = select(10, CombatLogGetCurrentEventInfo())
+            local ts, sub, _, sg, sn, sf, dg, dn, df, p1, p2, p3, p4 = CombatLogGetCurrentEventInfo()
+
 
             if sub == "SWING_DAMAGE" then
                 ns.DeathTracker:RecordIncomingDamage(dg, dn, df, p1, 0, L["近战"], p3 or 1, sg, sn)
@@ -209,7 +213,8 @@ function Core:OnInitialize()
                 ns.DeathTracker:OnUnitDied(dg, dn, df, ts)
             end
         end)
-    end
+        
+    end)
 
     SLASH_LDCS1 = "/ldcs"
     SLASH_LDCS2 = "/ldstats"
