@@ -225,6 +225,23 @@ local L_zhCN = {
     ["伤害数字"] = "伤害数字",
     ["聊天框字体"] = "聊天框字体",
     ["单位名称"] = "单位名称",
+
+    -- 新增配置相关翻译
+    ["默认"] = "默认",
+    ["创建新配置"] = "创建新配置",
+    ["配置名称不能为空或已存在"] = "配置名称不能为空或已存在",
+    ["配置名称已存在！"] = "配置名称已存在！",
+    ["输入新的配置名称:"] = "输入新的配置名称:",
+    ["当前配置"] = "当前配置",
+    ["已存配置"] = "已存配置",
+    ["应用"] = "应用",
+    ["删除"] = "删除",
+    ["改名"] = "改名",
+    ["确定"] = "确定",
+    ["取消"] = "取消",
+    ["|cff00ccffLD Combat Stats|r 设置 - %s"] = "|cff00ccffLD Combat Stats|r 设置 - %s",
+    ["|cff00ccff[Light Damage Combat Stats]|r 配置已重命名为 "] = "|cff00ccff[Light Damage Combat Stats]|r 配置已重命名为 ",
+    ["确定要删除配置 '%s' 吗？"] = "确定要删除配置 '%s' 吗？",
 }
 
 -- 2. 繁体中文
@@ -446,6 +463,24 @@ local L_zhTW = {
     ["伤害数字"] = "傷害數字",
     ["聊天框字体"] = "聊天框字體",
     ["单位名称"] = "單位名稱",
+    
+
+    -- 新增配置相关翻译
+    ["默认"] = "預設",
+    ["创建新配置"] = "建立新設定",
+    ["配置名称不能为空或已存在"] = "設定名稱不能為空或已存在",
+    ["配置名称已存在！"] = "設定名稱已存在！",
+    ["输入新的配置名称:"] = "輸入新的設定名稱:",
+    ["当前配置"] = "當前設定",
+    ["已存配置"] = "已存設定",
+    ["应用"] = "套用",
+    ["删除"] = "刪除",
+    ["改名"] = "重新命名",
+    ["确定"] = "確定",
+    ["取消"] = "取消",
+    ["|cff00ccffLD Combat Stats|r 设置 - %s"] = "|cff00ccffLD Combat Stats|r 設定 - %s",
+    ["|cff00ccff[Light Damage Combat Stats]|r 配置已重命名为 "] = "|cff00ccff[Light Damage Combat Stats]|r 設定已重新命名為 ",
+    ["确定要删除配置 '%s' 吗？"] = "確定要刪除設定 '%s' 嗎？",
 }
 
 -- 3. 英文
@@ -668,6 +703,23 @@ local L_enUS = {
     ["伤害数字"] = "Damage Text",
     ["聊天框字体"] = "Chat Font",
     ["单位名称"] = "Unit Name",
+
+    -- 新增配置相关翻译
+    ["默认"] = "Default",
+    ["创建新配置"] = "New Profile",
+    ["配置名称不能为空或已存在"] = "Profile name cannot be empty or already exists",
+    ["配置名称已存在！"] = "Profile name already exists!",
+    ["输入新的配置名称:"] = "Enter new profile name:",
+    ["当前配置"] = "Current Profile",
+    ["已存配置"] = "Saved Profiles",
+    ["应用"] = "Apply",
+    ["删除"] = "Delete",
+    ["改名"] = "Rename",
+    ["确定"] = "OK",
+    ["取消"] = "Cancel",
+    ["|cff00ccffLD Combat Stats|r 设置 - %s"] = "|cff00ccffLD Combat Stats|r Settings - %s",
+    ["|cff00ccff[Light Damage Combat Stats]|r 配置已重命名为 "] = "|cff00ccff[Light Damage Combat Stats]|r Profile renamed to ",
+    ["确定要删除配置 '%s' 吗？"] = "Are you sure you want to delete profile '%s'?",
 }
 
 -- 把三种语言包存到 ns 里，方便后续调用

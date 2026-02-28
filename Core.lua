@@ -104,17 +104,58 @@ function Core:OnInitialize()
     if not self._initialized then
         self._initialized = true
 
-        if not LDCombatStatsDB then
-            LDCombatStatsDB = CopyTable(ns.defaults)
-        else
-            ns:MergeDefaults(LDCombatStatsDB, ns.defaults)
+        -- 1. 初始化全局配置库
+        if not LDCombatStatsGlobal then LDCombatStatsGlobal = { profiles = {} } end
+        if not LDCombatStatsGlobal.profiles["默认"] then
+            -- 继承旧配置：如果当前角色有旧配置，则将当前配置升级为全账号“默认”配置
+            if LDCombatStatsDB and LDCombatStatsDB.window then
+                LDCombatStatsGlobal.profiles["默认"] = {
+                    window = CopyTable(LDCombatStatsDB.window),
+                    display = CopyTable(LDCombatStatsDB.display),
+                    split = CopyTable(LDCombatStatsDB.split),
+                    mythicPlus = CopyTable(LDCombatStatsDB.mythicPlus),
+                    tracking = CopyTable(LDCombatStatsDB.tracking),
+                    smartRefresh = CopyTable(LDCombatStatsDB.smartRefresh),
+                    useBlizzMeter = LDCombatStatsDB.useBlizzMeter
+                }
+            else
+                LDCombatStatsGlobal.profiles["默认"] = CopyTable(ns.defaults)
+            end
         end
-        ns.db = LDCombatStatsDB
 
-        -- Profile 初始化
-        if not LDCombatStatsProfiles then LDCombatStatsProfiles = {} end
-        ns.profiles = LDCombatStatsProfiles
-        ns:SyncCurrentProfile()
+        -- 2. 初始化角色数据
+        if not LDCombatStatsDB then LDCombatStatsDB = {} end
+        if not LDCombatStatsDB.activeProfile or not LDCombatStatsGlobal.profiles[LDCombatStatsDB.activeProfile] then
+            LDCombatStatsDB.activeProfile = "默认"
+        end
+
+        -- 3. 清理旧的角色级配置数据(节约空间，只保留战斗历史等)
+        local CONFIG_KEYS = { window=true, display=true, split=true, mythicPlus=true, tracking=true, smartRefresh=true, useBlizzMeter=true }
+        for k in pairs(CONFIG_KEYS) do
+            if LDCombatStatsDB[k] then LDCombatStatsDB[k] = nil end
+        end
+
+        -- 4. 建立智能代理数据指针 ns.db 
+        -- 外观和设置写入全局共享，历史战斗数据留在角色独享
+        ns.db = setmetatable({}, {
+            __index = function(t, k)
+                if CONFIG_KEYS[k] then
+                    return LDCombatStatsGlobal.profiles[LDCombatStatsDB.activeProfile][k]
+                else
+                    return LDCombatStatsDB[k]
+                end
+            end,
+            __newindex = function(t, k, v)
+                if CONFIG_KEYS[k] then
+                    LDCombatStatsGlobal.profiles[LDCombatStatsDB.activeProfile][k] = v
+                else
+                    LDCombatStatsDB[k] = v
+                end
+            end
+        })
+
+        ns:MergeDefaults(LDCombatStatsGlobal.profiles[LDCombatStatsDB.activeProfile], ns.defaults)
+
 
         ns.state.playerGUID = UnitGUID("player")
         ns.state.playerName = UnitName("player")
@@ -277,7 +318,8 @@ function Core:OnEvent(event, ...)
                 end
                 if ns.Segments then
                     local name = GetInstanceInfo() or L["副本"]
-                    ns.Segments.overall = ns.Segments:NewSegment("overall", name .. " [全程]")
+                    -- 改用 string.format 和 L 翻译表
+                    ns.Segments.overall = ns.Segments:NewSegment("overall", string.format(L["%s [全程]"], name))
                 end
             end
         end
@@ -785,45 +827,75 @@ function ns:DebugRecapFields()
     end
 end
 
--- 配置同到 profiles（登录时、修改设置时调用）
-local PROFILE_KEYS = {"window", "display", "split", "mythicPlus", "tracking", "smartRefresh"}
+function ns:SwitchProfile(name)
+    if not LDCombatStatsGlobal.profiles[name] then return end
+    
+    -- 1. 记录切换前的语言设置
+    local oldLang = ns.db.display and ns.db.display.language or "auto"
 
-function ns:SyncCurrentProfile()
-    local key = UnitName("player") .. "-" .. GetRealmName()
-    local snapshot = {}
-    for _, k in ipairs(PROFILE_KEYS) do
-        snapshot[k] = CopyTable(ns.db[k])
-    end
-    LDCombatStatsProfiles[key] = snapshot
-end
+    LDCombatStatsDB.activeProfile = name
+    ns:MergeDefaults(LDCombatStatsGlobal.profiles[name], ns.defaults)
 
-function ns:ApplyProfile(charKey)
-    local src = LDCombatStatsProfiles[charKey]
-    if not src then return end
-    for _, k in ipairs(PROFILE_KEYS) do
-        if src[k] then
-            ns.db[k] = CopyTable(src[k])
-        end
-    end
-    ns:MergeDefaults(ns.db, ns.defaults)
+    -- 2. 记录切换后的语言设置
+    local newLang = ns.db.display and ns.db.display.language or "auto"
 
     if ns.UI and ns.UI.frame then
-        -- ★ 应用窗口级属性（透明度、缩放），这两项只在 Build() 设置过
-        ns.UI.frame:SetScale(ns.db.window.scale or 1.0)
-        ns.UI.frame:SetAlpha(ns.db.window.alpha or 0.92)
-        -- ★ 应用所有主题色/背景色
+        -- 补上切换配置时的即时位置与大小刷新
+        local w = ns.db.window
+        ns.UI.frame:SetSize(w.width, w.height)
+        ns.UI.frame:ClearAllPoints()
+        ns.UI.frame:SetPoint(w.point, UIParent, w.relPoint, w.x, w.y)
+        
+        ns.UI.frame:SetScale(w.scale or 1.0)
+        ns.UI.frame:SetAlpha(w.alpha or 0.92)
         ns.UI:ApplyTheme()
-        -- ★ 重新布局（含字体刷新）
         ns.UI:Layout()
     end
-
-    -- ★ 销毁设置面板，下次打开时用新 ns.db 重建，确保控件值与外观一致
-    if ns.Config and ns.Config.panel then
-        ns.Config.panel:Hide()
-        ns.Config.panel = nil
+    if ns.Config then
+        if ns.Config.panel then ns.Config:RefreshUI() end
+        if ns.Config.RefreshTitle then ns.Config:RefreshTitle() end
     end
+    
+    local displayName = (name == "默认") and L["默认"] or name
+    print(L["|cff00ccff[Light Damage Combat Stats]|r 已应用 "] .. displayName .. L["的配置"])
 
-    print(L["|cff00ccff[Light Damage Combat Stats]|r 已应用 "] .. charKey .. L["的配置"])
+    -- 3. 如果发现语言不一致，直接触发重载
+    if oldLang ~= newLang then
+        ReloadUI()
+    end
+end
+
+function ns:CreateProfile(name)
+    if not name or name == "" or LDCombatStatsGlobal.profiles[name] then return false end
+    -- 基于当前正在使用的配置创建
+    LDCombatStatsGlobal.profiles[name] = CopyTable(LDCombatStatsGlobal.profiles[LDCombatStatsDB.activeProfile])
+    ns:SwitchProfile(name)
+    return true
+end
+
+function ns:DeleteProfile(name)
+    if name == "默认" or not LDCombatStatsGlobal.profiles[name] then return end
+    LDCombatStatsGlobal.profiles[name] = nil
+    if LDCombatStatsDB.activeProfile == name then
+        ns:SwitchProfile("默认")
+    end
+end
+
+function ns:RenameProfile(oldName, newName)
+    if oldName == "默认" or not LDCombatStatsGlobal.profiles[oldName] then return false end
+    if not newName or newName == "" or LDCombatStatsGlobal.profiles[newName] then return false end
+
+    -- 复制数据到新名字
+    LDCombatStatsGlobal.profiles[newName] = CopyTable(LDCombatStatsGlobal.profiles[oldName])
+    LDCombatStatsGlobal.profiles[oldName] = nil
+
+    -- 如果正在使用这个被改名的配置，更新指针并刷新界面
+    if LDCombatStatsDB.activeProfile == oldName then
+        LDCombatStatsDB.activeProfile = newName
+        if ns.Config and ns.Config.RefreshTitle then ns.Config:RefreshTitle() end
+    end
+    print(L["|cff00ccff[Light Damage Combat Stats]|r 配置已重命名为 "] .. newName)
+    return true
 end
 
 -- ============================================================

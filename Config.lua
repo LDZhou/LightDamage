@@ -9,6 +9,58 @@ local L = ns.L
 local SCROLL_EXTRA_PAD = 150
 local Config = {}
 
+StaticPopupDialogs["LDCS_RENAME_PROFILE"] = {
+    text = L["输入新的配置名称:"],     -- <--- 加上 L[]
+    button1 = L["确定"],               -- <--- 加上 L[]
+    button2 = L["取消"],               -- <--- 加上 L[]
+    hasEditBox = 1,
+    OnAccept = function(self, data)
+        local eb = self.EditBox or self.editBox or _G[self:GetName().."EditBox"]
+        local newName = eb:GetText():trim()
+        local oldName = data
+        if newName ~= "" and newName ~= oldName then
+            if LDCombatStatsGlobal.profiles[newName] then
+                print(L["配置名称已存在！"])   -- <--- 加上 L[]
+            else
+                ns:RenameProfile(oldName, newName)
+                if ns.Config then ns.Config:RefreshProfilesPage() end
+            end
+        end
+    end,
+    EditBoxOnEnterPressed = function(self)
+        local popup = self:GetParent()
+        local newName = self:GetText():trim()
+        local oldName = popup.data
+        if newName ~= "" and newName ~= oldName then
+            if LDCombatStatsGlobal.profiles[newName] then
+                print(L["配置名称已存在！"])   -- <--- 加上 L[]
+            else
+                ns:RenameProfile(oldName, newName)
+                if ns.Config then ns.Config:RefreshProfilesPage() end
+                popup:Hide()
+            end
+        end
+    end,
+    timeout = 0,
+    whileDead = true,
+    hideOnEscape = true,
+    preferredIndex = 3,
+}
+
+StaticPopupDialogs["LDCS_CONFIRM_DELETE_PROFILE"] = {
+    text = L["确定要删除配置 '%s' 吗？"],
+    button1 = L["确定"],
+    button2 = L["取消"],
+    OnAccept = function(self, data)
+        ns:DeleteProfile(data)
+        if ns.Config then ns.Config:RefreshProfilesPage() end
+    end,
+    timeout = 0,
+    whileDead = true,
+    hideOnEscape = true,
+    preferredIndex = 3,
+}
+
 
 -- 10名玩家，数值写死，每次预览完全相同
 local PREVIEW_MOCK = {
@@ -88,6 +140,14 @@ function Config:CreateBorder(f, r, g, b, a, size)
     t:SetColorTexture(r, g, b, a); return t
 end
 
+function Config:RefreshTitle()
+    if self.titleText then
+        local pName = LDCombatStatsDB and LDCombatStatsDB.activeProfile or "默认"
+        local displayName = (pName == "默认") and L["默认"] or pName
+        self.titleText:SetText(string.format(L["|cff00ccffLD Combat Stats|r 设置 - %s"], displayName))
+    end
+end
+
 function Config:Toggle()
     if not self.panel then self:Build() end
     if self.panel:IsShown() then self.panel:Hide() else self.panel:Show() end
@@ -140,7 +200,8 @@ function Config:Build()
     
     local tt = title:CreateFontString(nil, "OVERLAY")
     tt:SetFont(STANDARD_TEXT_FONT, 12, "OUTLINE"); tt:SetPoint("LEFT", 12, 0)
-    tt:SetText(L["|cff00ccffLD Combat Stats|r 设置"])
+    self.titleText = tt
+    self:RefreshTitle()
 
     local cb = CreateFrame("Button", nil, title); cb:SetSize(24, 24); cb:SetPoint("RIGHT", -4, 0)
     local ct = cb:CreateFontString(nil, "OVERLAY")
@@ -450,7 +511,6 @@ function Config:BuildLookPage()
         function() return ns.db.display.textColorMode or "class" end,
         function(v)
             ns.db.display.textColorMode = v
-            ns:SyncCurrentProfile()
             self:RefreshUI()
         end)
 
@@ -462,7 +522,6 @@ function Config:BuildLookPage()
         end,
         function(r, g, b)
             ns.db.display.textColor = {r, g, b}
-            ns:SyncCurrentProfile()
             self:RefreshUI()
         end)
 
@@ -755,7 +814,7 @@ end
 -- ============================================================
 
 function Config:RefreshUI() 
-    ns:SyncCurrentProfile()
+
     
     -- 刷新所有已注册的颜色方块显示
     if self.colorSwatches then
@@ -780,59 +839,120 @@ function Config:RefreshProfilesPage()
     local inner = self._profileInner
     if not inner then return end
 
-    -- 清空旧内容
     for _, child in ipairs({inner:GetChildren()}) do child:Hide() end
     for _, region in ipairs({inner:GetRegions()}) do region:Hide() end
 
     local y = 0
-    y = self:H(inner, L["已存档角色配置"], y)
+    local curName = LDCombatStatsDB.activeProfile or "默认"
+    local displayCurName = (curName == "默认") and L["默认"] or curName
+    y = self:H(inner, L["当前配置"] .. ": " .. displayCurName, y)
 
-    local profiles = LDCombatStatsProfiles or {}
-    local currentChar = UnitName("player") .. "-" .. GetRealmName()
-    local hasAny = false
+    -- 创建新配置 UI (继承主面板极简风)
+    local input = CreateFrame("EditBox", nil, inner)
+    input:SetSize(180, 20); input:SetPoint("TOPLEFT", 6, y)
+    input:SetAutoFocus(false); input:SetFontObject(ChatFontNormal)
+    self:FillBg(input, 0.1, 0.1, 0.15, 1); self:CreateBorder(input, 0.3, 0.3, 0.4, 1)
+    input:SetTextInsets(5, 5, 0, 0)
 
-    for charKey, _ in pairs(profiles) do
-        hasAny = true
-        local isSelf = (charKey == currentChar)
-        local label = isSelf and (charKey .. " |cff888888[当前]|r") or charKey
+    local createBtn = CreateFrame("Button", nil, inner)
+    createBtn:SetSize(80, 20); createBtn:SetPoint("LEFT", input, "RIGHT", 10, 0)
+    self:FillBg(createBtn, 0.05, 0.20, 0.35, 1); self:CreateBorder(createBtn, 0.1, 0.45, 0.75, 1)
+    local ct = createBtn:CreateFontString(nil, "OVERLAY")
+    ct:SetFont(STANDARD_TEXT_FONT, 10, "OUTLINE"); ct:SetPoint("CENTER"); ct:SetText(L["创建新配置"]); ct:SetTextColor(0.4, 0.85, 1)
+    createBtn:SetScript("OnEnter", function() ct:SetTextColor(1, 1, 1) end)
+    createBtn:SetScript("OnLeave", function() ct:SetTextColor(0.4, 0.85, 1) end)
+    createBtn:SetScript("OnClick", function()
+        local txt = input:GetText():trim()
+        if txt ~= "" and not LDCombatStatsGlobal.profiles[txt] then
+            ns:CreateProfile(txt)
+            self:RefreshProfilesPage()
+        else
+            print(L["配置名称不能为空或已存在"])
+        end
+    end)
+    
+    y = y - 35
+    y = self:H(inner, L["已存配置"], y)
 
-        -- 角色名标签
+    for pName, _ in pairs(LDCombatStatsGlobal.profiles) do
+        local isSelf = (pName == curName)
+        local displayName = (pName == "默认") and L["默认"] or pName
         local txt = inner:CreateFontString(nil, "OVERLAY")
-        txt:SetFont(STANDARD_TEXT_FONT, 10, "OUTLINE")
-        txt:SetPoint("TOPLEFT", 4, y)
+        txt:SetFont(STANDARD_TEXT_FONT, 11, isSelf and "OUTLINE" or "")
+        txt:SetPoint("TOPLEFT", 6, y)
         txt:SetTextColor(isSelf and 0.5 or 0.85, isSelf and 0.8 or 0.85, isSelf and 1.0 or 0.85)
-        txt:SetText(label)
-        y = y - 18
+        txt:SetText(displayName .. (isSelf and (" |cff888888["..L["当前"].."]|r") or ""))
+        
+        local lastBtn = nil
 
+        -- 1. “应用”按钮：只有【非当前配置】才显示
         if not isSelf then
-            -- 应用按钮
-            local btn = CreateFrame("Button", nil, inner)
-            btn:SetSize(120, 18); btn:SetPoint("TOPLEFT", 4, y)
-            self:FillBg(btn, 0.05, 0.18, 0.30, 1)
-            self:CreateBorder(btn, 0.1, 0.4, 0.7, 1)
-            local bt = btn:CreateFontString(nil, "OVERLAY")
-            bt:SetFont(STANDARD_TEXT_FONT, 10, "OUTLINE")
-            bt:SetPoint("CENTER"); bt:SetText(L["应用此角色配置"]); bt:SetTextColor(0.4, 0.85, 1)
-            local ck = charKey
-            btn:SetScript("OnClick", function()
-                ns:ApplyProfile(ck)
-                self:RefreshProfilesPage()
-            end)
-            btn:SetScript("OnEnter", function() bt:SetTextColor(1, 1, 1) end)
-            btn:SetScript("OnLeave", function() bt:SetTextColor(0.4, 0.85, 1) end)
-            y = y - 26
+            local applyBtn = CreateFrame("Button", nil, inner)
+            applyBtn:SetSize(50, 18); applyBtn:SetPoint("TOPLEFT", 180, y)
+            self:FillBg(applyBtn, 0.05, 0.18, 0.30, 1); self:CreateBorder(applyBtn, 0.1, 0.4, 0.7, 1)
+            local at = applyBtn:CreateFontString(nil, "OVERLAY")
+            at:SetFont(STANDARD_TEXT_FONT, 10, "OUTLINE"); at:SetPoint("CENTER"); at:SetText(L["应用"]); at:SetTextColor(0.4, 0.85, 1)
+            applyBtn:SetScript("OnEnter", function() at:SetTextColor(1, 1, 1) end)
+            applyBtn:SetScript("OnLeave", function() at:SetTextColor(0.4, 0.85, 1) end)
+            applyBtn:SetScript("OnClick", function() ns:SwitchProfile(pName); self:RefreshProfilesPage() end)
+            lastBtn = applyBtn
         end
 
-        y = y - 4
-    end
+        -- 只要不是“默认”配置，就可以操作（改名/删除）
+        if pName ~= "默认" then
+            -- 2. “改名”按钮：【当前配置】和【非当前配置】都显示
+            local renBtn = CreateFrame("Button", nil, inner)
+            renBtn:SetSize(50, 18)
+            if lastBtn then
+                renBtn:SetPoint("LEFT", lastBtn, "RIGHT", 8, 0) -- 跟着上一个按钮
+            else
+                renBtn:SetPoint("TOPLEFT", 180, y) -- 当前配置没有“应用”按钮，所以它排在最前面
+            end
+            self:FillBg(renBtn, 0.2, 0.2, 0.25, 1); self:CreateBorder(renBtn, 0.4, 0.4, 0.5, 1)
+            local rt = renBtn:CreateFontString(nil, "OVERLAY")
+            rt:SetFont(STANDARD_TEXT_FONT, 10, "OUTLINE"); rt:SetPoint("CENTER"); rt:SetText(L["改名"]); rt:SetTextColor(0.8, 0.8, 0.8)
+            renBtn:SetScript("OnEnter", function() rt:SetTextColor(1, 1, 1) end)
+            renBtn:SetScript("OnLeave", function() rt:SetTextColor(0.8, 0.8, 0.8) end)
+            renBtn:SetScript("OnClick", function()
+                -- 每次呼出前，动态赋予最新的翻译文本
+                StaticPopupDialogs["LDCS_RENAME_PROFILE"].text = L["输入新的配置名称:"]
+                StaticPopupDialogs["LDCS_RENAME_PROFILE"].button1 = L["确定"]
+                StaticPopupDialogs["LDCS_RENAME_PROFILE"].button2 = L["取消"]
 
-    if not hasAny then
-        local txt = inner:CreateFontString(nil, "OVERLAY")
-        txt:SetFont(STANDARD_TEXT_FONT, 10, "")
-        txt:SetPoint("TOPLEFT", 4, y)
-        txt:SetTextColor(0.4, 0.4, 0.4)
-        txt:SetText(L["暂无其他角色存档\n登录其他角色并打开插件后会自动存档"])
-        y = y - 32
+                local dialog = StaticPopup_Show("LDCS_RENAME_PROFILE")
+                if dialog then
+                    dialog.data = pName
+                    local eb = dialog.EditBox or dialog.editBox or _G[dialog:GetName().."EditBox"]
+                    if eb then
+                        eb:SetText(pName)
+                        eb:HighlightText() 
+                    end
+                end
+            end)
+            lastBtn = renBtn
+
+            -- 3. “删除”按钮：只有【非当前配置】才显示（防止玩家删掉正在用的配置）
+            if not isSelf then
+                local delBtn = CreateFrame("Button", nil, inner)
+                delBtn:SetSize(50, 18); delBtn:SetPoint("LEFT", lastBtn, "RIGHT", 8, 0)
+                self:FillBg(delBtn, 0.3, 0.05, 0.05, 1); self:CreateBorder(delBtn, 0.7, 0.1, 0.1, 1)
+                local dt = delBtn:CreateFontString(nil, "OVERLAY")
+                dt:SetFont(STANDARD_TEXT_FONT, 10, "OUTLINE"); dt:SetPoint("CENTER"); dt:SetText(L["删除"]); dt:SetTextColor(1, 0.4, 0.4)
+                delBtn:SetScript("OnEnter", function() dt:SetTextColor(1, 1, 1) end)
+                delBtn:SetScript("OnLeave", function() dt:SetTextColor(1, 0.4, 0.4) end)
+                delBtn:SetScript("OnClick", function() 
+                    -- 每次呼出前，动态赋予最新的翻译文本
+                    StaticPopupDialogs["LDCS_CONFIRM_DELETE_PROFILE"].text = L["确定要删除配置 '%s' 吗？"]
+                    StaticPopupDialogs["LDCS_CONFIRM_DELETE_PROFILE"].button1 = L["确定"]
+                    StaticPopupDialogs["LDCS_CONFIRM_DELETE_PROFILE"].button2 = L["取消"]
+
+                    local dialog = StaticPopup_Show("LDCS_CONFIRM_DELETE_PROFILE", pName)
+                    if dialog then dialog.data = pName end
+                end)
+            end
+        end
+
+        y = y - 26
     end
 
     inner:SetHeight(math.abs(y) + 20)
