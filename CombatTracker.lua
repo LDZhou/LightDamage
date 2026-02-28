@@ -537,7 +537,7 @@ local function mergeAndCleanInstance(instanceTag, mythicLevel, mythicMapName, in
     -- ★ 提取公共逻辑：非 Raid 副本（地下城、大秘境等）直接深度克隆现有的 Overall 避免合并误差
     local function cloneOverallToMerged(merged)
         -- ★ 优先读取过图时的备份快照，如果没有再读当前的
-        local ovr = CT._overallSnapshot or segs.overall
+        local ovr = segs.overall
         if not ovr then return end
         
         merged.totalDamage      = ovr.totalDamage or 0
@@ -614,10 +614,13 @@ local function mergeAndCleanInstance(instanceTag, mythicLevel, mythicMapName, in
             if ns.CombatTracker then ns.CombatTracker:ResetBaselineToCurrentCount() end
             if ns.Segments then 
                 ns.Segments._preReloadOverallData = nil
+
+                if not ns.state.isInInstance then
+                    ns.Segments.overall = ns.Segments:NewSegment("overall", L["总计"])
+                end
             end
             CT._overallDurationSnapshot = nil
             CT._exitingInstanceTag = nil
-            CT._overallSnapshot = nil
 
             if ns.SaveSessionHistory then ns:SaveSessionHistory() end
             if ns.UI then C_Timer.After(0, function() ns.UI:Layout() end) end
@@ -772,6 +775,7 @@ function CT:RebuildOverall(sessions, sessionCount)
 
     sessions     = sessions or C_DamageMeter.GetAvailableCombatSessions()
     sessionCount = sessionCount or (sessions and #sessions or 0)
+
 
     -- ★ 先在本地变量中累积，最后一次性原子写入 overall，
     --   避免空闲刷新（2s）在重建中途读到清零状态
@@ -963,6 +967,7 @@ end
 local waitTicker
 
 local function waitAndProcessArchived()
+
     if waitTicker then return end
 
     local function anyUnprocessedStillSecret()
@@ -977,6 +982,8 @@ local function waitAndProcessArchived()
     end
 
     local function doAfterProcess()
+
+
         -- 1. 先把最后的战斗数据解析完
         processArchivedSessions()
         
@@ -1191,6 +1198,9 @@ function CT:RegisterEvents()
 
             -- 检测从副本退出到开放世界
             if CT._wasInInstance and not inInstance then
+
+                local currentSessions = C_DamageMeter.GetAvailableCombatSessions()
+
                 local tag      = CT._currentInstanceTag
                 local lvl      = CT._currentMythicLevel
                 local mapName  = CT._currentMythicMapName
@@ -1325,18 +1335,23 @@ function CT:RegisterEvents()
             if ns.Segments and ns.Segments.viewIndex and ns.Segments.viewIndex ~= 0 then
                 ns.Segments.viewIndex = nil
             end
-            if not ns.state.isInInstance and CT._baselineSessionCount == 0 then
+            
+            -- ★ 核心修复：利用 CT._wasInInstance 抓取过图读条的瞬间
+            -- 如果当前不在副本，但上一帧在副本，说明现在正处于出本的加载屏幕中！
+            local isTransitioningOut = (CT._wasInInstance and not ns.state.isInInstance)
+            local isExiting = (CT._exitingInstanceTag ~= nil) or (CT._pendingMergeArgs ~= nil) or isTransitioningOut
+            
+            if not ns.state.isInInstance and CT._baselineSessionCount == 0 and not isExiting then
                 local ss = C_DamageMeter.GetAvailableCombatSessions()
                 local sc = ss and #ss or 0
                 if sc > 0 then
-                    -- ★ 进战瞬间触发，此时 C_DamageMeter 极大概率已经生成了本次战斗的新 session
-                    -- 我们通过判断最后一个 session 的时长，如果极短（< 2秒），说明它是当前正要打的这场，必须从历史基线中剔除
                     local lastDur = ss[sc].durationSeconds or 0
                     local offset = (lastDur < 2) and 1 or 0
                     CT._baselineSessionCount = math.max(0, sc - offset)
                     CT._lastProcessedCount   = math.max(0, sc - offset)
                 end
             end
+            
             if not ns.state.inCombat then
                 ns.state.combatStartTime = GetTime()
                 ns:EnterCombat()

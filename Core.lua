@@ -261,15 +261,6 @@ function Core:OnEvent(event, ...)
         if wasInInstance and not ns.state.isInInstance then
             if ns.MythicPlus and ns.MythicPlus:IsActive() then
                 ns.MythicPlus:OnLeaveInstance()
-            else
-                if ns.Segments then
-                    -- ★ 核心修复：在清空 overall 之前，打一个深拷贝备份交给 CombatTracker
-                    if ns.CombatTracker and ns.Segments.overall then
-                        ns.CombatTracker._overallSnapshot = CopyTable(ns.Segments.overall)
-                    end
-                    -- 然后再安心地清空它
-                    ns.Segments.overall = ns.Segments:NewSegment("overall", L["总计"])
-                end
             end
             if ns.UI then
                 C_Timer.After(0.1, function() ns.UI:Layout() end)
