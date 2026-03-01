@@ -675,7 +675,9 @@ function ns:SaveSessionHistory()
             _preKeystone     = seg._preKeystone,
             _mythicLevel     = seg._mythicLevel,
             _mapName         = seg._mapName,
-            _builtByMythicPlus = seg._builtByMythicPlus,  -- ★ 新增，reload后mergeAndCleanInstance能正确识别
+            _builtByMythicPlus = seg._builtByMythicPlus,
+            _sessionID       = seg._sessionID,   -- ★ 记录官方会话ID用于重载同步
+            _sessionIdx      = seg._sessionIdx,  -- ★ 记录官方会话索引
             players          = {},
             deathLog         = {},
         }
@@ -758,10 +760,16 @@ function ns:SaveSessionHistory()
         end
 
         ns.db.savedOverall = compactOvr
-    else
-        ns.db.savedOverall = nil
+        else
+            ns.db.savedOverall = nil
+        end
+        
+        -- ★ 保存底层基准线进度
+        if ns.CombatTracker then
+            ns.db.savedBaseline = ns.CombatTracker._baselineSessionCount or 0
+            ns.db.savedLastProcessed = ns.CombatTracker._lastProcessedCount or 0
+        end
     end
-end
 
 function ns:LoadSessionHistory()
     if not ns.Segments then return end
@@ -806,6 +814,12 @@ function ns:LoadSessionHistory()
             duration         = saved.duration         or 0,
             players          = CopyTable(saved.players or {}),
         }
+    end
+
+    -- ★ 恢复底层基准线进度
+    if ns.CombatTracker then
+        ns.CombatTracker._baselineSessionCount = ns.db.savedBaseline or 0
+        ns.CombatTracker._lastProcessedCount = ns.db.savedLastProcessed or 0
     end
 end
 

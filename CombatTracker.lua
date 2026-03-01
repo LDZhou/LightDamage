@@ -1140,9 +1140,22 @@ function CT:RegisterEvents()
     f:RegisterEvent("CHALLENGE_MODE_START")
     f:RegisterEvent("CHALLENGE_MODE_COMPLETED")
     f:RegisterEvent("CHALLENGE_MODE_RESET")
+    f:RegisterEvent("PLAYER_LEAVING_WORLD")
 
     f:SetScript("OnEvent", function(_, event, ...)
 
+        
+        -- ★ 核心修复：在读条离开副本的瞬间，抓取官方最真实的 Overall 战斗时间
+        -- 因为一旦读条结束到了 PLAYER_ENTERING_WORLD，官方接口会切到野外，返回就会变成 0。
+        if event == "PLAYER_LEAVING_WORLD" then
+            if ns.state.isInInstance then
+                local officialDur = C_DamageMeter.GetSessionDurationSeconds(Enum.DamageMeterSessionType.Overall)
+                if officialDur and officialDur > 0 then
+                    CT._overallDurationSnapshot = officialDur
+                end
+            end
+            return
+        end
 
         if event == "ENCOUNTER_START" then
             local encounterID = ...
@@ -1196,8 +1209,20 @@ function CT:RegisterEvents()
             local inInstance = ns.state.isInInstance
             local _, _, _, _, _, _, _, instanceID = GetInstanceInfo()
 
-            -- 检测从副本退出到开放世界
-            if CT._wasInInstance and not inInstance then
+            local rawName, _, _, _, _, _, _, instanceID = GetInstanceInfo()
+            local newBaseTag = string.format("%s|%d", rawName or "Unknown", instanceID or 0)
+
+            -- 检测是否离开当前副本 (退到开放世界，或者直接传送到另一个副本)
+            local isExitingInstance = false
+            if CT._wasInInstance then
+                if not inInstance then
+                    isExitingInstance = true
+                elseif CT._currentInstanceTag and not CT._currentInstanceTag:find(newBaseTag, 1, true) then
+                    isExitingInstance = true
+                end
+            end
+
+            if isExitingInstance then
 
                 local currentSessions = C_DamageMeter.GetAvailableCombatSessions()
 
@@ -1224,9 +1249,6 @@ function CT:RegisterEvents()
                         if ns.UI then ns.UI:OnCombatStateChanged(false) end
                     end
 
-                    -- ★ 出副本瞬间保存 Overall 总时长，此时计时器还未清零
-                    CT._overallDurationSnapshot = C_DamageMeter.GetSessionDurationSeconds(
-                        Enum.DamageMeterSessionType.Overall) or 0
 
                     -- 2. 立刻召唤等待函数去处理收尾和合并
                     C_Timer.After(0, waitAndProcessArchived)
@@ -1256,7 +1278,6 @@ function CT:RegisterEvents()
                 local _, _, _, _, _, _, _, instanceID = GetInstanceInfo()
                 local baseTag = string.format("%s|%d", rawName or "Unknown", instanceID or 0)
 
-                -- ★ reload 进同一副本时复用旧 tag，确保 history 里的段能被正确匹配
                 local existingTag = ns.db.currentInstanceTag
                 local isSameInstance = false
                 if existingTag and existingTag:find(baseTag, 1, true) then
@@ -1266,6 +1287,31 @@ function CT:RegisterEvents()
                     CT._currentInstanceTag = string.format("%s|%d|%d", rawName or "Unknown", instanceID or 0, time())
                     ns.db.currentInstanceTag = CT._currentInstanceTag
                 end
+
+                -- ▼▼▼ 新增：每次加载后，如果是同一个副本，执行全量数据同步 ▼▼▼
+                if isSameInstance then
+                    C_Timer.After(1.5, function()
+                        if ns.Segments then
+                            -- 1. 同步所有历史段落 (利用保存的 _sessionID 从官方获取最新数据)
+                            if ns.Segments.history then
+                                for _, seg in ipairs(ns.Segments.history) do
+                                    if seg._sessionID then
+                                        seg._dataLoaded = false
+                                        CT:LoadSegmentData(seg)
+                                    end
+                                end
+                            end
+
+                            -- 2. 同步 Overall：抛弃不准确的快照，基于官方数据完全重建
+                            ns.Segments._preReloadOverallData = nil
+                            local sessions = C_DamageMeter.GetAvailableCombatSessions()
+                            CT:RebuildOverall(sessions, sessions and #sessions or 0)
+
+                            if ns.UI and ns.UI:IsVisible() then ns.UI:Layout() end
+                        end
+                    end)
+                end
+                -- ▲▲▲ 新增结束 ▲▲▲
 
                 CT._currentMythicLevel   = 0
                 CT._currentMythicMapName = nil
@@ -1294,22 +1340,18 @@ function CT:RegisterEvents()
                 end)
 
                 -- 进副本4s后重置暴雪meter
-                if not CT._wasInInstance then
+                -- ★ 修复：只有进入全新副本时，才强制重置数据。同副本重载已交给上面的全量同步处理。
+                if (not CT._wasInInstance or isExitingInstance) and not isSameInstance then
                     C_Timer.After(4, function()
                         if ns.state.isInInstance and not ns.state.inCombat then
-                            -- ★ 终极修复：必须同时满足 L["是同一把副本(Reload)"] 且 L["有快照"]，才能继承数据
-                            if isSameInstance and ns.Segments and ns.Segments._preReloadOverallData then
-                                CT:SetBaseline()
-                            else
-                                -- 只要是新进的副本，强制清空可能残留的历史快照
-                                if ns.Segments then
-                                    ns.Segments._preReloadOverallData = nil
-                                end
-                                CT:ResetMeterForNewRun()
-                                if ns.Segments then
-                                    local displayName = CT._currentInstanceName or rawName or L["副本"]
-                                    ns.Segments.overall = ns.Segments:NewSegment("overall", string.format(L["%s [全程]"], displayName))
-                                end
+                            -- 全新的副本，强制清空可能残留的历史快照并重置底层
+                            if ns.Segments then
+                                ns.Segments._preReloadOverallData = nil
+                            end
+                            CT:ResetMeterForNewRun()
+                            if ns.Segments then
+                                local displayName = CT._currentInstanceName or rawName or L["副本"]
+                                ns.Segments.overall = ns.Segments:NewSegment("overall", string.format(L["%s [全程]"], displayName))
                             end
                         end
                     end)
