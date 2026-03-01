@@ -410,7 +410,7 @@ function Config:BuildMPlusPage()
     local y1 = 0
     
     y1 = self:H(sec1, L["大秘境与副本自适应"], y1)
-    y1 = self:Check(sec1, L["启用自适应模式 (自动归档段落)"], y1, function() return ns.db.mythicPlus.enabled end, function(v) ns.db.mythicPlus.enabled=v end)
+    y1 = self:Check(sec1, L["离开副本后自动生成副本全程段落（地下堡不适用)"], y1, function() return ns.db.mythicPlus.enabled end, function(v) ns.db.mythicPlus.enabled=v end)
     
     -- 新增强化说明文本
     local descText = L["如果开启，则离开副本后，会把副本中所有发生的所有战斗进行汇总，并生成“全程”的战斗段落，同时副本中所有的战斗段落，会删除所有的小怪战斗段落，只保留Boss战。\n特别的，在团队副本（Raid）中，“全程”战斗段落会去掉所有的小怪战斗，只汇总所有Boss战。而其他任何副本中，“全程”段落包含小怪+Boss战的所有战斗。"]
