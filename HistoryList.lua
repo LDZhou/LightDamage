@@ -343,6 +343,9 @@ function HL:MakeItem(parent)
             -- 2. 物理删除
             table.remove(ns.Segments.history, data.index)
 
+            -- 清理数据分析缓存，强制 UI 读取扣除后的最新总伤害
+            if ns.Analysis then ns.Analysis:InvalidateCache() end
+
             -- 3. 数据固化及 UI 刷新
             if ns.SaveSessionHistory then ns:SaveSessionHistory() end
             if ns.UI then ns.UI:Refresh() end

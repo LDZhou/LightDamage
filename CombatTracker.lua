@@ -818,6 +818,7 @@ function CT:RebuildOverall(sessions, sessionCount)
         local s   = sessions[i]
         local sid = s.sessionID
         local dur = s.durationSeconds or 0
+        
         if dur > 0 then
             totalDur = totalDur + dur
 
@@ -950,7 +951,14 @@ function CT:RebuildOverall(sessions, sessionCount)
     segs.overall.totalDamage      = newTotalDamage
     segs.overall.totalHealing     = newTotalHealing
     segs.overall.totalDamageTaken = newTotalDTaken
-    segs.overall.duration = C_DamageMeter.GetSessionDurationSeconds(Enum.DamageMeterSessionType.Overall) or totalDur
+    
+    -- 只有在没有跳过旧战斗的情况下，才能信任暴雪的原生 Overall 战斗时长
+    if CT._baselineSessionCount == 0 then
+        segs.overall.duration = C_DamageMeter.GetSessionDurationSeconds(Enum.DamageMeterSessionType.Overall) or totalDur
+    else
+        segs.overall.duration = totalDur
+    end
+    
     segs.overall.isActive         = false
 
     -- ▼▼▼ 新增：恢复 Reload 前的死亡记录 ▼▼▼
@@ -1383,7 +1391,8 @@ function CT:RegisterEvents()
             local isTransitioningOut = (CT._wasInInstance and not ns.state.isInInstance)
             local isExiting = (CT._exitingInstanceTag ~= nil) or (CT._pendingMergeArgs ~= nil) or isTransitioningOut
             
-            if not ns.state.isInInstance and CT._baselineSessionCount == 0 and not isExiting then
+            -- 加入了 CT._lastProcessedCount == 0 的条件，防止连续战斗错误推移 baseline
+            if not ns.state.isInInstance and CT._baselineSessionCount == 0 and CT._lastProcessedCount == 0 and not isExiting then
                 local ss = C_DamageMeter.GetAvailableCombatSessions()
                 local sc = ss and #ss or 0
                 if sc > 0 then

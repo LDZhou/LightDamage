@@ -369,18 +369,31 @@ function Config:BuildLayoutPage()
     sec2_sub:SetWidth(PANEL_W)
     sec2_sub:SetPoint("TOPLEFT", sec2, "TOPLEFT", 0, y2)
     local y2s = 0
+
     local showModes = { {l=L["总是开启"], v="always"}, {l=L["所有副本开启"], v="instance"}, {l=L["只在大秘境中开启"], v="mplus"}, {l=L["永不开启"], v="off"} }
     y2s = self:Dropdown(sec2_sub, L["开启场景"], y2s, showModes, function() return ns.db.split.overallShowMode or "mplus" end, function(v) ns.db.split.overallShowMode = v; self:RefreshUI() end)
     y2s = y2s - 8
+    
+    -- ★ 新增：分离文字选项并前置声明变量
+    local posesLR = { {l=L["左侧"], v=1}, {l=L["右侧"], v=2} }
+    local posesTB = { {l=L["上方"], v=1}, {l=L["下方"], v=2} }
+    local curPosBtn, priPosBtn
+
     local dirs = { {l=L["左右划分"], v="LR"}, {l=L["上下划分"], v="TB"} }
     y2s = self:Dropdown(sec2_sub, L["当前/总计划分方向"], y2s, dirs, function() return ns.db.split.overallDir or "LR" end, 
         function(v) 
             ns.db.split.overallDir = v
             ns.db.split.splitDir = (v == "LR") and "TB" or "LR" 
+            
+            -- ★ 核心联动：动态刷新位置选项的文字
+            if curPosBtn then curPosBtn.UpdateOpts(v == "TB" and posesTB or posesLR) end
+            if priPosBtn then priPosBtn.UpdateOpts(ns.db.split.splitDir == "TB" and posesTB or posesLR) end
+            
             self:RefreshUI(); self:UpdateLayoutVisibility() 
         end)
-    local poses = { {l=L["左侧/上方"], v=1}, {l=L["右侧/下方"], v=2} }
-    y2s = self:Dropdown(sec2_sub, L["当前数据位置"], y2s, poses, function() return ns.db.split.currentPos or 1 end, function(v) ns.db.split.currentPos = v; self:RefreshUI() end)
+    
+    -- ★ 修改：赋予初值时自动判断当前的划分方向，并保存按钮引用
+    y2s, curPosBtn = self:Dropdown(sec2_sub, L["当前数据位置"], y2s, (ns.db.split.overallDir == "TB") and posesTB or posesLR, function() return ns.db.split.currentPos or 1 end, function(v) ns.db.split.currentPos = v; self:RefreshUI() end)
     sec2_sub:SetHeight(math.abs(y2s))
     self.laySec2Sub = sec2_sub
     self.laySec2 = sec2
@@ -408,10 +421,13 @@ function Config:BuildLayoutPage()
     sec3_sub:SetPoint("TOPLEFT", sec3, "TOPLEFT", 0, y3)
     local y3s = 0
     local allModes = { {l=L["伤害"], v="damage"}, {l=L["治疗"], v="healing"}, {l=L["承伤"], v="damageTaken"}, {l=L["死亡"], v="deaths"}, {l=L["打断"], v="interrupts"}, {l=L["驱散"], v="dispels"} }
-    y3s = self:Dropdown(sec3_sub, L["主数据位置"], y3s, poses, function() return ns.db.split.primaryPos or 1 end, function(v) ns.db.split.primaryPos = v; self:RefreshUI() end)
+    
+    -- ★ 修改：副框数据赋予初值时也自动判断方向
+    y3s, priPosBtn = self:Dropdown(sec3_sub, L["主数据位置"], y3s, (ns.db.split.splitDir == "TB") and posesTB or posesLR, function() return ns.db.split.primaryPos or 1 end, function(v) ns.db.split.primaryPos = v; self:RefreshUI() end)
     y3s = self:Dropdown(sec3_sub, L["主数据内容"], y3s, allModes, function() return ns.db.split.primaryMode end, function(v) ns.db.split.primaryMode=v; self:RefreshUI() end)
     y3s = self:Dropdown(sec3_sub, L["副数据内容"], y3s, allModes, function() return ns.db.split.secondaryMode end, function(v) ns.db.split.secondaryMode=v; self:RefreshUI() end)
     sec3_sub:SetHeight(math.abs(y3s))
+
     self.laySec3Sub = sec3_sub
     self.laySec3 = sec3
 
@@ -703,14 +719,33 @@ function Config:Dropdown(p, label, y, opts, getter, setter)
     local blocker = CreateFrame("Button", nil, p); blocker:SetAllPoints(UIParent); blocker:SetFrameStrata("TOOLTIP"); blocker:SetFrameLevel(90); blocker:Hide(); blocker:SetScript("OnClick", function() blocker:Hide() end)
     local list = CreateFrame("Frame", nil, blocker); list:SetPoint("TOPLEFT", btn, "BOTTOMLEFT", 0, -2); list:SetPoint("TOPRIGHT", btn, "BOTTOMRIGHT", 0, -2); list:SetHeight(#opts * 20 + 4); list:SetFrameLevel(95); self:FillBg(list, 0.08, 0.08, 0.1, 1); self:CreateBorder(list, 0.3, 0.3, 0.4, 1)
     
+    btn.items = {}
     -- 下拉列表内选项增加悬停高亮
     for i, o in ipairs(opts) do
         local item = CreateFrame("Button", nil, list); item:SetHeight(20); item:SetPoint("TOPLEFT", list, "TOPLEFT", 2, -((i-1)*20 + 2)); item:SetPoint("TOPRIGHT", list, "TOPRIGHT", -2, -((i-1)*20 + 2))
         local hl = item:CreateTexture(nil, "HIGHLIGHT"); hl:SetAllPoints(); hl:SetColorTexture(0, 0.75, 1, 0.2)
         local itx = item:CreateFontString(nil, "OVERLAY"); itx:SetFont(STANDARD_TEXT_FONT, 11, ""); itx:SetPoint("LEFT", 6, 0); itx:SetTextColor(0.8, 0.8, 0.8); itx:SetText(o.l)
         item:SetScript("OnClick", function() setter(o.v); bt:SetText(o.l); blocker:Hide() end)
+        table.insert(btn.items, {btn = item, txt = itx})
     end
-    btn:SetScript("OnClick", function() if blocker:IsShown() then blocker:Hide() else blocker:Show() end end); return y - 28
+
+    -- ★ 新增：允许动态更新菜单内的文字选项
+    btn.UpdateOpts = function(newOpts)
+        opts = newOpts
+        for i, o in ipairs(opts) do
+            local row = btn.items[i]
+            if row then
+                row.txt:SetText(o.l)
+                row.btn:SetScript("OnClick", function() setter(o.v); bt:SetText(o.l); blocker:Hide() end)
+            end
+        end
+        refreshText()
+    end
+    
+    btn:SetScript("OnClick", function() if blocker:IsShown() then blocker:Hide() else blocker:Show() end end); 
+    
+    -- ★ 修改：同时返回新的 y 坐标 和 按钮本体
+    return y - 28, btn
 end
 
 -- ============================================================
