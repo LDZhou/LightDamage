@@ -99,12 +99,12 @@ local function buildDeathRecordFromRecapID(recapID, playerGUID, playerName, play
     local killerName = ""
 
     for _, ev in ipairs(reversed) do
-        local spellID   = ev.spellId or 0
+        local spellID   = getAmount(ev.spellId)
         local spellName = ev.spellName or ""
         local evType    = ev.event or ""
         local isHeal    = (evType == "SPELL_HEAL" or evType == "SPELL_PERIODIC_HEAL")
-        local amount    = ev.amount or 0
-        local overkill  = (ev.overkill and ev.overkill >= 0) and ev.overkill or 0
+        local amount    = getAmount(ev.amount)
+        local overkill  = getAmount(ev.overkill)
 
         if spellName == "" then
             if isHeal then spellName = L["治疗"]
@@ -113,7 +113,7 @@ local function buildDeathRecordFromRecapID(recapID, playerGUID, playerName, play
         end
 
         local srcName = ev.sourceName or ""
-        local hp      = ev.currentHP or 0
+        local hp      = getAmount(ev.currentHP)
         local hpPct   = maxHP > 0 and (hp / maxHP * 100) or 0
 
         if isHeal then totalHeal = totalHeal + amount
@@ -215,10 +215,10 @@ local function processArchivedSessions()
                     for _, src in ipairs(deathSession.combatSources) do
                         local guid    = src.sourceGUID
                         local deaths  = getAmount(src.totalAmount)
-                        local recapID = src.deathRecapID
+                        local recapID = getAmount(src.deathRecapID)
 
-                        if guid and (deaths > 0 or (recapID and recapID > 0)) then
-                            if recapID and recapID > 0 then
+                        if guid and (deaths > 0 or recapID > 0) then
+                            if recapID > 0 then
                                 local class = src.classFilename
                                 if not class then
                                     local _, classEng = GetPlayerInfoByGUID(guid)
@@ -376,8 +376,9 @@ function CT:LoadSegmentData(seg)
                             pd.class  = src.classFilename or pd.class
                             pd[field] = total
                             -- ★ 直接从 session 读暴雪算好的每秒值（活跃时间口径）
-                            if src.amountPerSecond and src.amountPerSecond > 0 then
-                                pd[field .. "PerSec"] = src.amountPerSecond
+                            local aps = getAmount(src.amountPerSecond)
+                            if aps > 0 then
+                                pd[field .. "PerSec"] = aps
                             end
                         end
                     end
@@ -408,8 +409,8 @@ function CT:LoadSegmentData(seg)
                         local pdd = segs:GetPlayer(seg, guid, src.name, nil)
                         if pdd then
                             for _, sp in ipairs(srcData.combatSpells) do
-                                local spellID = sp.spellID
-                                if type(spellID) == "number" and not (issecretvalue and issecretvalue(spellID)) and spellID > 0 then
+                                local spellID = getAmount(sp.spellID)
+                                if spellID > 0 then
                                     local amt = getAmount(sp.totalAmount)
                                     if amt == 0 then amt = getAmount(sp.casts) end
                                     if amt == 0 then amt = 1 end
@@ -456,8 +457,8 @@ function CT:LoadSegmentData(seg)
             local ok3, srcData = pcall(C_DamageMeter.GetCombatSessionSourceFromID, sid, dmType, guid)
             if ok3 and srcData and srcData.combatSpells then
                 for _, sp in ipairs(srcData.combatSpells) do
-                    local spellID = sp.spellID
-                    if type(spellID) == "number" and not (issecretvalue and issecretvalue(spellID)) and spellID > 0 then
+                    local spellID = getAmount(sp.spellID)
+                    if spellID > 0 then
                         local amt = getAmount(sp.totalAmount)
                         if amt > 0 then
                             if not pd[spellTable][spellID] then
@@ -885,8 +886,8 @@ function CT:RebuildOverall(sessions, sessionCount)
                             local ok3, srcData = pcall(C_DamageMeter.GetCombatSessionSourceFromID, sid, dmType, guid)
                             if ok3 and srcData and srcData.combatSpells then
                                 for _, sp in ipairs(srcData.combatSpells) do
-                                    local spellID = sp.spellID
-                                    if type(spellID) == "number" and not (issecretvalue and issecretvalue(spellID)) and spellID > 0 then
+                                    local spellID = getAmount(sp.spellID)
+                                    if spellID > 0 then
                                         local amt = getAmount(sp.totalAmount)
                                         if amt == 0 then amt = getAmount(sp.casts) end
                                         if amt == 0 then amt = 1 end
@@ -916,8 +917,8 @@ function CT:RebuildOverall(sessions, sessionCount)
                     local ok3, srcData = pcall(C_DamageMeter.GetCombatSessionSourceFromID, sid, dmType, guid)
                     if ok3 and srcData and srcData.combatSpells then
                         for _, sp in ipairs(srcData.combatSpells) do
-                            local spellID = sp.spellID
-                            if type(spellID) == "number" and not (issecretvalue and issecretvalue(spellID)) and spellID > 0 then
+                            local spellID = getAmount(sp.spellID)
+                            if spellID > 0 then
                                 local amt = getAmount(sp.totalAmount)
                                 if amt > 0 then
                                     if not pd[spellField][spellID] then
