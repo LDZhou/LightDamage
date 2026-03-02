@@ -41,11 +41,6 @@ function DV:EnsureCreated()
     f:SetBackdropColor(0.04, 0.04, 0.06, 0.97)
     f:SetBackdropBorderColor(0.25, 0.25, 0.32, 0.9)
 
-    if ns.UI and ns.UI.frame then
-        f:SetPoint("BOTTOMLEFT", ns.UI.frame, "BOTTOMRIGHT", 4, 0)
-    else
-        f:SetPoint("CENTER")
-    end
 
     -- 标题栏
     local tb = CreateFrame("Frame", nil, f)
@@ -127,9 +122,61 @@ function DV:EnsureCreated()
     self.scrollBar  = sb
     self.rows       = {}
     tinsert(UISpecialFrames, "LDStatsDetail")
+
+    f:SetScript("OnShow", function() self:UpdatePosition() end)
+
     f:Hide()
 end
 
+-- ============================================================
+-- 动态更新位置 (智能贴靠)
+-- ============================================================
+function DV:UpdatePosition()
+    if not self.frame then return end
+    local uiFrame = ns.UI and ns.UI.frame
+    
+    -- 如果主窗口不存在或未显示，直接居中
+    if not uiFrame or not uiFrame:IsShown() then
+        self.frame:ClearAllPoints()
+        self.frame:SetPoint("CENTER")
+        return
+    end
+
+    local screenW = UIParent:GetWidth()
+    local uiRight = uiFrame:GetRight() or 0
+    local uiTop   = uiFrame:GetTop() or 0
+    
+    local dw = self.frame:GetWidth()
+    local dh = self.frame:GetHeight()
+
+    -- 规则1 & 2: 默认右侧。如果主窗口太靠右，空间不够放详情面板，则放左侧
+    local putRight = true
+    if (uiRight + dw + 4) > screenW then
+        putRight = false
+    end
+
+    -- 规则1 & 3: 默认顶部对齐。如果主窗口太靠下，详情面板向下展开会超出屏幕底部，则改为底部对齐
+    local alignTop = true
+    if (uiTop - dh) < 0 then
+        alignTop = false
+    end
+
+    -- 规则4: 执行定位，彻底覆盖旧位置
+    self.frame:ClearAllPoints()
+    if putRight then
+        if alignTop then
+            self.frame:SetPoint("TOPLEFT", uiFrame, "TOPRIGHT", 4, 0)
+        else
+            self.frame:SetPoint("BOTTOMLEFT", uiFrame, "BOTTOMRIGHT", 4, 0)
+        end
+    else
+        if alignTop then
+            self.frame:SetPoint("TOPRIGHT", uiFrame, "TOPLEFT", -4, 0)
+        else
+            self.frame:SetPoint("BOTTOMRIGHT", uiFrame, "BOTTOMLEFT", -4, 0)
+        end
+    end
+end
 -- ============================================================
 -- 应用动态外观主题
 -- ============================================================

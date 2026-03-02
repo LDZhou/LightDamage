@@ -409,7 +409,7 @@ function CT:LoadSegmentData(seg)
                         if pdd then
                             for _, sp in ipairs(srcData.combatSpells) do
                                 local spellID = sp.spellID
-                                if spellID and spellID > 0 then
+                                if type(spellID) == "number" and not (issecretvalue and issecretvalue(spellID)) and spellID > 0 then
                                     local amt = getAmount(sp.totalAmount)
                                     if amt == 0 then amt = getAmount(sp.casts) end
                                     if amt == 0 then amt = 1 end
@@ -457,7 +457,7 @@ function CT:LoadSegmentData(seg)
             if ok3 and srcData and srcData.combatSpells then
                 for _, sp in ipairs(srcData.combatSpells) do
                     local spellID = sp.spellID
-                    if spellID and spellID > 0 then
+                    if type(spellID) == "number" and not (issecretvalue and issecretvalue(spellID)) and spellID > 0 then
                         local amt = getAmount(sp.totalAmount)
                         if amt > 0 then
                             if not pd[spellTable][spellID] then
@@ -886,7 +886,7 @@ function CT:RebuildOverall(sessions, sessionCount)
                             if ok3 and srcData and srcData.combatSpells then
                                 for _, sp in ipairs(srcData.combatSpells) do
                                     local spellID = sp.spellID
-                                    if spellID and spellID > 0 then
+                                    if type(spellID) == "number" and not (issecretvalue and issecretvalue(spellID)) and spellID > 0 then
                                         local amt = getAmount(sp.totalAmount)
                                         if amt == 0 then amt = getAmount(sp.casts) end
                                         if amt == 0 then amt = 1 end
@@ -917,7 +917,7 @@ function CT:RebuildOverall(sessions, sessionCount)
                     if ok3 and srcData and srcData.combatSpells then
                         for _, sp in ipairs(srcData.combatSpells) do
                             local spellID = sp.spellID
-                            if spellID and spellID > 0 then
+                            if type(spellID) == "number" and not (issecretvalue and issecretvalue(spellID)) and spellID > 0 then
                                 local amt = getAmount(sp.totalAmount)
                                 if amt > 0 then
                                     if not pd[spellField][spellID] then
