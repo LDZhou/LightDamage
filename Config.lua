@@ -363,7 +363,8 @@ function Config:BuildLayoutPage()
     y2 = self:H(sec2, L["当前与总计窗口"], y2)
     y2 = self:Check(sec2, L["同时显示当前与总计数据"], y2, 
         function() return ns.db.split.showOverall end, 
-        function(v) ns.db.split.showOverall = v; self:RefreshUI(); self:UpdateLayoutVisibility() end)
+        function(v) ns.db.split.showOverall = v; self:RefreshUI(); self:UpdateLayoutVisibility() end,
+        L["OVERALL_DATA_TOOLTIP"]) -- ★ 传入翻译好的问号提示文本
         
     local sec2_sub = CreateFrame("Frame", nil, sec2)
     sec2_sub:SetWidth(PANEL_W)
@@ -650,8 +651,8 @@ function Config:Desc(p, y, text)
     return y - h - 12
 end
 
-function Config:Check(p, label, y, getter, setter)
-    local btn = CreateFrame("Button", nil, p); btn:SetSize(14, 14); btn:SetPoint("TOPLEFT", 4, y)
+function Config:Check(p, label, y, getter, setter, tooltipText)
+    local btn = CreateFrame("Button", nil, p); btn:SetSize(20, 14); btn:SetPoint("TOPLEFT", 4, y)
     self:FillBg(btn, 0.1, 0.1, 0.15, 1); self:CreateBorder(btn, 0.3, 0.3, 0.4, 1)
     
     local fill = btn:CreateTexture(nil, "ARTWORK"); fill:SetPoint("TOPLEFT", 3, -3); fill:SetPoint("BOTTOMRIGHT", -3, 3)
@@ -660,7 +661,35 @@ function Config:Check(p, label, y, getter, setter)
     local hl = btn:CreateTexture(nil, "HIGHLIGHT"); hl:SetAllPoints(); hl:SetColorTexture(1, 1, 1, 0.1)
     
     local t = btn:CreateFontString(nil, "OVERLAY"); t:SetFont(STANDARD_TEXT_FONT, 11, ""); t:SetPoint("LEFT", btn, "RIGHT", 8, 0); t:SetTextColor(0.8, 0.8, 0.8); t:SetText(label)
-    btn:SetScript("OnClick", function() local nxt = not getter(); fill:SetShown(nxt); setter(nxt) end); return y - 24
+    btn:SetScript("OnClick", function() local nxt = not getter(); fill:SetShown(nxt); setter(nxt) end)
+    
+    -- ★ 新增：如果传入了 tooltipText，则在文字右侧生成问号
+    if tooltipText then
+        local qm = CreateFrame("Frame", nil, p)
+        qm:SetSize(14, 14)
+        qm:SetPoint("LEFT", t, "RIGHT", 4, 0)
+        qm:EnableMouse(true)
+        
+        local qt = qm:CreateFontString(nil, "OVERLAY")
+        qt:SetFont(STANDARD_TEXT_FONT, 11, "OUTLINE")
+        qt:SetPoint("CENTER")
+        qt:SetText("?")
+        qt:SetTextColor(0, 0.75, 1) -- 问号颜色
+        
+        qm:SetScript("OnEnter", function(self)
+            qt:SetTextColor(0.2, 0.85, 1) -- 悬停高亮
+            GameTooltip:SetOwner(self, "ANCHOR_TOPRIGHT")
+            -- 最后一个参数 true 表示允许文字自动换行以自适应尺寸
+            GameTooltip:SetText(tooltipText, 1, 1, 1, 1, true)
+            GameTooltip:Show()
+        end)
+        qm:SetScript("OnLeave", function()
+            qt:SetTextColor(0, 0.75, 1)
+            GameTooltip:Hide()
+        end)
+    end
+    
+    return y - 24
 end
 
 function Config:Radio(p, label, y, getter, setter)

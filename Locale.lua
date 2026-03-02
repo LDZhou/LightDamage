@@ -268,6 +268,8 @@ local L_zhCN = {
 
     ["%s %s  |  Damage |cffffd100%s|r  Heal |cff66ff66%s|r"] = "%s %s  |  Damage |cffffd100%s|r  Heal |cff66ff66%s|r",
     ["%s 0:00  |  Damage 0  Heal 0"] = "%s 0:00  |  Damage 0  Heal 0",
+
+    ["OVERALL_DATA_TOOLTIP"] = "关于“总计”数据：\n 统计起点： 每次进入或离开副本时重新开始。\n 显示内容： 自起点起累积的所有战斗汇总。\n 请注意： 手动删除某段具体的战斗记录，不会影响总计数据。",
 }
 
 -- 2. 繁体中文
@@ -533,6 +535,8 @@ local L_zhTW = {
 
     ["%s %s  |  Damage |cffffd100%s|r  Heal |cff66ff66%s|r"] = "%s %s  |  Damage |cffffd100%s|r  Heal |cff66ff66%s|r",
     ["%s 0:00  |  Damage 0  Heal 0"] = "%s 0:00  |  Damage 0  Heal 0",
+
+    ["OVERALL_DATA_TOOLTIP"] = "關於「總計」數據：\n 統計起點： 每次進入或離開副本時重新開始。\n 顯示內容： 自起點起累積的所有戰鬥彙總。\n 請注意： 手動刪除某段具體的戰鬥紀錄，不會影響總計數據。",
 }
 
 -- 3. 英文
@@ -798,6 +802,8 @@ local L_enUS = {
 
     ["%s %s  |  Damage |cffffd100%s|r  Heal |cff66ff66%s|r"] = "%s %s  |  Damage |cffffd100%s|r  Heal |cff66ff66%s|r",
     ["%s 0:00  |  Damage 0  Heal 0"] = "%s 0:00  |  Damage 0  Heal 0",
+
+    ["OVERALL_DATA_TOOLTIP"] = "About 'Overall' Data:\n Starting Point: Resets each time you enter or leave an instance.\n Content: Accumulates all combat data from the starting point.\n Note: Manually deleting a specific combat segment does not affect the overall data.",
 }
 
 -- 把三种语言包存到 ns 里，方便后续调用
