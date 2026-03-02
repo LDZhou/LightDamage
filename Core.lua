@@ -1,9 +1,5 @@
 --[[
-    Light Damage Combat Stats v1.0 - Core.lua
-
-    修复:
-    - ZONE_CHANGED_NEW_AREA 时检测是否离开了副本，触发 MythicPlus:OnLeaveInstance
-    - 这样从副本出来后，开放世界的 session 会正确隔离
+    Light Damage Combat Stats - Core.lua
 ]]
 
 local addonName, ns = ...
@@ -48,18 +44,22 @@ ns.defaults = {
         textColor     = {1.0, 1.0, 1.0},
     },
     split = {
-        enabled           = true,
+        enabled           = true,         -- 现在代表"开启双数据显示"
+        splitDir          = "TB",         -- 双数据划分方向: "TB"(上下) 或 "LR"(左右)
         primaryMode       = "damage",
         secondaryMode     = "healing",
-        primaryRows       = 5,
-        secondaryRows     = 3,
-        collapsePrimary   = false,
-        collapseSecondary = false,
+        primaryPos        = 1,            -- 1:左/上, 2:右/下
+        
+        showOverall       = true,         -- "同时显示当前与总计数据"
+        overallShowMode   = "instance",   -- "always", "instance", "mplus", "off"
+        overallDir        = "LR",         -- 当前与总计的划分方向 (需与splitDir互补)
+        currentPos        = 1,            -- 1:左/上, 2:右/下
+        
+        tbRatio           = 0.55,         -- 上下分栏比例
+        lrRatio           = 0.50,         -- 左右分栏比例
     },
     mythicPlus = {
         enabled           = true,
-        dualDisplay       = true,
-        overallColumnMode = "instance",
         autoSegment       = true,
     },
     tracking = {
@@ -120,6 +120,39 @@ function Core:OnInitialize()
                 }
             else
                 LDCombatStatsGlobal.profiles["默认"] = CopyTable(ns.defaults)
+            end
+        end
+
+        -- ★ 新增：版本配置自动平滑迁移 (旧版 -> 四宫格新版)
+        for pName, profile in pairs(LDCombatStatsGlobal.profiles) do
+            local sp = profile.split
+            local mp = profile.mythicPlus
+            if sp and mp then
+                -- 检查是否存在旧的 overallColumnMode 字段，如果存在说明是旧配置
+                if mp.overallColumnMode ~= nil then
+                    -- 1. 迁移右侧全程栏的开启状态
+                    sp.showOverall = (mp.overallColumnMode ~= "off")
+                    sp.overallShowMode = mp.overallColumnMode
+                    mp.overallColumnMode = nil -- 清除旧字段
+                    
+                    -- 2. 映射到经典视觉外观：左右分割(当前在左)，上下分割(主数据在上)
+                    sp.splitDir = "TB"
+                    sp.overallDir = "LR"
+                    sp.primaryPos = 1
+                    sp.currentPos = 1
+
+                    -- 3. 转换自适应比例
+                    if sp.priRatio then
+                        sp.tbRatio = sp.priRatio
+                        sp.priRatio = nil
+                    end
+                    if sp.ovrRatio then
+                        -- 原本的 ovrRatio 是指“右侧(全程)”的宽度占比
+                        -- 现在的 lrRatio 是指“左侧”的宽度占比，所以用 1 减去旧值即可完美还原
+                        sp.lrRatio = 1 - sp.ovrRatio 
+                        sp.ovrRatio = nil
+                    end
+                end
             end
         end
 

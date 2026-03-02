@@ -1,6 +1,5 @@
 --[[
-    LD Combat Stats v2.0 - Config.lua
-    纯粹极简风设置面板 — 无多余边框
+    LD Combat Stats - Config.lua
 ]]
 
 local addonName, ns = ...
@@ -92,7 +91,6 @@ local CAT_H     = 34
 local categories = {
     {id="layout", labelKey="布局",   icon="-"},
     {id="data",   labelKey="数据",   icon="-"},
-    {id="mplus",  labelKey="副本", icon="-"},
     {id="look",   labelKey="外观",   icon="-"},
     {id="perf",   labelKey="性能",   icon="-"},
     {id="profiles", labelKey="配置管理", icon="-"},
@@ -138,6 +136,28 @@ function Config:CreateBorder(f, r, g, b, a, size)
     local t = f:CreateTexture(nil, "BACKGROUND", nil, -8)
     t:SetPoint("TOPLEFT", -s, s); t:SetPoint("BOTTOMRIGHT", s, -s)
     t:SetColorTexture(r, g, b, a); return t
+end
+
+function Config:AddCheckerboard(btn, w, h)
+    w = w or 48; h = h or 16
+    local size = 8 -- 棋盘格方块大小(8x8像素)
+    
+    -- 铺一层纯白底色
+    local bg = btn:CreateTexture(nil, "BACKGROUND", nil, -2)
+    bg:SetAllPoints()
+    bg:SetColorTexture(1, 1, 1, 1)
+    
+    -- 铺浅灰色方块形成棋盘格交错
+    for y = 0, math.ceil(h/size)-1 do
+        for x = 0, math.ceil(w/size)-1 do
+            if (x + y) % 2 == 1 then
+                local sq = btn:CreateTexture(nil, "BACKGROUND", nil, -1)
+                sq:SetSize(size, size)
+                sq:SetPoint("TOPLEFT", btn, "TOPLEFT", x*size, -y*size)
+                sq:SetColorTexture(0.75, 0.75, 0.75, 1)
+            end
+        end
+    end
 end
 
 function Config:RefreshTitle()
@@ -284,7 +304,7 @@ function Config:Build()
         self.pages[cat.id] = { scroll = page, inner = inner, sb = sb }
     end
 
-    self:BuildLayoutPage(); self:BuildDataPage(); self:BuildMPlusPage()
+    self:BuildLayoutPage(); self:BuildDataPage();
     self:BuildLookPage(); self:BuildPerfPage(); self:BuildProfilesPage()
     self:ShowPage("layout")
 
@@ -327,67 +347,115 @@ end
 function Config:BuildLayoutPage()
     local inner = self.pages["layout"].inner
     
-    -- 区域1：语言与布局模式（常驻显示）
+    -- 区域1：语言
     local sec1 = CreateFrame("Frame", nil, inner)
-    sec1:SetWidth(PANEL_W); sec1:SetPoint("TOPLEFT")
+    sec1:SetWidth(PANEL_W)
     local y1 = 0
-    
     y1 = self:H(sec1, L["界面语言"], y1)
-    y1 = self:Dropdown(sec1, L["语言 (需要重载UI生效)"], y1, {
-        {l=L["跟随客户端"], v="auto"},
-        {l="简体中文", v="zhCN"},
-        {l="繁体中文", v="zhTW"},
-        {l="English", v="enUS"}
-    }, 
-    function() return ns.db.display.language or "auto" end, 
-    function(v) ns.db.display.language = v; ReloadUI() end)
-    
-    y1 = y1 - 12
-    y1 = self:H(sec1, L["布局模式"], y1)
-    y1 = self:Radio(sec1, L["分栏模式 (同时显示两种数据)"], y1, 
-        function() return ns.db.split.enabled end, 
-        function() ns.db.split.enabled = true; if ns.db.display.mode ~= "split" then ns.db.display.mode = "split" end; self:RefreshUI(); self:UpdateLayoutVisibility() end)
-    y1 = self:Radio(sec1, L["单栏模式 (底部标签切换)"], y1, 
-        function() return not ns.db.split.enabled end, 
-        function() ns.db.split.enabled = false; if ns.db.display.mode == "split" then ns.db.display.mode = ns.db.split.primaryMode or "damage" end; self:RefreshUI(); self:UpdateLayoutVisibility() end)
-    
+    y1 = self:Dropdown(sec1, L["语言 (需要重载UI生效)"], y1, { {l=L["跟随客户端"], v="auto"}, {l="简体中文", v="zhCN"}, {l="繁体中文", v="zhTW"}, {l="English", v="enUS"} }, function() return ns.db.display.language or "auto" end, function(v) ns.db.display.language = v; ReloadUI() end)
     sec1:SetHeight(math.abs(y1))
     self.laySec1 = sec1
 
-    -- 区域2：数据显示设定 (仅分栏模式显示)
+    -- 区域2：当前与总计
     local sec2 = CreateFrame("Frame", nil, inner)
     sec2:SetWidth(PANEL_W)
     local y2 = 0
-    
-    y2 = self:H(sec2, L["数据显示"], y2)
-    local allModes = { {l=L["伤害"], v="damage"}, {l=L["治疗"], v="healing"}, {l=L["承伤"], v="damageTaken"}, {l=L["死亡"], v="deaths"}, {l=L["打断"], v="interrupts"}, {l=L["驱散"], v="dispels"} }
-    y2 = self:Dropdown(sec2, L["主栏显示"], y2, allModes, function() return ns.db.split.primaryMode end, function(v) ns.db.split.primaryMode=v; self:RefreshUI() end)
-    y2 = self:Dropdown(sec2, L["副栏显示"], y2, allModes, function() return ns.db.split.secondaryMode end, function(v) ns.db.split.secondaryMode=v; self:RefreshUI() end)
-    
-    y2 = y2 - 12
-    y2 = self:H(sec2, L["自适应布局比例"], y2)
-    y2 = self:Slider(sec2, L["主栏 (上方) 高度占比"], y2, 0.2, 0.8, 0.05, function() return ns.db.split.priRatio or 0.60 end, function(v) ns.db.split.priRatio = v; self:RefreshUI() end, true)
-    
-    sec2:SetHeight(math.abs(y2))
+    y2 = self:H(sec2, L["当前与总计窗口"], y2)
+    y2 = self:Check(sec2, L["同时显示当前与总计数据"], y2, 
+        function() return ns.db.split.showOverall end, 
+        function(v) ns.db.split.showOverall = v; self:RefreshUI(); self:UpdateLayoutVisibility() end)
+        
+    local sec2_sub = CreateFrame("Frame", nil, sec2)
+    sec2_sub:SetWidth(PANEL_W)
+    sec2_sub:SetPoint("TOPLEFT", sec2, "TOPLEFT", 0, y2)
+    local y2s = 0
+    local showModes = { {l=L["总是开启"], v="always"}, {l=L["所有副本开启"], v="instance"}, {l=L["只在大秘境中开启"], v="mplus"}, {l=L["永不开启"], v="off"} }
+    y2s = self:Dropdown(sec2_sub, L["开启场景"], y2s, showModes, function() return ns.db.split.overallShowMode or "mplus" end, function(v) ns.db.split.overallShowMode = v; self:RefreshUI() end)
+    y2s = y2s - 8
+    local dirs = { {l=L["左右划分"], v="LR"}, {l=L["上下划分"], v="TB"} }
+    y2s = self:Dropdown(sec2_sub, L["当前/总计划分方向"], y2s, dirs, function() return ns.db.split.overallDir or "LR" end, 
+        function(v) 
+            ns.db.split.overallDir = v
+            ns.db.split.splitDir = (v == "LR") and "TB" or "LR" 
+            self:RefreshUI(); self:UpdateLayoutVisibility() 
+        end)
+    local poses = { {l=L["左侧/上方"], v=1}, {l=L["右侧/下方"], v=2} }
+    y2s = self:Dropdown(sec2_sub, L["当前数据位置"], y2s, poses, function() return ns.db.split.currentPos or 1 end, function(v) ns.db.split.currentPos = v; self:RefreshUI() end)
+    sec2_sub:SetHeight(math.abs(y2s))
+    self.laySec2Sub = sec2_sub
     self.laySec2 = sec2
 
+    -- 区域3：双数据显示
+    local sec3 = CreateFrame("Frame", nil, inner)
+    sec3:SetWidth(PANEL_W)
+    local y3 = 0
+    y3 = self:H(sec3, L["双数据显示"], y3)
+    y3 = self:Check(sec3, L["开启双数据显示"], y3, 
+        function() return ns.db.split.enabled end, 
+        function(v) 
+            ns.db.split.enabled = v; 
+            if v then 
+                if ns.db.display.mode ~= "split" then ns.db.display.mode = "split" end
+            else 
+                if ns.db.display.mode == "split" then ns.db.display.mode = ns.db.split.primaryMode or "damage" end
+            end
+            self:RefreshUI(); 
+            self:UpdateLayoutVisibility() 
+        end)
+
+    local sec3_sub = CreateFrame("Frame", nil, sec3)
+    sec3_sub:SetWidth(PANEL_W)
+    sec3_sub:SetPoint("TOPLEFT", sec3, "TOPLEFT", 0, y3)
+    local y3s = 0
+    local allModes = { {l=L["伤害"], v="damage"}, {l=L["治疗"], v="healing"}, {l=L["承伤"], v="damageTaken"}, {l=L["死亡"], v="deaths"}, {l=L["打断"], v="interrupts"}, {l=L["驱散"], v="dispels"} }
+    y3s = self:Dropdown(sec3_sub, L["主数据位置"], y3s, poses, function() return ns.db.split.primaryPos or 1 end, function(v) ns.db.split.primaryPos = v; self:RefreshUI() end)
+    y3s = self:Dropdown(sec3_sub, L["主数据内容"], y3s, allModes, function() return ns.db.split.primaryMode end, function(v) ns.db.split.primaryMode=v; self:RefreshUI() end)
+    y3s = self:Dropdown(sec3_sub, L["副数据内容"], y3s, allModes, function() return ns.db.split.secondaryMode end, function(v) ns.db.split.secondaryMode=v; self:RefreshUI() end)
+    sec3_sub:SetHeight(math.abs(y3s))
+    self.laySec3Sub = sec3_sub
+    self.laySec3 = sec3
+
+    -- 区域4：比例调节
+    local sec4 = CreateFrame("Frame", nil, inner)
+    sec4:SetWidth(PANEL_W)
+    local y4 = 0
+    y4 = self:H(sec4, L["自适应布局比例"], y4)
+    y4 = self:Slider(sec4, L["上下分栏比例"], y4, 0.2, 0.8, 0.05, function() return ns.db.split.tbRatio or 0.5 end, function(v) ns.db.split.tbRatio = v; self:RefreshUI() end, true)
+    y4 = self:Slider(sec4, L["左右分栏比例"], y4, 0.2, 0.8, 0.05, function() return ns.db.split.lrRatio or 0.5 end, function(v) ns.db.split.lrRatio = v; self:RefreshUI() end, true)
+    sec4:SetHeight(math.abs(y4))
+    self.laySec4 = sec4
+    
     self:UpdateLayoutVisibility()
 end
 
 function Config:UpdateLayoutVisibility()
     local inner = self.pages["layout"].inner
-    local isSplit = ns.db.split.enabled
     
-    self.laySec1:SetPoint("TOPLEFT", inner, "TOPLEFT", 0, 0)
-    
-    if isSplit then
-        self.laySec2:Show()
-        self.laySec2:SetPoint("TOPLEFT", self.laySec1, "BOTTOMLEFT", 0, -12)
-        inner:SetHeight(self.laySec1:GetHeight() + self.laySec2:GetHeight() + 32)
+    if ns.db.split.showOverall then
+        self.laySec2Sub:Show()
+        self.laySec2:SetHeight(48 + self.laySec2Sub:GetHeight())
     else
-        self.laySec2:Hide()
-        inner:SetHeight(self.laySec1:GetHeight() + 20)
+        self.laySec2Sub:Hide()
+        self.laySec2:SetHeight(48)
     end
+
+    if ns.db.split.enabled then
+        self.laySec3Sub:Show()
+        self.laySec3:SetHeight(48 + self.laySec3Sub:GetHeight())
+    else
+        self.laySec3Sub:Hide()
+        self.laySec3:SetHeight(48)
+    end
+
+    -- 按照顺序堆叠各个区块，不再写死坐标
+    self.laySec1:SetPoint("TOPLEFT", inner, "TOPLEFT", 0, 0)
+    self.laySec2:SetPoint("TOPLEFT", self.laySec1, "BOTTOMLEFT", 0, -12)
+    self.laySec3:SetPoint("TOPLEFT", self.laySec2, "BOTTOMLEFT", 0, -12)
+    self.laySec4:SetPoint("TOPLEFT", self.laySec3, "BOTTOMLEFT", 0, -12)
+
+    local totalH = self.laySec1:GetHeight() + self.laySec2:GetHeight() + self.laySec3:GetHeight() + self.laySec4:GetHeight() + 48
+    inner:SetHeight(totalH)
+    
     self:UpdatePageScroll("layout")
 end
 
@@ -398,59 +466,13 @@ function Config:BuildDataPage()
     y = self:Check(inner, L["显示排名序号"], y, function() return ns.db.display.showRank end, function(v) ns.db.display.showRank=v; self:RefreshUI() end)
     y = self:Check(inner, L["在最左侧显示专精图标"], y, function() return ns.db.display.showSpecIcon end, function(v) ns.db.display.showSpecIcon=v; self:RefreshUI() end)
     y = self:Check(inner, L["显示玩家服务器"], y, function() return ns.db.display.showRealm end, function(v) ns.db.display.showRealm=v; self:RefreshUI() end)
+    -- ★ 将原MPlus页面的全局选项移至此处
+    y = self:Check(inner, L["标题下方显示全程摘要行（仅在副本中生效）"], y, function() return ns.db.mythicPlus.dualDisplay end, function(v) ns.db.mythicPlus.dualDisplay=v; self:RefreshUI() end)
+    y = self:Check(inner, L["离开副本后自动生成副本全程段落（地下堡不适用)"], y, function() return ns.db.mythicPlus.enabled end, function(v) ns.db.mythicPlus.enabled=v end)
     inner:SetHeight(math.abs(y) + 20)
 end
 
-function Config:BuildMPlusPage()
-    local inner = self.pages["mplus"].inner
-    
-    -- 区域1：大秘境核心设置
-    local sec1 = CreateFrame("Frame", nil, inner)
-    sec1:SetWidth(PANEL_W); sec1:SetPoint("TOPLEFT")
-    local y1 = 0
-    
-    y1 = self:H(sec1, L["大秘境与副本自适应"], y1)
-    y1 = self:Check(sec1, L["离开副本后自动生成副本全程段落（地下堡不适用)"], y1, function() return ns.db.mythicPlus.enabled end, function(v) ns.db.mythicPlus.enabled=v end)
-    
-    -- 新增强化说明文本
-    local descText = L["如果开启，则离开副本后，会把副本中所有发生的所有战斗进行汇总，并生成“全程”的战斗段落，同时副本中所有的战斗段落，会删除所有的小怪战斗段落，只保留Boss战。\n特别的，在团队副本（Raid）中，“全程”战斗段落会去掉所有的小怪战斗，只汇总所有Boss战。而其他任何副本中，“全程”段落包含小怪+Boss战的所有战斗。"]
-    y1 = self:Desc(sec1, y1, descText)
 
-    y1 = y1 - 8
-    y1 = self:H(sec1, L["全程数据双列显示"], y1)
-    y1 = self:Dropdown(sec1, L["右侧独立排行榜显示场景"], y1, { {l = L["仅大秘境开启"], v = "mplus"}, {l = L["所有副本开启"], v = "instance"}, {l = L["全部关闭"], v = "off"} }, function() return ns.db.mythicPlus.overallColumnMode or "mplus" end, function(v) ns.db.mythicPlus.overallColumnMode = v; self:RefreshUI(); self:UpdateMPlusVisibility() end)
-    y1 = self:Check(sec1, L["标题下方显示全程摘要行"], y1, function() return ns.db.mythicPlus.dualDisplay end, function(v) ns.db.mythicPlus.dualDisplay=v; self:RefreshUI() end)
-    
-    sec1:SetHeight(math.abs(y1))
-    self.mplusSec1 = sec1
-
-    -- 区域2：自适应布局比例 (全部关闭时隐藏)
-    local sec2 = CreateFrame("Frame", nil, inner)
-    sec2:SetWidth(PANEL_W)
-    local y2 = 0
-    
-    y2 = self:H(sec2, L["自适应布局比例"], y2)
-    y2 = self:Slider(sec2, L["右侧全程列宽度占比"], y2, 0.2, 0.7, 0.05, function() return ns.db.split.ovrRatio or 0.45 end, function(v) ns.db.split.ovrRatio = v; self:RefreshUI() end, true)
-    
-    sec2:SetHeight(math.abs(y2))
-    self.mplusSec2 = sec2
-
-    self:UpdateMPlusVisibility()
-end
-
-function Config:UpdateMPlusVisibility()
-    local mode = ns.db.mythicPlus.overallColumnMode or "mplus"
-    local inner = self.pages["mplus"].inner
-    if mode == "off" then
-        self.mplusSec2:Hide()
-        inner:SetHeight(self.mplusSec1:GetHeight() + 20)
-    else
-        self.mplusSec2:Show()
-        self.mplusSec2:SetPoint("TOPLEFT", self.mplusSec1, "BOTTOMLEFT", 0, -12)
-        inner:SetHeight(self.mplusSec1:GetHeight() + self.mplusSec2:GetHeight() + 32)
-    end
-    self:UpdatePageScroll("mplus")
-end
 
 function Config:BuildLookPage()
     local inner = self.pages["look"].inner; local y = 0
@@ -489,8 +511,8 @@ function Config:BuildLookPage()
             if ns.UI and ns.UI.ApplyTheme then ns.UI:ApplyTheme() end
         end)
 
-    -- 右侧全程列背景色
-    y = self:ColorSwatch(inner, L["右侧全程列背景色"], y,
+    -- 总计区域背景色
+    y = self:ColorSwatch(inner, L["总计区域背景色"], y,
         function()
             local c = ns.db.window.ovrBgColor or {0.02, 0.04, 0.08, 0.95}
             return c[1], c[2], c[3], c[4]
@@ -710,10 +732,7 @@ function Config:ColorSwatch(p, label, y, getter, setter)
     btn:SetPoint("TOPLEFT", 6, y - 18)
 
     -- 棋盘格背景（象征透明度）
-    local checker = btn:CreateTexture(nil, "BACKGROUND")
-    checker:SetAllPoints()
-    checker:SetTexture("Interface\\Buttons\\WHITE8X8")
-    checker:SetVertexColor(0.15, 0.15, 0.15, 1)
+    self:AddCheckerboard(btn, 48, 16)
 
     -- 颜色预览层
     local swatch = btn:CreateTexture(nil, "ARTWORK")
@@ -769,6 +788,8 @@ function Config:ColorSwatchNoAlpha(p, label, y, getter, setter)
     local btn = CreateFrame("Button", nil, p)
     btn:SetSize(48, 16)
     btn:SetPoint("TOPLEFT", 6, y - 18)
+
+    self:AddCheckerboard(btn, 48, 16)
 
     local swatch = btn:CreateTexture(nil, "ARTWORK")
     swatch:SetAllPoints()

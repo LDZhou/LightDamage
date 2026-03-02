@@ -1,12 +1,6 @@
 --[[
     LD Combat Stats - HistoryList.lua
     历史段落选择器
-
-    特性：
-    - 向上弹出对齐标题栏
-    - 加入 ScrollFrame 滚动条显示长历史记录
-    - L["当前战斗"] 和 L["总计"] 常驻
-    - 最底部加入 L["一键清空野外战斗"] 按钮
 ]]
 
 local addonName, ns = ...
@@ -128,9 +122,22 @@ function HL:Build()
             
             -- 如果当前在野外，连带清空当前的 overall 和重置 API Baseline
             if not ns.state.isInInstance then
-                if ns.CombatTracker then ns.CombatTracker:ResetBaselineToCurrentCount() end
+                if C_DamageMeter.ResetAllCombatSessions then
+                    ns.CombatTracker._internalReset = true
+                    C_DamageMeter.ResetAllCombatSessions()
+                end
+                if ns.CombatTracker then 
+                    ns.CombatTracker._baselineSessionCount = 0
+                    ns.CombatTracker._lastProcessedCount = 0
+                end
                 ns.Segments.overall = ns.Segments:NewSegment("overall", L["总计"])
-                ns.Segments.viewIndex = 0
+            end
+
+            -- ★ 一键清空后不再显示空白页面，而是跳转到最新的段落
+            if #ns.Segments.history > 0 then
+                ns.Segments.viewIndex = 1
+            else
+                ns.Segments.viewIndex = nil -- 跳转到当前实时
             end
 
             if ns.UI then ns.UI:Refresh() end
@@ -177,12 +184,12 @@ function HL:Rebuild()
     local list = segs:GetHistoryList()
     if not list or #list == 0 then self.frame:Hide(); return end
 
-    -- 分离当前/总计 与 历史段落
+    -- 分离当前 与 历史段落
     local histData = {}; local pinnedData = {}
     for _, data in ipairs(list) do
-        if data.key == "current" or data.key == "overall" then
+        if data.key == "current" then
             table.insert(pinnedData, data)
-        else
+        elseif data.key == "history" then
             table.insert(histData, data)
         end
     end
@@ -256,6 +263,13 @@ function HL:Rebuild()
     -- 计算整体大框架的高度 (历史区 + 常驻区 + 按钮区18px + 各个间距)
     local totalFrameHeight = histHeight + pinnedHeight + 18 + (#histData > 0 and #pinnedData > 0 and 5 or 2) + 2
     self.frame:SetHeight(totalFrameHeight)
+    
+    -- ★ 历史列表默认看最下方最新的段落
+    if #histData > MAX_SHOW then
+        local maxVal = (#histData - MAX_SHOW) * ITEM_H
+        self.scrollBar:SetValue(maxVal)
+        self.scrollFrame:SetVerticalScroll(maxVal)
+    end
 end
 
 function HL:SetupItem(item, data, curKey, curIdx, isLocked)

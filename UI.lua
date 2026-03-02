@@ -1,6 +1,6 @@
 --[[
-    LD Combat Stats v2.0 - UI.lua
-    主界面 — 原生独立滑动条 + 纯净极简风 + 零内存泄漏
+    LD Combat Stats - UI.lua
+    主界面
 ]]
 
 local addonName, ns = ...
@@ -91,33 +91,25 @@ function UI:IconBtn(p, texNormal, texHover, btnW, fn)
 end
 
 function UI:IsOverallColumnActive()
-    if not ns.db or not ns.db.mythicPlus then return false end 
-    local mode = ns.db.mythicPlus.overallColumnMode or "instance"
+    if not ns.db or not ns.db.split then return false end 
+    if not ns.db.split.showOverall then return false end
+    local mode = ns.db.split.overallShowMode or "mplus"
     if mode == "off" then return false end
+    
+    if mode == "always" then return true end
     
     local ovr = ns.Segments and ns.Segments.overall
     local hasData = ovr and (ovr.totalDamage > 0 or ovr.totalHealing > 0)
     
     if mode == "mplus" then
-        -- ★ 核心修复：不能简单地用 isInInstance，必须严格判定大秘境
-        
-        -- 1. 如果正在打大秘境 (进行中)，直接开启
-        if ns.state.inMythicPlus then
-            return true
-            
-        -- 2. 如果是普通状态（可能在普通副本，也可能是大秘境刚打完还没出本）
+        if ns.state.inMythicPlus then return true
         elseif ns.state.isInInstance and hasData then
-            -- 检查全程段身上是否有大秘境专属标记 (在 CombatTracker 归档时打上的)
             local isMplusSeg = ovr and (ovr._mythicLevel or ovr.mythicLevel or ovr._builtByMythicPlus)
             local mplusActive = ns.MythicPlus and ns.MythicPlus.IsActive and ns.MythicPlus:IsActive()
-            
-            if isMplusSeg or mplusActive then
-                return true
-            end
+            if isMplusSeg or mplusActive then return true end
         end
         return false
     end
-    
     if mode == "instance" then return ns.state.isInInstance end
     return false
 end
@@ -531,7 +523,9 @@ function UI:Layout()
     self._layoutPending = true
 
     self:LayoutTabs()
+
     local showSumm = (ns.db and ns.db.mythicPlus and ns.db.mythicPlus.dualDisplay)
+                     and ns.state.isInInstance
                      and self:IsOverallColumnActive() or false
     if showSumm then
         self.summaryBar:Show()
@@ -608,140 +602,184 @@ function UI:DoLayout(retryCount)
     local bodyW = self.bodyFrame:GetWidth()
 
     if bodyW <= 0 or bodyH <= 0 then
-        -- ★ 最多重试 20 次（约 1 秒），超时放弃防止内存泄漏
         if retryCount < 20 then
             C_Timer.After(0.05, function() self:DoLayout(retryCount + 1) end)
         end
         return
     end
 
-    local sp    = ns.db.split
-
+    local sp = ns.db.split
     local useOvr = self:IsOverallColumnActive()
-    local ovrRatio = sp.ovrRatio or 0.45
-    local OVR_COL_W = useOvr and (bodyW * ovrRatio) or 0
-    local sepX = bodyW - OVR_COL_W - 2
-    local rightOffset = useOvr and -(OVR_COL_W + 2) or 0
+    local isSplitView = sp.enabled and (ns.db.display.mode == "split")
 
-    self.leftContainer:ClearAllPoints()
-    self.leftContainer:SetPoint("TOPLEFT",     self.bodyFrame, "TOPLEFT",  0, 0)
-    self.leftContainer:SetPoint("BOTTOMRIGHT", self.bodyFrame, "BOTTOMRIGHT", rightOffset, 0)
+    -- 1. 计算四大容器的边界 (当前 vs 总计)
+    local curW, curH = bodyW, bodyH
+    local ovrW, ovrH = 0, 0
+    local curX, curY = 0, 0
+    local ovrX, ovrY = 0, 0
 
     if useOvr then
-        self.ovrSepLine:ClearAllPoints()
-        self.ovrSepLine:SetPoint("TOPLEFT",    self.bodyFrame, "TOPLEFT",    sepX, 0)
-        self.ovrSepLine:SetPoint("BOTTOMLEFT", self.bodyFrame, "BOTTOMLEFT", sepX, 0)
-        self.ovrSepLine:Show()
-
+        if sp.overallDir == "LR" then
+            local lrRatio = sp.lrRatio or 0.5
+            local w1 = bodyW * lrRatio
+            local gap = 2  -- ★ 留白宽度，防止进度条贴脸
+            local sepW = 1 -- ★ 分割线宽度
+            local w2 = bodyW - w1 - sepW - gap 
+            ovrH = bodyH  
+            
+            if sp.currentPos == 1 then
+                curW, ovrW = w1 - gap, w2
+                curX, ovrX = 0, w1 + sepW + gap
+            else
+                ovrW, curW = w1 - gap, w2
+                ovrX, curX = 0, w1 + sepW + gap
+            end
+            
+            self.ovrSepLine:ClearAllPoints()
+            self.ovrSepLine:SetPoint("TOPLEFT", self.bodyFrame, "TOPLEFT", w1, 0)
+            self.ovrSepLine:SetPoint("BOTTOMLEFT", self.bodyFrame, "BOTTOMLEFT", w1, 0)
+            self.ovrSepLine:SetSize(sepW, bodyH)
+            self.ovrSepLine:Show()
+        else -- TB
+            local tbRatio = sp.tbRatio or 0.5
+            local h1 = bodyH * tbRatio
+            local sepW = 1
+            local gap = 2
+            local h2 = bodyH - h1 - sepW - gap
+            ovrW = bodyW  
+            
+            if sp.currentPos == 1 then
+                curH, ovrH = h1 - gap, h2
+                curY, ovrY = 0, -(h1 + sepW + gap)
+            else
+                ovrH, curH = h1 - gap, h2
+                ovrY, curY = 0, -(h1 + sepW + gap)
+            end
+            
+            self.ovrSepLine:ClearAllPoints()
+            self.ovrSepLine:SetPoint("TOPLEFT", self.bodyFrame, "TOPLEFT", 0, -h1)
+            self.ovrSepLine:SetPoint("TOPRIGHT", self.bodyFrame, "TOPRIGHT", 0, -h1)
+            self.ovrSepLine:SetSize(bodyW, sepW)
+            self.ovrSepLine:Show()
+        end
+        
         self.ovrContainer:ClearAllPoints()
-        self.ovrContainer:SetPoint("TOPLEFT",     self.bodyFrame, "TOPLEFT",     sepX + 2, 0)
-        self.ovrContainer:SetPoint("BOTTOMRIGHT", self.bodyFrame, "BOTTOMRIGHT", 0,        0)
-        local c = ns.db.window.ovrBgColor or {0.02, 0.04, 0.08, 0.95}
-        self.ovrContainer:SetBackdropColor(unpack(c))
+        self.ovrContainer:SetPoint("TOPLEFT", self.bodyFrame, "TOPLEFT", ovrX, ovrY)
+        self.ovrContainer:SetSize(ovrW, ovrH)
         self.ovrContainer:Show()
     else
         self.ovrSepLine:Hide()
         self.ovrContainer:Hide()
     end
 
-    local isSplitView = sp.enabled and (ns.db.display.mode == "split")
+    self.leftContainer:ClearAllPoints()
+    self.leftContainer:SetPoint("TOPLEFT", self.bodyFrame, "TOPLEFT", curX, curY)
+    self.leftContainer:SetSize(curW, curH)
 
-    if isSplitView then
-        local avail = bodyH - SECTH_H * 2
-        local priRatio = sp.priRatio or 0.60
-        local priH = math.max(20, avail * priRatio)
-        local secH = math.max(20, avail - priH)
-
-        self.priHead:Show()
-        self.priHead:ClearAllPoints()
-        self.priHead:SetPoint("TOPLEFT",  self.leftContainer, "TOPLEFT",  0, 0)
-        self.priHead:SetPoint("TOPRIGHT", self.leftContainer, "TOPRIGHT", 0, 0)
-
-        self.priList.sf:Show()
-        self.priList.sf:ClearAllPoints()
-        self.priList.sf:SetPoint("TOPLEFT",  self.priHead, "BOTTOMLEFT",  0, 0)
-        self.priList.sf:SetPoint("TOPRIGHT", self.priHead, "BOTTOMRIGHT", 0, 0)
-        self.priList.sf:SetHeight(priH)
-
-        self.secHead:Show()
-        self.secHead:ClearAllPoints()
-        self.secHead:SetPoint("TOPLEFT",  self.priList.sf, "BOTTOMLEFT",  0, 0)
-        self.secHead:SetPoint("TOPRIGHT", self.priList.sf, "BOTTOMRIGHT", 0, 0)
-
-        self.secList.sf:Show()
-        self.secList.sf:ClearAllPoints()
-        self.secList.sf:SetPoint("TOPLEFT",  self.secHead, "BOTTOMLEFT",  0, 0)
-        self.secList.sf:SetPoint("TOPRIGHT", self.secHead, "BOTTOMRIGHT", 0, 0)
-        self.secList.sf:SetHeight(secH)
-
-        if useOvr then
-            self.ovrPriHead:Show()
-            self.ovrPriHead:ClearAllPoints()
-            self.ovrPriHead:SetPoint("TOPLEFT",  self.ovrContainer, "TOPLEFT",  0, 0)
-            self.ovrPriHead:SetPoint("TOPRIGHT", self.ovrContainer, "TOPRIGHT", 0, 0)
-
-            self.ovrPriList.sf:Show()
-            self.ovrPriList.sf:ClearAllPoints()
-            self.ovrPriList.sf:SetPoint("TOPLEFT",  self.ovrPriHead, "BOTTOMLEFT",  0, 0)
-            self.ovrPriList.sf:SetPoint("TOPRIGHT", self.ovrPriHead, "BOTTOMRIGHT", 0, 0)
-            self.ovrPriList.sf:SetHeight(priH)
-
-            self.ovrSecHead:Show()
-            self.ovrSecHead:ClearAllPoints()
-            self.ovrSecHead:SetPoint("TOPLEFT",  self.ovrPriList.sf, "BOTTOMLEFT",  0, 0)
-            self.ovrSecHead:SetPoint("TOPRIGHT", self.ovrPriList.sf, "BOTTOMRIGHT", 0, 0)
-
-            self.ovrSecList.sf:Show()
-            self.ovrSecList.sf:ClearAllPoints()
-            self.ovrSecList.sf:SetPoint("TOPLEFT",  self.ovrSecHead, "BOTTOMLEFT",  0, 0)
-            self.ovrSecList.sf:SetPoint("TOPRIGHT", self.ovrSecHead, "BOTTOMRIGHT", 0, 0)
-            self.ovrSecList.sf:SetHeight(secH)
-
-            self.ovrPriHead.info:Hide()
-            self.ovrPriHead.label:SetText(string.format(L["|cff4cb8e8[全程%s]|r"], L[ns.MODE_NAMES[sp.primaryMode] or ""]))
-            self.ovrSecHead.info:Hide()
-            self.ovrSecHead.label:SetText(string.format(L["|cff4cb8e8[全程%s]|r"], L[ns.MODE_NAMES[sp.secondaryMode] or ""]))
-        else
-            self.ovrPriHead:Hide(); self.ovrSecHead:Hide()
-            self.ovrPriList.sf:Hide(); self.ovrSecList.sf:Hide()
+    -- 2. 内部双数据的划分算法 (主模式 vs 副模式)
+    local function LayoutInner(container, head1, list1, head2, list2, w, h, isSplit, mode1, mode2)
+        if not isSplit then
+            head1:Show(); head1:ClearAllPoints()
+            head1:SetPoint("TOPLEFT", container, "TOPLEFT", 0, 0)
+            head1:SetPoint("TOPRIGHT", container, "TOPRIGHT", 0, 0)
+            
+            list1.sf:Show(); list1.sf:ClearAllPoints()
+            list1.sf:SetPoint("TOPLEFT", head1, "BOTTOMLEFT", 0, 0)
+            list1.sf:SetPoint("TOPRIGHT", head1, "BOTTOMRIGHT", 0, 0)
+            list1.sf:SetHeight(math.max(1, h - SECTH_H))
+            
+            head2:Hide(); list2.sf:Hide()
+            return
         end
-    else
-        local avail = bodyH - SECTH_H
 
-        self.priHead:Show()
-        self.priHead:ClearAllPoints()
-        self.priHead:SetPoint("TOPLEFT",  self.leftContainer, "TOPLEFT",  0, 0)
-        self.priHead:SetPoint("TOPRIGHT", self.leftContainer, "TOPRIGHT", 0, 0)
+        local splitDir = sp.splitDir or "TB"
+        head1:Show(); head2:Show(); list1.sf:Show(); list2.sf:Show()
 
-        self.priList.sf:Show()
-        self.priList.sf:ClearAllPoints()
-        self.priList.sf:SetPoint("TOPLEFT",  self.priHead, "BOTTOMLEFT",  0, 0)
-        self.priList.sf:SetPoint("TOPRIGHT", self.priHead, "BOTTOMRIGHT", 0, 0)
-        self.priList.sf:SetHeight(avail)
+        if splitDir == "TB" then
+            local tbRatio = sp.tbRatio or 0.5
+            local h1 = h * tbRatio
+            local gap = 2
+            local h2 = h - h1 - gap
+            
+            local topHead, bottomHead, topList, bottomList
+            if sp.primaryPos == 1 then
+                topHead, bottomHead = head1, head2
+                topList, bottomList = list1, list2
+            else
+                topHead, bottomHead = head2, head1
+                topList, bottomList = list2, list1
+            end
+            
+            topHead:ClearAllPoints()
+            topHead:SetPoint("TOPLEFT", container, "TOPLEFT", 0, 0)
+            topHead:SetPoint("TOPRIGHT", container, "TOPRIGHT", 0, 0)
+            
+            topList.sf:ClearAllPoints()
+            topList.sf:SetPoint("TOPLEFT", topHead, "BOTTOMLEFT", 0, 0)
+            topList.sf:SetPoint("TOPRIGHT", topHead, "BOTTOMRIGHT", 0, 0)
+            topList.sf:SetHeight(math.max(1, h1 - gap - SECTH_H))
 
-        self.secHead:Hide()
-        self.secList.sf:Hide()
+            bottomHead:ClearAllPoints()
+            bottomHead:SetPoint("TOPLEFT", container, "TOPLEFT", 0, -h1)
+            bottomHead:SetPoint("TOPRIGHT", container, "TOPRIGHT", 0, -h1)
 
-        if useOvr then
-            self.ovrPriHead:Show()
-            self.ovrPriHead:ClearAllPoints()
-            self.ovrPriHead:SetPoint("TOPLEFT",  self.ovrContainer, "TOPLEFT",  0, 0)
-            self.ovrPriHead:SetPoint("TOPRIGHT", self.ovrContainer, "TOPRIGHT", 0, 0)
+            bottomList.sf:ClearAllPoints()
+            bottomList.sf:SetPoint("TOPLEFT", bottomHead, "BOTTOMLEFT", 0, 0)
+            bottomList.sf:SetPoint("TOPRIGHT", bottomHead, "BOTTOMRIGHT", 0, 0)
+            bottomList.sf:SetHeight(math.max(1, h2 - SECTH_H))
+        else -- LR
+            local lrRatio = sp.lrRatio or 0.5
+            local gap = 2 -- ★ 内部的双数据左右分栏留白
+            local w1 = w * lrRatio
+            local w2 = w - w1 - gap
+            
+            local leftHead, rightHead, leftList, rightList
+            if sp.primaryPos == 1 then
+                leftHead, rightHead = head1, head2
+                leftList, rightList = list1, list2
+            else
+                leftHead, rightHead = head2, head1
+                leftList, rightList = list2, list1
+            end
 
-            self.ovrPriList.sf:Show()
-            self.ovrPriList.sf:ClearAllPoints()
-            self.ovrPriList.sf:SetPoint("TOPLEFT",  self.ovrPriHead, "BOTTOMLEFT",  0, 0)
-            self.ovrPriList.sf:SetPoint("TOPRIGHT", self.ovrPriHead, "BOTTOMRIGHT", 0, 0)
-            self.ovrPriList.sf:SetHeight(avail)
+            leftHead:ClearAllPoints()
+            leftHead:SetPoint("TOPLEFT", container, "TOPLEFT", 0, 0)
+            leftHead:SetWidth(w1 - gap) -- ★ 减去留白宽度，收缩最右侧边缘
+            
+            leftList.sf:ClearAllPoints()
+            leftList.sf:SetPoint("TOPLEFT", leftHead, "BOTTOMLEFT", 0, 0)
+            leftList.sf:SetPoint("TOPRIGHT", leftHead, "BOTTOMRIGHT", 0, 0)
+            leftList.sf:SetHeight(math.max(1, h - SECTH_H))
 
-            self.ovrSecHead:Hide()
-            self.ovrSecList.sf:Hide()
+            rightHead:ClearAllPoints()
+            rightHead:SetPoint("TOPLEFT", container, "TOPLEFT", w1, 0)
+            rightHead:SetWidth(w2)
 
-            self.ovrPriHead.info:Hide()
-            self.ovrPriHead.label:SetText(string.format(L["|cff4cb8e8[全程%s]|r"], L[ns.MODE_NAMES[ns.db.display.mode] or ""]))
+            rightList.sf:ClearAllPoints()
+            rightList.sf:SetPoint("TOPLEFT", rightHead, "BOTTOMLEFT", 0, 0)
+            rightList.sf:SetPoint("TOPRIGHT", rightHead, "BOTTOMRIGHT", 0, 0)
+            rightList.sf:SetHeight(math.max(1, h - SECTH_H))
+        end
+    end
+
+    LayoutInner(self.leftContainer, self.priHead, self.priList, self.secHead, self.secList, curW, curH, isSplitView, sp.primaryMode, sp.secondaryMode)
+    
+    if useOvr then
+        LayoutInner(self.ovrContainer, self.ovrPriHead, self.ovrPriList, self.ovrSecHead, self.ovrSecList, ovrW, ovrH, isSplitView, sp.primaryMode, sp.secondaryMode)
+        
+        self.ovrPriHead.info:Hide()
+        self.ovrSecHead.info:Hide()
+        
+        local ovrTitleWord = L["总计"]
+        if ns.Segments and ns.Segments.overall and ns.Segments.overall._isMerged then
+            ovrTitleWord = L["全程"]
+        end
+        
+        if isSplitView then
+            self.ovrPriHead.label:SetText(string.format(L["|cff4cb8e8[%s%s]|r"], ovrTitleWord, L[ns.MODE_NAMES[sp.primaryMode] or ""]))
+            self.ovrSecHead.label:SetText(string.format(L["|cff4cb8e8[%s%s]|r"], ovrTitleWord, L[ns.MODE_NAMES[sp.secondaryMode] or ""]))
         else
-            self.ovrPriHead:Hide(); self.ovrSecHead:Hide()
-            self.ovrPriList.sf:Hide(); self.ovrSecList.sf:Hide()
+            self.ovrPriHead.label:SetText(string.format(L["|cff4cb8e8[%s%s]|r"], ovrTitleWord, L[ns.MODE_NAMES[ns.db.display.mode] or ""]))
         end
     end
 
@@ -821,6 +859,13 @@ function UI:Refresh()
     -- Summary 栏（M+ 全程摘要）
     -- ============================================================
     if self.summaryBar:IsShown() then
+
+        local ovrTitleWord = L["总计"]
+        local ovrSeg = ns.Segments and ns.Segments.overall
+        if ovrSeg and ovrSeg._isMerged then
+            ovrTitleWord = L["全程"]
+        end
+        
         if ns.state.inCombat then
             -- 战斗中：从暴雪 Overall API 读实时数据（Secret Value，只能用 AbbreviateNumbers）
             local durSafe = C_DamageMeter.GetSessionDurationSeconds(Enum.DamageMeterSessionType.Overall) or 0
@@ -843,26 +888,19 @@ function UI:Refresh()
                 L["全程 %s  |  Damage |cffffd100%s|r  Heal |cff66ff66%s|r"],
                 ns:FormatTime(durSafe), dmgStr, healStr)
         else
-            -- ★ 脱战后：直接读 Lua overall 段的字段值。
-            --   原来通过 GetFightSummary → GetSegmentDuration 两层间接读取，
-            --   导致两个 bug：
-            --   1. groupDPS/groupHPS 是每秒值而非总量，显示成 DPS/HPS 数字
-            --   2. M+ 中 GetSegmentDuration 在 overall.isActive 可能仍为 true 时
-            --      调用 GetSessionDurationSeconds(Current)，只拿到最新那场的时长
-            local ovr     = ns.Segments and ns.Segments:GetOverallSegment()
-            local ovrDmg  = ovr and ovr.totalDamage  or 0
-            local ovrHeal = ovr and ovr.totalHealing  or 0
-            -- ★ 优先从暴雪 API 读全程时长，比 overall.duration（手动累加）更准确
+            local ovrDmg  = ovrSeg and ovrSeg.totalDamage  or 0
+            local ovrHeal = ovrSeg and ovrSeg.totalHealing  or 0
             local ovrDur  = C_DamageMeter.GetSessionDurationSeconds(Enum.DamageMeterSessionType.Overall)
-                            or (ovr and ovr.duration or 0)
+                            or (ovrSeg and ovrSeg.duration or 0)
             if ovrDmg > 0 or ovrHeal > 0 then
                 self.summText:SetText(string.format(
-                    L["全程 %s  |  Damage |cffffd100%s|r  Heal |cff66ff66%s|r"],
+                    L["%s %s  |  Damage |cffffd100%s|r  Heal |cff66ff66%s|r"],
+                    ovrTitleWord,
                     ns:FormatTime(ovrDur),
                     ns:FormatNumber(ovrDmg),
                     ns:FormatNumber(ovrHeal)))
             else
-                self.summText:SetText(L["全程 0:00  |  Damage 0  Heal 0"])
+                self.summText:SetText(string.format(L["%s 0:00  |  Damage 0  Heal 0"], ovrTitleWord))
             end
         end
     end
@@ -1659,16 +1697,21 @@ function UI:ShowTooltip(bar, section)
         if ovd then
             local ac = T.accent or {0.0, 0.65, 1.0}
             GameTooltip:AddLine(" ")
-            GameTooltip:AddLine(string.format(L["|cff%02x%02x%02x— 全程 —|r"], ac[1]*255, ac[2]*255, ac[3]*255))
-            
-            -- 使用占位符，把拼接交给翻译表处理
-            GameTooltip:AddDoubleLine(string.format(L["全程%s"], mn), ns:FormatNumber(ovd.value), 0.7,0.7,0.7, 1,1,1)
-            
-            if ovd.dur > 0 and ns.MODE_UNITS[mode] then 
-                GameTooltip:AddDoubleLine(string.format(L["全程%s"], ns.MODE_UNITS[mode]), string.format("%.1f",ovd.perSec), 0.7,0.7,0.7, 1,0.85,0) 
+
+            local ovrTitleWord = L["总计"]
+            if ns.Segments and ns.Segments.overall and ns.Segments.overall._isMerged then
+                ovrTitleWord = L["全程"]
             end
             
-            GameTooltip:AddDoubleLine(L["全程占比"], string.format("%.1f%%", ovd.percent), 0.7,0.7,0.7, ac[1],ac[2],ac[3])
+            GameTooltip:AddLine(string.format(L["|cff%02x%02x%02x— %s —|r"], ac[1]*255, ac[2]*255, ac[3]*255, ovrTitleWord))
+            
+            GameTooltip:AddDoubleLine(string.format(L["%s%s"], ovrTitleWord, mn), ns:FormatNumber(ovd.value), 0.7,0.7,0.7, 1,1,1)
+            
+            if ovd.dur > 0 and ns.MODE_UNITS[mode] then 
+                GameTooltip:AddDoubleLine(string.format(L["%s%s"], ovrTitleWord, ns.MODE_UNITS[mode]), string.format("%.1f",ovd.perSec), 0.7,0.7,0.7, 1,0.85,0) 
+            end
+            
+            GameTooltip:AddDoubleLine(string.format(L["%s占比"], ovrTitleWord), string.format("%.1f%%", ovd.percent), 0.7,0.7,0.7, ac[1],ac[2],ac[3])
         end
     end
 

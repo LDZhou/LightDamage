@@ -1,5 +1,5 @@
 --[[
-    LD Combat Stats v2.0 - DetailView.lua
+    LD Combat Stats - DetailView.lua
     详情面板：技能细分 + 死亡事件详情
 ]]
 

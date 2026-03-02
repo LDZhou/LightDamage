@@ -1,5 +1,5 @@
 --[[
-    LD Combat Stats v0.1 - Segments.lua
+    LD Combat Stats - Segments.lua
     段落管理系统
 ]]
 

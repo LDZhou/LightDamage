@@ -1,11 +1,6 @@
 --[[
     LD Combat Stats - MythicPlus.lua
     大秘境 / 副本生命周期管理
-
-    修复:
-    - 副本退出时调用 CT:ResetBaselineToCurrentCount()
-      确保开放世界新战斗不会被归入副本 overall
-    - OnLeaveInstance 正确触发
 ]]
 
 local addonName, ns = ...

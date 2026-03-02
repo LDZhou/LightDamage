@@ -1,10 +1,6 @@
 --[[
-    LD Combat Stats v0.1 - Utils.lua
+    LD Combat Stats - Utils.lua
     工具函数
-
-    修复:
-    - IsGroupUnit 加自身GUID兜底，单人打木桩时也能记录数据
-    - IsGroupUnit 掩码从 0x0F 改为 0x07（affiliation 字段只有3位）
 ]]
 
 local addonName, ns = ...

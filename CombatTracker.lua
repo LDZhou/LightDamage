@@ -1,13 +1,6 @@
 --[[
     LD Combat Stats - CombatTracker.lua
-    12.0 Midnight: Secret Value 兼容架构
-
-    战斗中: 不读数据，UI 直接从 C_DamageMeter.GetCombatSessionFromType 渲染
-    脱战后: 等 secret 释放，解析归档 session 存入 history
-
-    修复:
-    - 脱战后利用 DamageMeterCombatSource.deathRecapID 构建队友死亡记录
-      (12.0 中 CLEU 伤害事件受限，deathRecapID 是获取死亡详情的正确途径)
+    战斗追踪核心逻辑
 ]]
 
 local addonName, ns = ...
@@ -753,6 +746,13 @@ local function mergeAndCleanInstance(instanceTag, mythicLevel, mythicMapName, in
         ns.Segments._preReloadOverallData = nil 
         -- ★ 延迟到这里才清空 Overall，确保户外的 overall 变成纯净的
         if not ns.state.isInInstance then
+            -- ★ 离开副本且归档后，强制执行一次暴雪统计Reset，让野外重新开始计算
+            if C_DamageMeter.ResetAllCombatSessions then
+                CT._internalReset = true
+                C_DamageMeter.ResetAllCombatSessions()
+            end
+            CT._baselineSessionCount = 0
+            CT._lastProcessedCount   = 0
             ns.Segments.overall = ns.Segments:NewSegment("overall", L["总计"])
         end
     end

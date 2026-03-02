@@ -1,5 +1,5 @@
 --[[
-    LD Combat Stats v2.0 - Analysis.lua
+    LD Combat Stats - Analysis.lua
     数据分析: 排序、技能细分、汇总计算
 ]]
 

@@ -1,11 +1,6 @@
 --[[
-    LD Combat Stats v2.0 - DeathTracker.lua
+    LD Combat Stats - DeathTracker.lua
     死亡追踪器
-
-    修复: ParseRecapEvents 使用正确字段名（dump 确认）
-      spellId (小写d), spellName, sourceName, currentHP,
-      timestamp (unix float), event (CLEU事件类型字符串),
-      overkill (-1 = 无超杀)
 ]]
 
 local addonName, ns = ...
