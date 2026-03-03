@@ -618,6 +618,44 @@ function Config:BuildLookPage()
         function() return ns.db.display.barTexture or "Interface\\Buttons\\WHITE8X8" end,
         function(v) ns.db.display.barTexture=v; self:RefreshUI() end)
 
+    -- ── 详情页外观 ─────────────────────────────────────────────
+    y = y - 12; y = self:H(inner, L["技能详情页外观"], y)
+    y = self:Slider(inner, L["排版行高 (文字/图标区域)"], y, 10, 40, 1,
+        function() return ns.db.detailDisplay.barHeight end,
+        function(v) ns.db.detailDisplay.barHeight=v; if ns.DetailView then ns.DetailView:Refresh() end end)
+    y = self:Slider(inner, L["颜色条实际粗细"], y, 1, 40, 1,
+        function() return ns.db.detailDisplay.barThickness or ns.db.detailDisplay.barHeight or 20 end,
+        function(v) ns.db.detailDisplay.barThickness=v; if ns.DetailView then ns.DetailView:Refresh() end end)
+    y = self:Slider(inner, L["颜色条垂直偏移 (从底向上)"], y, 0, 30, 1,
+        function() return ns.db.detailDisplay.barVOffset or 0 end,
+        function(v) ns.db.detailDisplay.barVOffset=v; if ns.DetailView then ns.DetailView:Refresh() end end)
+    y = self:Slider(inner, L["数据条间距"], y, 0, 10, 1,
+        function() return ns.db.detailDisplay.barGap or 1 end,
+        function(v) ns.db.detailDisplay.barGap=v; if ns.DetailView then ns.DetailView:Refresh() end end)
+    y = self:Slider(inner, L["数据条透明度"], y, 0.1, 1.0, 0.05,
+        function() return ns.db.detailDisplay.barAlpha or 0.92 end,
+        function(v) ns.db.detailDisplay.barAlpha=v; if ns.DetailView then ns.DetailView:Refresh() end end)
+
+    y = self:Dropdown(inner, L["数据条材质"], y, textures,
+        function() return ns.db.detailDisplay.barTexture or "Interface\\Buttons\\WHITE8X8" end,
+        function(v) ns.db.detailDisplay.barTexture=v; if ns.DetailView then ns.DetailView:Refresh() end end)
+
+    y = self:Dropdown(inner, L["技能详情页字体"], y, fonts,
+        function() return ns.db.detailDisplay.font or STANDARD_TEXT_FONT end,
+        function(v) ns.db.detailDisplay.font=v; if ns.DetailView then ns.DetailView:Refresh() end end)
+        
+    y = self:Slider(inner, L["字体基础大小"], y, 8, 20, 1,
+        function() return ns.db.detailDisplay.fontSizeBase or 10 end,
+        function(v) ns.db.detailDisplay.fontSizeBase=v; if ns.DetailView then ns.DetailView:Refresh() end end)
+        
+    y = self:Dropdown(inner, L["字体描边"], y, outlines,
+        function() return ns.db.detailDisplay.fontOutline or "OUTLINE" end,
+        function(v) ns.db.detailDisplay.fontOutline=v; if ns.DetailView then ns.DetailView:Refresh() end end)
+        
+    y = self:Check(inner, L["开启文字阴影"], y,
+        function() return ns.db.detailDisplay.fontShadow end,
+        function(v) ns.db.detailDisplay.fontShadow=v; if ns.DetailView then ns.DetailView:Refresh() end end)
+
     inner:SetHeight(math.abs(y) + 20)
 end
 
@@ -744,42 +782,72 @@ function Config:Dropdown(p, label, y, opts, getter, setter)
     local btn = CreateFrame("Button", nil, p); btn:SetSize(220, 20); btn:SetPoint("TOPLEFT", 6, y); self:FillBg(btn, 0.1, 0.1, 0.15, 1); self:CreateBorder(btn, 0.3, 0.3, 0.4, 1)
     
     local bt = btn:CreateFontString(nil, "OVERLAY"); bt:SetFont(STANDARD_TEXT_FONT, 11, ""); bt:SetPoint("LEFT", 6, 0); bt:SetTextColor(0.9, 0.9, 0.9)
-    -- 使用几何倒三角替换原本的英文字母 "v"
-    local arrow = btn:CreateFontString(nil, "OVERLAY"); arrow:SetFont(STANDARD_TEXT_FONT, 9, ""); arrow:SetPoint("RIGHT", -8, 0); arrow:SetTextColor(0.5, 0.5, 0.5); arrow:SetText("▼")
+    
+    local arrow = btn:CreateTexture(nil, "OVERLAY")
+    arrow:SetSize(12, 12)
+    arrow:SetPoint("RIGHT", -6, 0)
+    -- ★ 修正：默认关闭状态，显示向下的“展开”图标 (btn_expand)
+    arrow:SetTexture("Interface\\AddOns\\"..addonName.."\\Textures\\btn_expand.tga")
+    arrow:SetVertexColor(0.7, 0.7, 0.7)
     
     local hlBtn = btn:CreateTexture(nil, "HIGHLIGHT"); hlBtn:SetAllPoints(); hlBtn:SetColorTexture(1, 1, 1, 0.05)
     
     local function refreshText() local cur = getter(); for _, o in ipairs(opts) do if o.v == cur then bt:SetText(o.l); return end end; bt:SetText(opts[1].l) end; refreshText()
     
-    local blocker = CreateFrame("Button", nil, p); blocker:SetAllPoints(UIParent); blocker:SetFrameStrata("TOOLTIP"); blocker:SetFrameLevel(90); blocker:Hide(); blocker:SetScript("OnClick", function() blocker:Hide() end)
+    local blocker = CreateFrame("Button", nil, p); blocker:SetAllPoints(UIParent); blocker:SetFrameStrata("TOOLTIP"); blocker:SetFrameLevel(90); blocker:Hide(); 
+    blocker:SetScript("OnClick", function() 
+        blocker:Hide() 
+        -- ★ 修正：点击空白处收起时，恢复向下的“展开”图标
+        arrow:SetTexture("Interface\\AddOns\\"..addonName.."\\Textures\\btn_expand.tga")
+    end)
+    
     local list = CreateFrame("Frame", nil, blocker); list:SetPoint("TOPLEFT", btn, "BOTTOMLEFT", 0, -2); list:SetPoint("TOPRIGHT", btn, "BOTTOMRIGHT", 0, -2); list:SetHeight(#opts * 20 + 4); list:SetFrameLevel(95); self:FillBg(list, 0.08, 0.08, 0.1, 1); self:CreateBorder(list, 0.3, 0.3, 0.4, 1)
     
     btn.items = {}
-    -- 下拉列表内选项增加悬停高亮
     for i, o in ipairs(opts) do
         local item = CreateFrame("Button", nil, list); item:SetHeight(20); item:SetPoint("TOPLEFT", list, "TOPLEFT", 2, -((i-1)*20 + 2)); item:SetPoint("TOPRIGHT", list, "TOPRIGHT", -2, -((i-1)*20 + 2))
         local hl = item:CreateTexture(nil, "HIGHLIGHT"); hl:SetAllPoints(); hl:SetColorTexture(0, 0.75, 1, 0.2)
         local itx = item:CreateFontString(nil, "OVERLAY"); itx:SetFont(STANDARD_TEXT_FONT, 11, ""); itx:SetPoint("LEFT", 6, 0); itx:SetTextColor(0.8, 0.8, 0.8); itx:SetText(o.l)
-        item:SetScript("OnClick", function() setter(o.v); bt:SetText(o.l); blocker:Hide() end)
+        item:SetScript("OnClick", function() 
+            setter(o.v); 
+            bt:SetText(o.l); 
+            blocker:Hide() 
+            -- ★ 修正：选中选项收起时，恢复向下的“展开”图标
+            arrow:SetTexture("Interface\\AddOns\\"..addonName.."\\Textures\\btn_expand.tga")
+        end)
         table.insert(btn.items, {btn = item, txt = itx})
     end
 
-    -- ★ 新增：允许动态更新菜单内的文字选项
     btn.UpdateOpts = function(newOpts)
         opts = newOpts
         for i, o in ipairs(opts) do
             local row = btn.items[i]
             if row then
                 row.txt:SetText(o.l)
-                row.btn:SetScript("OnClick", function() setter(o.v); bt:SetText(o.l); blocker:Hide() end)
+                row.btn:SetScript("OnClick", function() 
+                    setter(o.v); 
+                    bt:SetText(o.l); 
+                    blocker:Hide() 
+                    -- ★ 修正：选中选项收起时，恢复向下的“展开”图标
+                    arrow:SetTexture("Interface\\AddOns\\"..addonName.."\\Textures\\btn_expand.tga")
+                end)
             end
         end
         refreshText()
     end
     
-    btn:SetScript("OnClick", function() if blocker:IsShown() then blocker:Hide() else blocker:Show() end end); 
+    btn:SetScript("OnClick", function() 
+        if blocker:IsShown() then 
+            blocker:Hide() 
+            -- ★ 修正：主动点击收起时，恢复向下的“展开”图标
+            arrow:SetTexture("Interface\\AddOns\\"..addonName.."\\Textures\\btn_expand.tga")
+        else 
+            blocker:Show() 
+            -- ★ 修正：展开时，切换为向上的“收起”图标 (btn_collapse)
+            arrow:SetTexture("Interface\\AddOns\\"..addonName.."\\Textures\\btn_collapse.tga")
+        end 
+    end)
     
-    -- ★ 修改：同时返回新的 y 坐标 和 按钮本体
     return y - 28, btn
 end
 

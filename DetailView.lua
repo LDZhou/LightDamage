@@ -11,8 +11,6 @@ ns.FONT_MAIN = ns.FONT_MAIN or STANDARD_TEXT_FONT
 local DV = {}
 ns.DetailView = DV
 
-
-local ROW_H  = 20
 local ICON_W = 18
 
 local ROW_BG = {
@@ -23,6 +21,21 @@ local BG_HEADER  = {0.04, 0.04, 0.08, 0.96}
 local BG_SECTION = {0.05, 0.08, 0.13, 0.92}
 local BG_FATAL   = {0.22, 0.03, 0.03, 0.96}
 
+-- 获取动态外观参数
+function DV:GetBarConfig()
+    local db = ns.db and ns.db.detailDisplay or {}
+    return db.barHeight or 20, 
+           db.barGap or 1, 
+           db.barAlpha or 0.92, 
+           db.font or ns.FONT_MAIN, 
+           db.fontSizeBase or 10, 
+           db.fontOutline or "OUTLINE", 
+           db.fontShadow or false,
+           db.barThickness or db.barHeight or 20,
+           db.barVOffset or 0,
+           db.barTexture or "Interface\\Buttons\\WHITE8X8"
+end
+
 -- ============================================================
 -- 面板创建
 -- ============================================================
@@ -30,9 +43,11 @@ function DV:EnsureCreated()
     if self.frame then return end
 
     local f = CreateFrame("Frame", "LDStatsDetail", UIParent, "BackdropTemplate")
-    f:SetSize(380, 420)
+    local dbW = ns.db and ns.db.detailWindow or { width = 380, height = 420 }
+    f:SetSize(dbW.width, dbW.height)
     f:SetFrameStrata("HIGH"); f:SetFrameLevel(20)
-    f:SetClampedToScreen(true); f:SetMovable(true); f:EnableMouse(true)
+    f:SetClampedToScreen(true); f:SetMovable(true); f:SetResizable(true); f:EnableMouse(true)
+    if f.SetResizeBounds then f:SetResizeBounds(250, 200, 1000, 1000) end
     f:SetBackdrop({
         bgFile   = "Interface\\Buttons\\WHITE8X8",
         edgeFile = "Interface\\Buttons\\WHITE8X8",
@@ -41,13 +56,12 @@ function DV:EnsureCreated()
     f:SetBackdropColor(0.04, 0.04, 0.06, 0.97)
     f:SetBackdropBorderColor(0.25, 0.25, 0.32, 0.9)
 
-
     -- 标题栏
     local tb = CreateFrame("Frame", nil, f)
     tb:SetHeight(24)
     tb:SetPoint("TOPLEFT", 1, -1); tb:SetPoint("TOPRIGHT", -1, -1)
     tb:EnableMouse(true); tb:RegisterForDrag("LeftButton")
-    tb:SetScript("OnDragStart", function() f:StartMoving() end)
+    tb:SetScript("OnDragStart", function() if not (ns.db.window and ns.db.window.locked) then f:StartMoving() end end)
     tb:SetScript("OnDragStop",  function() f:StopMovingOrSizing() end)
     local tbg = tb:CreateTexture(nil, "BACKGROUND"); tbg:SetAllPoints()
     tbg:SetColorTexture(0.06, 0.06, 0.10, 1)
@@ -108,12 +122,42 @@ function DV:EnsureCreated()
     thumb:SetVertexColor(0.4, 0.4, 0.4, 0.8); thumb:SetSize(3, 30)
 
     sc:SetScript("OnMouseWheel", function(_, delta)
+        local bh = DV:GetBarConfig()
         local cur = sb:GetValue()
         local _, mx = sb:GetMinMaxValues()
-        sb:SetValue(math.max(0, math.min(mx, cur - delta * ROW_H * 3)))
+        sb:SetValue(math.max(0, math.min(mx, cur - delta * bh * 3)))
     end)
     sb:SetScript("OnValueChanged", function(_, val)
         sc:SetVerticalScroll(val)
+    end)
+    
+    -- ★ 新增：缩放手柄
+    local resizeGrabber = CreateFrame("Frame", nil, f)
+    resizeGrabber:SetSize(16, 16); resizeGrabber:SetPoint("BOTTOMRIGHT", 0, 0)
+    resizeGrabber:SetFrameLevel(f:GetFrameLevel() + 15); resizeGrabber:EnableMouse(true)
+    local gt = resizeGrabber:CreateTexture(nil, "OVERLAY"); gt:SetAllPoints()
+    gt:SetTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up")
+    resizeGrabber:SetScript("OnMouseDown", function()
+        if not (ns.db.window and ns.db.window.locked) then f:StartSizing("BOTTOMRIGHT"); self._resizing = true end
+    end)
+    resizeGrabber:SetScript("OnMouseUp", function() 
+        if not self._resizing then return end
+        self._resizing = false
+        f:StopMovingOrSizing()
+        if not ns.db.detailWindow then ns.db.detailWindow = {} end
+        ns.db.detailWindow.width = f:GetWidth()
+        ns.db.detailWindow.height = f:GetHeight()
+        self:UpdatePosition()
+        if self._lastTotalH then self:UpdateScroll(self._lastTotalH) end
+    end)
+
+    f:HookScript("OnSizeChanged", function()
+        if self._lastTotalH then
+            local viewH = sc:GetHeight()
+            local maxScroll = math.max(0, self._lastTotalH - viewH)
+            sb:SetMinMaxValues(0, maxScroll)
+            if self._lastTotalH > viewH then inner:SetWidth(sc:GetWidth() - 5) else inner:SetWidth(sc:GetWidth()) end
+        end
     end)
 
     self.frame      = f
@@ -177,13 +221,13 @@ function DV:UpdatePosition()
         end
     end
 end
+
 -- ============================================================
 -- 应用动态外观主题
 -- ============================================================
 function DV:ApplyTheme()
     if not self.frame then return end
     local dbW = ns.db and ns.db.window or {}
-    local dbD = ns.db and ns.db.display or {}
     
     -- 1. 同步背景颜色
     local bg = dbW.bgColor or {0.04, 0.04, 0.05, 0.90}
@@ -193,25 +237,29 @@ function DV:ApplyTheme()
     local tc = dbW.themeColor or {0.08, 0.08, 0.12, 1}
     self.titleBg:SetColorTexture(unpack(tc))
     
-    -- 3. 同步字体与字号
-    local font = dbD.font or ns.FONT_MAIN
-    local fSize = dbD.fontSizeBase or 10
-    local outline = dbD.fontOutline or "OUTLINE"
+    -- 3. ★ 使用全新 DetailDisplay 字体同步
+    local _, _, _, font, fSz, fOut, fShad = self:GetBarConfig()
+    local function _applyFont(fs, sz)
+        fs:SetFont(font, sz, fOut)
+        if fShad then fs:SetShadowColor(0,0,0,1); fs:SetShadowOffset(1,-1)
+        else fs:SetShadowOffset(0,0) end
+    end
     
-    if self.titleText then self.titleText:SetFont(font, fSize + 1, outline) end
-    if self.backText then self.backText:SetFont(font, fSize + 4, outline) end
-    if self.closeText then self.closeText:SetFont(font, fSize + 2, outline) end
+    if self.titleText then _applyFont(self.titleText, fSz + 1) end
+    if self.backText then _applyFont(self.backText, fSz + 4) end
+    if self.closeText then _applyFont(self.closeText, fSz + 2) end
     
     for _, r in ipairs(self.rows) do
-        r.name:SetFont(font, fSize, outline)
-        r.value:SetFont(font, fSize, outline)
+        _applyFont(r.name, fSz)
+        _applyFont(r.value, fSz)
     end
 end
+
 -- ============================================================
 -- 滚动条高度更新
 -- ============================================================
-function DV:UpdateScroll(rowCount)
-    local totalH = rowCount * (ROW_H + 1)
+function DV:UpdateScroll(totalH)
+    self._lastTotalH = totalH
     self.content:SetHeight(math.max(10, totalH))
 
     local viewH    = self.scrollFrame:GetHeight()
@@ -240,37 +288,36 @@ function DV:GetRow(idx)
     r.frame:Hide()
 
     r.bg = r.frame:CreateTexture(nil, "BACKGROUND")
-    r.bg:SetAllPoints()
-    r.bg:SetColorTexture(unpack(ROW_BG[(idx % 2) + 1]))
-
     r.fill = CreateFrame("StatusBar", nil, r.frame)
-    r.fill:SetPoint("TOPLEFT"); r.fill:SetPoint("BOTTOMLEFT")
-    r.fill:SetPoint("RIGHT")
     r.fill:SetMinMaxValues(0, 1); r.fill:SetValue(0)
 
     -- ★ 核心修复：创建一个专门用于放图标和文字的子框架，并强行拔高它的渲染层级
     r.textFrame = CreateFrame("Frame", nil, r.frame)
-    r.textFrame:SetAllPoints()
     r.textFrame:SetFrameLevel(r.fill:GetFrameLevel() + 2)
 
     -- ★ 以下的 icon, name, value 统统挂载到新创建的 textFrame 上
     r.icon = r.textFrame:CreateTexture(nil, "ARTWORK")
-    r.icon:SetSize(ICON_W - 2, ICON_W - 2)
-    r.icon:SetPoint("LEFT", 3, 0)
     r.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
     r.icon:Hide()
 
-    r.name = r.textFrame:CreateFontString(nil, "OVERLAY")
-    r.name:SetFont(ns.FONT_MAIN, 9, "OUTLINE")
-    r.name:SetWidth(200)
-    r.name:SetJustifyH("LEFT"); r.name:SetWordWrap(false)
-    r.name:SetTextColor(1, 1, 1)
-
+    -- 先创建右侧的数值区域（宽度自适应）
     r.value = r.textFrame:CreateFontString(nil, "OVERLAY")
-    r.value:SetFont(ns.FONT_MAIN, 9, "OUTLINE")
     r.value:SetPoint("RIGHT", -4, 0)
     r.value:SetJustifyH("RIGHT")
     r.value:SetTextColor(1, 1, 1)
+
+    -- 新增一个受限制的视觉裁剪框，右边界死死锚定在数值的前方 8 像素处
+    r.nameClipFrame = CreateFrame("Frame", nil, r.textFrame)
+    r.nameClipFrame:SetPoint("TOP", r.textFrame, "TOP")
+    r.nameClipFrame:SetPoint("BOTTOM", r.textFrame, "BOTTOM")
+    r.nameClipFrame:SetPoint("LEFT", r.textFrame, "LEFT", 0, 0)
+    r.nameClipFrame:SetPoint("RIGHT", r.value, "LEFT", -8, 0) 
+    r.nameClipFrame:SetClipsChildren(true) -- 开启裁剪：超出框范围的字直接一刀切
+
+    -- 名字挂载到裁剪框上，解除本身的宽度限制
+    r.name = r.nameClipFrame:CreateFontString(nil, "OVERLAY")
+    r.name:SetJustifyH("LEFT"); r.name:SetWordWrap(false)
+    r.name:SetTextColor(1, 1, 1)
 
     -- 悬停的高亮材质可以留在原底板上
     r.hl = r.frame:CreateTexture(nil, "HIGHLIGHT")
@@ -292,23 +339,53 @@ function DV:ClearRows()
     end
 end
 
-function DV:PlaceRow(idx, yOff, h, bgOverride)
+function DV:PlaceRow(idx, yOff, h, bgOverride, thickness, vOffset)
     local r = self:GetRow(idx)
     r.frame:ClearAllPoints()
     r.frame:SetPoint("TOPLEFT",  self.content, "TOPLEFT",  0,  yOff)
     r.frame:SetPoint("TOPRIGHT", self.content, "TOPRIGHT", -2, yOff)
-    r.frame:SetHeight(h or ROW_H)
-    r.icon:Hide()
-    r.fill:SetMinMaxValues(0, 1)
-    r.fill:SetValue(0)
+    r.frame:SetHeight(h)
+    
+    thickness = thickness or h
+    vOffset = vOffset or 0
+    
+    r.icon:SetSize(h - 2, h - 2)
+    r.icon:ClearAllPoints()
+    r.icon:SetPoint("LEFT", r.textFrame, "LEFT", 3, 0)
+    
+    r.bg:ClearAllPoints()
+    r.bg:SetPoint("BOTTOMLEFT", r.frame, "BOTTOMLEFT", 0, vOffset)
+    r.bg:SetPoint("BOTTOMRIGHT", r.frame, "BOTTOMRIGHT", 0, vOffset)
+    r.bg:SetHeight(thickness)
+    
+    r.fill:ClearAllPoints()
+    r.fill:SetPoint("BOTTOMLEFT", r.frame, "BOTTOMLEFT", 0, vOffset)
+    r.fill:SetPoint("BOTTOMRIGHT", r.frame, "BOTTOMRIGHT", 0, vOffset)
+    r.fill:SetHeight(thickness)
+    
+    r.textFrame:ClearAllPoints()
+    r.textFrame:SetAllPoints(r.frame)
 
     local bgc = bgOverride or ROW_BG[(idx % 2) + 1]
     r.bg:SetColorTexture(unpack(bgc))
 
+    r.icon:Hide()
     r.name:ClearAllPoints()
-    r.name:SetPoint("LEFT", 6, 0)
+    r.name:SetPoint("LEFT", r.nameClipFrame, "LEFT", 6, 0)
 
+    r.fill:SetMinMaxValues(0, 1)
+    r.fill:SetValue(0)
     r.frame:Show()
+
+    local _, _, _, font, fSz, fOut, fShad = self:GetBarConfig()
+    local function _applyFont(fs, sz)
+        fs:SetFont(font, sz, fOut)
+        if fShad then fs:SetShadowColor(0,0,0,1); fs:SetShadowOffset(1,-1)
+        else fs:SetShadowOffset(0,0) end
+    end
+    _applyFont(r.name, fSz)
+    _applyFont(r.value, fSz)
+
     return r
 end
 
@@ -317,11 +394,11 @@ local function setNameWithIcon(r, iconTex, text)
         r.icon:SetTexture(iconTex)
         r.icon:Show()
         r.name:ClearAllPoints()
-        r.name:SetPoint("LEFT", ICON_W + 4, 0)
+        r.name:SetPoint("LEFT", r.nameClipFrame, "LEFT", r.icon:GetWidth() + 7, 0)
     else
         r.icon:Hide()
         r.name:ClearAllPoints()
-        r.name:SetPoint("LEFT", 6, 0)
+        r.name:SetPoint("LEFT", r.nameClipFrame, "LEFT", 6, 0)
     end
     r.name:SetText(text)
 end
@@ -339,44 +416,38 @@ local function GetSpellIcon(spellID)
 end
 
 -- ============================================================
--- ★ 从设置里获取条的材质和透明度（跟主界面统一）
--- ============================================================
-local function getBarStyle()
-    local db = ns.db and ns.db.display or {}
-    return db.barTexture or "Interface\\TargetingFrame\\UI-StatusBar",
-           db.barAlpha   or 0.85
-end
-
--- ============================================================
 -- 技能列表渲染
 -- ============================================================
 function DV:RenderSpellList(name, class, mode, spells, dur, titleSuffix)
+    self._lastRenderArgs = { type = "spell", args = {name, class, mode, spells, dur, titleSuffix} }
     self:EnsureCreated()
     self.frame:Show()
     self:ApplyTheme()
     self:ClearRows()
 
     local ch = ns:GetClassHex(class)
-    local mn = ns.MODE_NAMES[mode] or mode
+    -- ★ 在这里实时获取翻译
+    local rawModeName = ns.MODE_NAMES[mode] or mode
+    local mn = L[rawModeName] or rawModeName
     local suffix = titleSuffix or ""
-    self.titleText:SetFormattedText(L["%s%s|r 的%s细分%s"], ch, ns:DisplayName(name), mn, suffix) -- ★ 添加DisplayName
+    self.titleText:SetFormattedText(L["%s%s|r 的%s细分%s"], ch, ns:DisplayName(name), mn, suffix)
+
+    local bh, gap, alpha, _, _, _, _, thickness, vOffset, texPath = self:GetBarConfig()
+    local currentY = 0
 
     if #spells == 0 then
-        local r = self:PlaceRow(1, 0, ROW_H)
+        local r = self:PlaceRow(1, 0, bh, nil, thickness, vOffset)
         r.name:SetText(L["|cff555555暂无技能数据|r"])
         r.value:SetText("")
-        self:UpdateScroll(2)
-        self.frame:Show()
+        self:UpdateScroll(bh + 5)
         return
     end
 
     local maxV = spells[1] and (spells[1].secretAmt or spells[1].value) or 0
-    local cw      = self.content:GetWidth()
-    local texPath, alpha = getBarStyle()
 
     for i, sp in ipairs(spells) do
-        local y = -((i - 1) * (ROW_H + 1))
-        local r = self:PlaceRow(i, y)
+        local r = self:PlaceRow(i, currentY, bh, nil, thickness, vOffset)
+        currentY = currentY - (bh + gap)
 
         r.fill:SetStatusBarTexture(texPath)
         r.fill:SetMinMaxValues(0, maxV)
@@ -388,24 +459,17 @@ function DV:RenderSpellList(name, class, mode, spells, dur, titleSuffix)
         r.fill:SetStatusBarColor(sc2[1], sc2[2], sc2[3], alpha)
 
         local sn = sp.name or "?"
-        if #sn > 26 then sn = sn:sub(1, 25) .. "…" end
         local nc = sp.isPet and "|cff55bb55" or "|cffffffff"
         
-        -- ▼▼▼ 新增：可规避伤害高亮逻辑 ▼▼▼
         if sp.isAvoidable then
-            -- 把背景板改成明显的暗黄色 / 警示色
             r.bg:SetColorTexture(0.35, 0.25, 0.05, 0.85)
-            -- 名字前面加上醒目的 [规避] 标签，并把字体标黄
             nc = "|cffffcc00[规避] "
         end
-        -- ▲▲▲ 新增结束 ▲▲▲
         
-        setNameWithIcon(r, GetSpellIcon(sp.spellID), nc .. sn .. "|r")
-
+        -- 【先】设定右侧值文字，让它把占位大小确定下来
         local isCount = (mode == "interrupts" or mode == "dispels")
         local valStr
         if sp.secretAmt then
-            -- 使用暴雪指定的 AbbreviateNumbers 解析 Secret Value
             valStr = AbbreviateNumbers(sp.secretAmt)
         elseif isCount then
             valStr = string.format(L["|cffffff00%d次|r"], sp.value)
@@ -415,9 +479,11 @@ function DV:RenderSpellList(name, class, mode, spells, dur, titleSuffix)
             valStr = ns:FormatNumber(sp.value)
         end
         
-        -- Secret Value 无法计算占比，显示为 --%
         local pctStr = sp.secretAmt and "--%" or string.format("%.0f%%", sp.percent or 0)
         r.value:SetText(valStr .. " |cffaaaaaa" .. pctStr .. "|r")
+
+        -- 【后】再赋予左侧名字，此时超出裁剪框的部分会被完美隐藏
+        setNameWithIcon(r, GetSpellIcon(sp.spellID), nc .. sn .. "|r")
 
         local sp_c = sp
         r.frame:SetScript("OnEnter", function(fw)
@@ -445,7 +511,7 @@ function DV:RenderSpellList(name, class, mode, spells, dur, titleSuffix)
         r.frame:SetScript("OnLeave", function() GameTooltip:Hide() end)
     end
 
-    self:UpdateScroll(#spells)
+    self:UpdateScroll(math.abs(currentY))
 end
 
 -- ============================================================
@@ -531,18 +597,20 @@ end
 -- 战斗中队友数据受保护提示
 -- ============================================================
 function DV:ShowCombatLocked(safeName)
+    self._lastRenderArgs = { type = "combat", args = {safeName} }
     self:EnsureCreated()
     self.frame:Show()
     self:ClearRows()
     self.titleText:SetFormattedText(L["%s 的技能细分"], ns:DisplayName(safeName) or L["未知"]) -- ★ 添加DisplayName
-    local r = self:PlaceRow(1, 0, ROW_H * 2)
+    
+    local bh, gap, _, _, _, _, _, thickness, vOffset = self:GetBarConfig()
+    local r = self:PlaceRow(1, 0, bh * 2, nil, thickness * 2, vOffset)
     
     r.name:SetText("|cffaaaaaa[API限制，请脱战后查看")
     
     r.name:SetWidth(300)
     r.value:SetText("")
-    self:UpdateScroll(3)
-    
+    self:UpdateScroll(bh * 2 + 5)
 end
 
 -- ============================================================
@@ -644,6 +712,7 @@ end
 -- 死亡事件详情
 -- ============================================================
 function DV:ShowDeathDetail(death)
+    self._lastRenderArgs = { type = "death", args = {death} }
     self:EnsureCreated()
     self.frame:Show()
     self:ApplyTheme()
@@ -660,14 +729,15 @@ function DV:ShowDeathDetail(death)
         table.insert(evReversed, events[i])
     end
 
-    local texPath, alpha = getBarStyle()
-    local cw        = self.content:GetWidth()
+    local bh, gap, alpha, _, _, _, _, thickness, vOffset, texPath = self:GetBarConfig()
     local ri        = 0
+    local currentY  = 0
     local deathTime = events[#events] and events[#events].time or GetTime()
 
     -- 致命一击行
     ri = ri + 1
-    local hr = self:PlaceRow(ri, 0, ROW_H + 4, BG_FATAL)
+    local hr = self:PlaceRow(ri, currentY, bh + 4, BG_FATAL, thickness + 4, vOffset)
+    currentY = currentY - (bh + 4 + gap)
     hr.fill:SetStatusBarTexture(texPath)
     hr.fill:SetMinMaxValues(0, 1)
     hr.fill:SetValue(1)
@@ -682,7 +752,8 @@ function DV:ShowDeathDetail(death)
 
     -- 分割线
     ri = ri + 1
-    local sep = self:PlaceRow(ri, -((ri - 1) * (ROW_H + 1)), 15, BG_SECTION)
+    local sep = self:PlaceRow(ri, currentY, 15, BG_SECTION, 15, 0)
+    currentY = currentY - (15 + gap)
     sep.fill:SetMinMaxValues(0, 1)
     sep.fill:SetValue(0)
     sep.name:SetText(L["|cff4499cc— 死亡前事件（近 → 远）|r"])
@@ -690,15 +761,16 @@ function DV:ShowDeathDetail(death)
 
     if #evReversed == 0 then
         ri = ri + 1
-        local er = self:PlaceRow(ri, -((ri - 1) * (ROW_H + 1)), ROW_H)
+        local er = self:PlaceRow(ri, currentY, bh, nil, thickness, vOffset)
+        currentY = currentY - (bh + gap)
         er.name:SetText(L["|cff444444暂无事件数据（12.0副本内CLEU受限）|r"])
         er.value:SetText("")
     end
 
     for idx, ev in ipairs(evReversed) do
         ri = ri + 1
-        local yOff = -((ri - 1) * (ROW_H + 1))
-        local r    = self:PlaceRow(ri, yOff)
+        local r    = self:PlaceRow(ri, currentY, bh, nil, thickness, vOffset)
+        currentY = currentY - (bh + gap)
         local isFatal = (idx == 1 and not ev.isHeal)
 
         local hpPct = math.min(1, math.max(0, (ev.hpPercent or 0) / 100))
@@ -776,8 +848,8 @@ function DV:ShowDeathDetail(death)
 
     -- 底部汇总行
     ri = ri + 1
-    local yBot = -((ri - 1) * (ROW_H + 1))
-    local tr   = self:PlaceRow(ri, yBot, ROW_H + 4, BG_HEADER)
+    local tr   = self:PlaceRow(ri, currentY, bh + 4, BG_HEADER, thickness + 4, vOffset)
+    currentY = currentY - (bh + 4 + gap)
     tr.fill:SetStatusBarTexture(texPath)
     tr.fill:SetMinMaxValues(0, 1)
     tr.fill:SetValue(1)
@@ -789,7 +861,7 @@ function DV:ShowDeathDetail(death)
         and string.format(L["|cff888888跨度 %.1fs|r"], death.timeSpan) or ""
     tr.value:SetText(spanStr)
 
-    self:UpdateScroll(ri + 1)
+    self:UpdateScroll(math.abs(currentY))
 end
 
 -- ============================================================
@@ -798,6 +870,14 @@ end
 function DV:IsVisible() return self.frame and self.frame:IsShown() end
 function DV:Refresh()
     if self.frame and self.frame:IsShown() then
-        self:ApplyTheme()
+        if self._lastRenderArgs then
+            local t = self._lastRenderArgs.type
+            local a = self._lastRenderArgs.args
+            if t == "spell" then self:RenderSpellList(unpack(a))
+            elseif t == "death" then self:ShowDeathDetail(unpack(a))
+            elseif t == "combat" then self:ShowCombatLocked(unpack(a)) end
+        else
+            self:ApplyTheme()
+        end
     end
 end

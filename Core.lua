@@ -23,6 +23,21 @@ ns.defaults = {
         bgColor    = {0, 0.7, 0.7, 0},
         ovrBgColor = {1, 1, 1, 0.05},
     },
+    detailWindow = {
+        width = 380, height = 420,
+    },
+    detailDisplay = {
+        barHeight     = 20,
+        barThickness  = 20,
+        barVOffset    = 0,
+        barGap        = 1,
+        barAlpha      = 0.92,
+        barTexture    = "Interface\\Buttons\\WHITE8X8",
+        font          = STANDARD_TEXT_FONT,
+        fontSizeBase  = 10,
+        fontOutline   = "OUTLINE",
+        fontShadow    = false,
+    },
     display = {
         mode          = "split",
         showPerSecond = true,
@@ -165,7 +180,7 @@ function Core:OnInitialize()
         end
 
         -- 3. 清理旧的角色级配置数据(节约空间，只保留战斗历史等)
-        local CONFIG_KEYS = { window=true, display=true, split=true, mythicPlus=true, tracking=true, smartRefresh=true, useBlizzMeter=true }
+        local CONFIG_KEYS = { window=true, display=true, split=true, mythicPlus=true, tracking=true, smartRefresh=true, useBlizzMeter=true, detailWindow=true, detailDisplay=true }
         for k in pairs(CONFIG_KEYS) do
             if LDCombatStatsDB[k] then LDCombatStatsDB[k] = nil end
         end
