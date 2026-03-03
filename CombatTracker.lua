@@ -461,22 +461,43 @@ function CT:LoadSegmentData(seg)
                     if spellID > 0 then
                         local amt = getAmount(sp.totalAmount)
                         if amt > 0 then
-                            if not pd[spellTable][spellID] then
-                                local spellName = (C_Spell and C_Spell.GetSpellName and C_Spell.GetSpellName(spellID)) or ("spell:" .. spellID)
-                                pd[spellTable][spellID] = segs:NewSpellData(spellID, spellName, nil)
+                            local targetSpells = pd[spellTable]
+                            
+                            -- ★ 终极正解：通过法术自带的 creatureName 识别宠物
+                            local isPetSpell = false
+                            local petName = sp.creatureName
+                            
+                            -- 如果存在附属生物名字，且不是玩家自己，必然是宝宝放的
+                            if petName and petName ~= "" and petName ~= pd.name and petName ~= srcData.name then
+                                isPetSpell = true
                             end
-                            local sd = pd[spellTable][spellID]
+                            
+                            if isPetSpell then
+                                if not pd.pets[petName] then
+                                    pd.pets[petName] = { name = petName, spells = {}, damageTakenSpells = {}, damage = 0, healing = 0 }
+                                end
+                                targetSpells = pd.pets[petName][spellTable]
+                                
+                                if dmType == Enum.DamageMeterType.HealingDone then
+                                    pd.pets[petName].healing = (pd.pets[petName].healing or 0) + amt
+                                elseif dmType == Enum.DamageMeterType.DamageDone then
+                                    pd.pets[petName].damage = (pd.pets[petName].damage or 0) + amt
+                                end
+                            end
+
+                            if not targetSpells[spellID] then
+                                local spellName = (C_Spell and C_Spell.GetSpellName and C_Spell.GetSpellName(spellID)) or ("spell:" .. spellID)
+                                targetSpells[spellID] = segs:NewSpellData(spellID, spellName, nil)
+                            end
+                            local sd = targetSpells[spellID]
+                            
                             if dmType == Enum.DamageMeterType.HealingDone then
                                 sd.healing = (sd.healing or 0) + amt
                             else
                                 sd.damage = (sd.damage or 0) + amt
                             end
                             sd.hits = (sd.hits or 0) + 1
-
-                            -- ▼▼▼ 新增：记录可规避伤害标记 ▼▼▼
-                            if sp.isAvoidable then
-                                sd.isAvoidable = true
-                            end
+                            if sp.isAvoidable then sd.isAvoidable = true end
                         end
                     end
                 end
@@ -921,23 +942,43 @@ function CT:RebuildOverall(sessions, sessionCount)
                             if spellID > 0 then
                                 local amt = getAmount(sp.totalAmount)
                                 if amt > 0 then
-                                    if not pd[spellField][spellID] then
-                                        local spellName = (C_Spell and C_Spell.GetSpellName and C_Spell.GetSpellName(spellID)) or ("spell:" .. spellID)
-                                        pd[spellField][spellID] = segs:NewSpellData(spellID, spellName, nil)
+                                    local targetSpells = pd[spellField]
+                                    
+                                    -- 通过法术自带的 creatureName 识别宠物
+                                    local isPetSpell = false
+                                    local petName = sp.creatureName
+                                    
+                                    -- 如果存在附属生物名字，且不是玩家自己，必然是宝宝放的
+                                    if petName and petName ~= "" and petName ~= pd.name and petName ~= srcData.name then
+                                        isPetSpell = true
                                     end
-                                    local sd = pd[spellField][spellID]
-                                    -- 修复：判断是治疗还是伤害，分别存入对应字段
+                                    
+                                    if isPetSpell then
+                                        if not pd.pets[petName] then
+                                            pd.pets[petName] = { name = petName, spells = {}, damageTakenSpells = {}, damage = 0, healing = 0 }
+                                        end
+                                        targetSpells = pd.pets[petName][spellField]
+                                        
+                                        if dmType == Enum.DamageMeterType.HealingDone then
+                                            pd.pets[petName].healing = (pd.pets[petName].healing or 0) + amt
+                                        elseif dmType == Enum.DamageMeterType.DamageDone then
+                                            pd.pets[petName].damage = (pd.pets[petName].damage or 0) + amt
+                                        end
+                                    end
+
+                                    if not targetSpells[spellID] then
+                                        local spellName = (C_Spell and C_Spell.GetSpellName and C_Spell.GetSpellName(spellID)) or ("spell:" .. spellID)
+                                        targetSpells[spellID] = segs:NewSpellData(spellID, spellName, nil)
+                                    end
+                                    local sd = targetSpells[spellID]
+                                    
                                     if dmType == Enum.DamageMeterType.HealingDone then
                                         sd.healing = (sd.healing or 0) + amt
                                     else
                                         sd.damage = (sd.damage or 0) + amt
                                     end
                                     sd.hits = (sd.hits or 0) + 1
-
-                                    -- ▼▼▼ 新增：记录可规避伤害标记 ▼▼▼
-                                    if sp.isAvoidable then
-                                        sd.isAvoidable = true
-                                    end
+                                    if sp.isAvoidable then sd.isAvoidable = true end
                                 end
                             end
                         end

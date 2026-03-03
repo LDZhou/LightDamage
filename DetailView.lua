@@ -352,6 +352,7 @@ end
 -- ============================================================
 function DV:RenderSpellList(name, class, mode, spells, dur, titleSuffix)
     self:EnsureCreated()
+    self.frame:Show()
     self:ApplyTheme()
     self:ClearRows()
 
@@ -445,7 +446,6 @@ function DV:RenderSpellList(name, class, mode, spells, dur, titleSuffix)
     end
 
     self:UpdateScroll(#spells)
-    self.frame:Show()
 end
 
 -- ============================================================
@@ -532,6 +532,7 @@ end
 -- ============================================================
 function DV:ShowCombatLocked(safeName)
     self:EnsureCreated()
+    self.frame:Show()
     self:ClearRows()
     self.titleText:SetFormattedText(L["%s 的技能细分"], ns:DisplayName(safeName) or L["未知"]) -- ★ 添加DisplayName
     local r = self:PlaceRow(1, 0, ROW_H * 2)
@@ -541,7 +542,7 @@ function DV:ShowCombatLocked(safeName)
     r.name:SetWidth(300)
     r.value:SetText("")
     self:UpdateScroll(3)
-    self.frame:Show()
+    
 end
 
 -- ============================================================
@@ -644,6 +645,7 @@ end
 -- ============================================================
 function DV:ShowDeathDetail(death)
     self:EnsureCreated()
+    self.frame:Show()
     self:ApplyTheme()
     self:ClearRows()
     if not death then return end
@@ -788,7 +790,6 @@ function DV:ShowDeathDetail(death)
     tr.value:SetText(spanStr)
 
     self:UpdateScroll(ri + 1)
-    self.frame:Show()
 end
 
 -- ============================================================

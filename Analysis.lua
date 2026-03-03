@@ -84,13 +84,7 @@ end
 
 function Analysis:GetPlayerValue(pd, mode, segment)
     if mode == "damage" then
-        local dmg = pd.damage
-        if ns.db.tracking.mergePlayerPets then
-            for _, pet in pairs(pd.pets) do
-                dmg = dmg + (pet.damage or 0)
-            end
-        end
-        return dmg
+        return pd.damage
     elseif mode == "healing" then
         return pd.healing
     elseif mode == "damageTaken" then
