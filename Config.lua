@@ -546,7 +546,7 @@ function Config:BuildLookPage()
         {l=L["纯白"],     v="white"},
         {l=L["自定义"],   v="custom"},
     }
-    y = self:Dropdown(inner, L["名称颜色模式"], y, colorModes,
+    y = self:Dropdown(inner, L["名称颜色选择"], y, colorModes,
         function() return ns.db.display.textColorMode or "class" end,
         function(v)
             ns.db.display.textColorMode = v
