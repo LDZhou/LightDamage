@@ -1,5 +1,5 @@
 --[[
-    LD Combat Stats - Config.lua
+    Light Damage - Config.lua
 ]]
 
 local addonName, ns = ...
@@ -164,7 +164,7 @@ function Config:RefreshTitle()
     if self.titleText then
         local pName = LDCombatStatsDB and LDCombatStatsDB.activeProfile or "默认"
         local displayName = (pName == "默认") and L["默认"] or pName
-        self.titleText:SetText(string.format(L["|cff00ccffLD Combat Stats|r 设置 - %s"], displayName))
+        self.titleText:SetText(string.format(L["|cff00ccffLight Damage|r 设置 - %s"], displayName))
     end
 end
 
