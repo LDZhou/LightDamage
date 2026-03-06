@@ -26,7 +26,7 @@ ns.defaults = {
     window = {
         width = 400, height = 280,
         point = "BOTTOMRIGHT", relPoint = "BOTTOMRIGHT", x = -20, y = 180,
-        alpha = 0.92, scale = 1.0, locked = false,
+        alpha = 0.92, scale = 1.0, locked = false, visible = true,
         themeColor = {0, 0.85, 0.85, 0.05},
         bgColor    = {0, 0.7, 0.7, 0},
         ovrBgColor = {1, 1, 1, 0.05},

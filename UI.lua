@@ -161,7 +161,15 @@ function UI:Build()
     
     self:ApplyTheme()
     f:HookScript("OnSizeChanged", function() self:OnResize() end)
-    f:Show(); self:Layout()
+    
+    -- ★ 新增：根据保存的可见性状态决定是否显示
+    if ns.db.window.visible == false then
+        f:Hide()
+    else
+        f:Show()
+        self:Layout()
+    end
+    
     self:CheckAutoCollapse(true)
 
     self._lastFontHash = nil
@@ -1904,10 +1912,15 @@ end
 
 function UI:Toggle()
     self:EnsureCreated()
-    if self.frame:IsShown() then self.frame:Hide()
-    else self.frame:Show(); self:Layout() end
+    if self.frame:IsShown() then 
+        self.frame:Hide()
+        ns.db.window.visible = false  -- ★ 保存隐藏状态
+    else 
+        self.frame:Show()
+        ns.db.window.visible = true   -- ★ 保存显示状态
+        self:Layout() 
+    end
 end
-
 function UI:IsVisible()
     return self.frame and self.frame:IsShown()
 end
