@@ -76,9 +76,10 @@ local PREVIEW_MOCK = {
 }
 
 local PREVIEW_SCENES = {
-    { id="mplus",    labelKey="大秘境",  hasSumm=true,  hasOvr=true  },
-    { id="instance", labelKey="其他副本", hasSumm=false, hasOvr=true  },
-    { id="outdoor",  labelKey="非副本",  hasSumm=false, hasOvr=false },
+    { id="mplus",    labelKey="大秘境" },
+    { id="raid",     labelKey="团队副本" },
+    { id="dungeon",  labelKey="其他副本" },
+    { id="outdoor",  labelKey="非副本" },
 }
 
 ns.Config = Config
@@ -352,9 +353,14 @@ function Config:BuildLayoutPage()
     sec1:SetWidth(inner:GetWidth())
     local y1 = 0
     y1 = self:H(sec1, L["界面语言"], y1)
-    y1 = self:Dropdown(sec1, L["语言 (需要重载UI生效)"], y1, { {l=L["跟随客户端"], v="auto"}, {l="简体中文", v="zhCN"}, {l="繁体中文", v="zhTW"}, {l="English", v="enUS"} }, function() return ns.db.display.language or "auto" end, function(v) ns.db.display.language = v; ReloadUI() end)
-    sec1:SetHeight(math.abs(y1))
+    y1 = self:Dropdown(sec1, L["语言 (需要重载UI生效)"], y1, { {l=L["跟随客户端"], v="auto"}, {l="简体中文", v="zhCN"}, {l="繁体中文", v="zhTW"}, {l="English", v="enUS"}, {l="Русский", v="ruRU"} }, function() return ns.db.display.language or "auto" end, function(v) ns.db.display.language = v; ReloadUI() end)    sec1:SetHeight(math.abs(y1))
     self.laySec1 = sec1
+
+    -- ★ 定义共用的下拉选项数据（提出来统一管理，避免代码混乱）
+    local posesLR = { {l=L["左侧"], v=1}, {l=L["右侧"], v=2} }
+    local posesTB = { {l=L["上方"], v=1}, {l=L["下方"], v=2} }
+    local dirs = { {l=L["左右划分"], v="LR"}, {l=L["上下划分"], v="TB"} }
+    local allModes = { {l=L["伤害"], v="damage"}, {l=L["治疗"], v="healing"}, {l=L["承伤"], v="damageTaken"}, {l=L["死亡"], v="deaths"}, {l=L["打断"], v="interrupts"}, {l=L["驱散"], v="dispels"} }
 
     -- 区域2：当前与总计
     local sec2 = CreateFrame("Frame", nil, inner)
@@ -364,37 +370,34 @@ function Config:BuildLayoutPage()
     y2 = self:Check(sec2, L["同时显示当前与总计数据"], y2, 
         function() return ns.db.split.showOverall end, 
         function(v) ns.db.split.showOverall = v; self:RefreshUI(); self:UpdateLayoutVisibility() end,
-        L["OVERALL_DATA_TOOLTIP"]) -- ★ 传入翻译好的问号提示文本
+        L["OVERALL_DATA_TOOLTIP"])
         
     local sec2_sub = CreateFrame("Frame", nil, sec2)
-    sec2_sub:SetWidth(inner:GetWidth())
-    sec2_sub:SetPoint("TOPLEFT", sec2, "TOPLEFT", 0, y2)
+    sec2_sub:SetWidth(inner:GetWidth() - 16)
+    -- ★ 重点：将子模块整体向右缩进 16 像素，明确视觉上的从属关系
+    sec2_sub:SetPoint("TOPLEFT", sec2, "TOPLEFT", 16, y2) 
     local y2s = 0
 
-    local showModes = { {l=L["总是开启"], v="always"}, {l=L["所有副本开启"], v="instance"}, {l=L["只在大秘境中开启"], v="mplus"}, {l=L["永不开启"], v="off"} }
-    y2s = self:Dropdown(sec2_sub, L["开启场景"], y2s, showModes, function() return ns.db.split.overallShowMode or "mplus" end, function(v) ns.db.split.overallShowMode = v; self:RefreshUI() end)
+    -- 取消突兀的大标题，改成低调的说明文字
+    y2s = self:Desc(sec2_sub, y2s, L["生效场景："])
+    y2s = self:Check(sec2_sub, L["大秘境"], y2s, function() return ns.db.split.overallShowMPlus end, function(v) ns.db.split.overallShowMPlus=v; self:RefreshUI(); self:UpdateLayoutVisibility() end)
+    y2s = self:Check(sec2_sub, L["团队副本"], y2s, function() return ns.db.split.overallShowRaid end, function(v) ns.db.split.overallShowRaid=v; self:RefreshUI(); self:UpdateLayoutVisibility() end)
+    y2s = self:Check(sec2_sub, L["其他副本 (含地下堡/战场/竞技场)"], y2s, function() return ns.db.split.overallShowDungeon end, function(v) ns.db.split.overallShowDungeon=v; self:RefreshUI(); self:UpdateLayoutVisibility() end)
+    y2s = self:Check(sec2_sub, L["非副本 (开放世界)"], y2s, function() return ns.db.split.overallShowOutdoor end, function(v) ns.db.split.overallShowOutdoor=v; self:RefreshUI(); self:UpdateLayoutVisibility() end)
     y2s = y2s - 8
     
-    -- ★ 新增：分离文字选项并前置声明变量
-    local posesLR = { {l=L["左侧"], v=1}, {l=L["右侧"], v=2} }
-    local posesTB = { {l=L["上方"], v=1}, {l=L["下方"], v=2} }
-    local curPosBtn, priPosBtn
-
-    local dirs = { {l=L["左右划分"], v="LR"}, {l=L["上下划分"], v="TB"} }
+    local curPosBtn
     y2s = self:Dropdown(sec2_sub, L["当前/总计划分方向"], y2s, dirs, function() return ns.db.split.overallDir or "LR" end, 
         function(v) 
             ns.db.split.overallDir = v
             ns.db.split.splitDir = (v == "LR") and "TB" or "LR" 
-            
-            -- ★ 核心联动：动态刷新位置选项的文字
             if curPosBtn then curPosBtn.UpdateOpts(v == "TB" and posesTB or posesLR) end
-            if priPosBtn then priPosBtn.UpdateOpts(ns.db.split.splitDir == "TB" and posesTB or posesLR) end
-            
+            if self.priPosBtn then self.priPosBtn.UpdateOpts(ns.db.split.splitDir == "TB" and posesTB or posesLR) end
             self:RefreshUI(); self:UpdateLayoutVisibility() 
         end)
     
-    -- ★ 修改：赋予初值时自动判断当前的划分方向，并保存按钮引用
     y2s, curPosBtn = self:Dropdown(sec2_sub, L["当前数据位置"], y2s, (ns.db.split.overallDir == "TB") and posesTB or posesLR, function() return ns.db.split.currentPos or 1 end, function(v) ns.db.split.currentPos = v; self:RefreshUI() end)
+    
     sec2_sub:SetHeight(math.abs(y2s))
     self.laySec2Sub = sec2_sub
     self.laySec2 = sec2
@@ -418,17 +421,43 @@ function Config:BuildLayoutPage()
         end)
 
     local sec3_sub = CreateFrame("Frame", nil, sec3)
-    sec3_sub:SetWidth(inner:GetWidth())
-    sec3_sub:SetPoint("TOPLEFT", sec3, "TOPLEFT", 0, y3)
+    sec3_sub:SetWidth(inner:GetWidth() - 16)
+    -- ★ 同样整体缩进 16 像素
+    sec3_sub:SetPoint("TOPLEFT", sec3, "TOPLEFT", 16, y3)
     local y3s = 0
-    local allModes = { {l=L["伤害"], v="damage"}, {l=L["治疗"], v="healing"}, {l=L["承伤"], v="damageTaken"}, {l=L["死亡"], v="deaths"}, {l=L["打断"], v="interrupts"}, {l=L["驱散"], v="dispels"} }
     
-    -- ★ 修改：副框数据赋予初值时也自动判断方向
-    y3s, priPosBtn = self:Dropdown(sec3_sub, L["主数据位置"], y3s, (ns.db.split.splitDir == "TB") and posesTB or posesLR, function() return ns.db.split.primaryPos or 1 end, function(v) ns.db.split.primaryPos = v; self:RefreshUI() end)
+    y3s = self:Desc(sec3_sub, y3s, L["生效场景："])
+
+    y3s = self:Check(sec3_sub, L["大秘境"], y3s, function() return ns.db.split.splitShowMPlus end, function(v) 
+        ns.db.split.splitShowMPlus=v; 
+        if v and ns.db.split.enabled and ns.state.instanceCategory == "mplus" then ns.db.display.mode = "split" end
+        self:RefreshUI() 
+    end)
+    
+    y3s = self:Check(sec3_sub, L["团队副本"], y3s, function() return ns.db.split.splitShowRaid end, function(v) 
+        ns.db.split.splitShowRaid=v; 
+        if v and ns.db.split.enabled and ns.state.instanceCategory == "raid" then ns.db.display.mode = "split" end
+        self:RefreshUI() 
+    end)
+    
+    y3s = self:Check(sec3_sub, L["其他副本 (含地下堡/战场/竞技场)"], y3s, function() return ns.db.split.splitShowDungeon end, function(v) 
+        ns.db.split.splitShowDungeon=v; 
+        if v and ns.db.split.enabled and ns.state.instanceCategory == "dungeon" then ns.db.display.mode = "split" end
+        self:RefreshUI() 
+    end)
+    
+    y3s = self:Check(sec3_sub, L["非副本 (开放世界)"], y3s, function() return ns.db.split.splitShowOutdoor end, function(v) 
+        ns.db.split.splitShowOutdoor=v; 
+        if v and ns.db.split.enabled and ns.state.instanceCategory == "outdoor" then ns.db.display.mode = "split" end
+        self:RefreshUI() 
+    end)
+    y3s = y3s - 8
+
+    y3s, self.priPosBtn = self:Dropdown(sec3_sub, L["主数据位置"], y3s, (ns.db.split.splitDir == "TB") and posesTB or posesLR, function() return ns.db.split.primaryPos or 1 end, function(v) ns.db.split.primaryPos = v; self:RefreshUI() end)
     y3s = self:Dropdown(sec3_sub, L["主数据内容"], y3s, allModes, function() return ns.db.split.primaryMode end, function(v) ns.db.split.primaryMode=v; self:RefreshUI() end)
     y3s = self:Dropdown(sec3_sub, L["副数据内容"], y3s, allModes, function() return ns.db.split.secondaryMode end, function(v) ns.db.split.secondaryMode=v; self:RefreshUI() end)
+    
     sec3_sub:SetHeight(math.abs(y3s))
-
     self.laySec3Sub = sec3_sub
     self.laySec3 = sec3
 
@@ -515,7 +544,7 @@ function Config:BuildDataPage()
     y = self:Check(inner, L["显示玩家服务器"], y, function() return ns.db.display.showRealm end, function(v) ns.db.display.showRealm=v; self:RefreshUI() end)
     -- ★ 将原MPlus页面的全局选项移至此处
     y = self:Check(inner, L["标题下方显示全程摘要行（仅在副本中生效）"], y, function() return ns.db.mythicPlus.dualDisplay end, function(v) ns.db.mythicPlus.dualDisplay=v; self:RefreshUI() end)
-    y = self:Check(inner, L["离开副本后自动生成副本全程段落（地下堡不适用)"], y, function() return ns.db.mythicPlus.enabled end, function(v) ns.db.mythicPlus.enabled=v end)
+    y = self:Check(inner, L["离开副本后自动生成副本全程段落"], y, function() return ns.db.mythicPlus.enabled end, function(v) ns.db.mythicPlus.enabled=v end)
     inner:SetHeight(math.abs(y) + 20)
 end
 
@@ -1183,7 +1212,7 @@ function Config:BuildSceneSwitcher()
 
     -- 创建独立的悬浮窗口，层级设为 DIALOG，确保在最上层
     local sw = CreateFrame("Frame", "LDStatsPreviewSwitcher", UIParent, "BackdropTemplate")
-    sw:SetSize(320, 36)
+    sw:SetSize(430, 36)
     sw:SetFrameStrata("DIALOG")
     sw:SetFrameLevel(110)
     
@@ -1258,6 +1287,7 @@ function Config:OpenPreview()
         inCombat     = ns.state.inCombat,
         isInInstance = ns.state.isInInstance,
         inMythicPlus = ns.state.inMythicPlus,
+        instanceCategory = ns.state.instanceCategory,
         viewIndex    = ns.Segments.viewIndex,
         current      = ns.Segments.current,
         overall      = ns.Segments.overall,
@@ -1297,6 +1327,7 @@ function Config:ClosePreview()
     ns.state.inCombat     = self._pvSave.inCombat
     ns.state.isInInstance = self._pvSave.isInInstance
     ns.state.inMythicPlus = self._pvSave.inMythicPlus
+    ns.state.instanceCategory = self._pvSave.instanceCategory
     ns.Segments.viewIndex = self._pvSave.viewIndex
     ns.Segments.current   = self._pvSave.current
     ns.Segments.overall   = self._pvSave.overall
@@ -1346,6 +1377,7 @@ function Config:ApplyPreviewScene(sceneId)
     ns.state.inCombat     = false
     ns.state.isInInstance = (sceneId ~= "outdoor")
     ns.state.inMythicPlus = (sceneId == "mplus")
+    ns.state.instanceCategory = sceneId
 
     -- 构造假段落
     local mockCurrent = self:BuildMockSegment(false)   -- 当前段（普通时长）

@@ -69,19 +69,30 @@ ns.defaults = {
         textColor     = {1.0, 1.0, 1.0},
     },
     split = {
-        enabled           = true,         -- 现在代表"开启双数据显示"
-        splitDir          = "TB",         -- 双数据划分方向: "TB"(上下) 或 "LR"(左右)
+        enabled           = true,         
+        splitDir          = "TB",         
         primaryMode       = "damage",
         secondaryMode     = "healing",
-        primaryPos        = 1,            -- 1:左/上, 2:右/下
+        primaryPos        = 1,            
         
-        showOverall       = true,         -- "同时显示当前与总计数据"
-        overallShowMode   = "instance",   -- "always", "instance", "mplus", "off"
-        overallDir        = "LR",         -- 当前与总计的划分方向 (需与splitDir互补)
-        currentPos        = 1,            -- 1:左/上, 2:右/下
+        -- ★ 新增：双数据模式的场景开关
+        splitShowMPlus    = true,
+        splitShowRaid     = true,
+        splitShowDungeon  = true,
+        splitShowOutdoor  = false,
         
-        tbRatio           = 0.55,         -- 上下分栏比例
-        lrRatio           = 0.50,         -- 左右分栏比例
+        showOverall       = true,         
+        overallDir        = "LR",         
+        currentPos        = 1,            
+        
+        -- ★ 新增：总计窗口的场景开关
+        overallShowMPlus  = true,
+        overallShowRaid   = true,
+        overallShowDungeon= true,
+        overallShowOutdoor= false,
+        
+        tbRatio           = 0.55,         
+        lrRatio           = 0.50,         
     },
     mythicPlus = {
         enabled           = true,
@@ -470,15 +481,26 @@ end
 function ns:UpdateInstanceStatus()
     local inInstance, instanceType = IsInInstance()
 
+    -- ★ 修复暴雪API的坑：地下堡(scenario)的 inInstance 会返回 false
+    -- 我们手动将这几种明确的战斗副本类型强制判定为“在副本内”
+    if instanceType == "scenario" or instanceType == "party" or instanceType == "raid" or instanceType == "arena" or instanceType == "pvp" then
+        inInstance = true
+    end
+
+    -- ★ 强制排除：把房屋小区直接视为户外非副本
+    if instanceType == "neighborhood" or instanceType == "interior" then
+        inInstance = false
+    end
+
     -- 保存上一帧的状态（供事件处理使用）
     ns.state.wasInInstance = ns.state.isInInstance
-
     ns.state.isInInstance = inInstance
     ns.state.instanceType = instanceType
 
     local wasInMPlus      = ns.state.inMythicPlus
     ns.state.inMythicPlus = false
 
+    -- 识别大秘境
     if C_ChallengeMode and C_ChallengeMode.GetActiveChallengeMapID then
         local mapID = C_ChallengeMode.GetActiveChallengeMapID()
         ns.state.inMythicPlus = (mapID ~= nil)
@@ -496,6 +518,20 @@ function ns:UpdateInstanceStatus()
         local _, _, difficultyID = GetInstanceInfo()
         ns.state.inMythicPlus = (difficultyID == 8)
     end
+
+    -- ★ 核心：场景分类器 (mplus / raid / dungeon / outdoor)
+    local cat = "outdoor"
+    if inInstance then
+        if instanceType == "raid" then
+            cat = "raid"
+        elseif instanceType == "party" or instanceType == "scenario" or instanceType == "arena" or instanceType == "pvp" then
+            cat = "dungeon" -- 包含地下堡、竞技场、战场、普通/英雄/M0地下城等
+        end
+    end
+    if ns.state.inMythicPlus then
+        cat = "mplus"
+    end
+    ns.state.instanceCategory = cat
 
     if ns.state.inMythicPlus and not wasInMPlus then
         if ns.MythicPlus then ns.MythicPlus:OnEnterDungeon() end

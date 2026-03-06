@@ -93,24 +93,26 @@ end
 function UI:IsOverallColumnActive()
     if not ns.db or not ns.db.split then return false end 
     if not ns.db.split.showOverall then return false end
-    local mode = ns.db.split.overallShowMode or "mplus"
-    if mode == "off" then return false end
     
-    if mode == "always" then return true end
+    local cat = ns.state.instanceCategory or "outdoor"
+    if cat == "mplus" and ns.db.split.overallShowMPlus then return true end
+    if cat == "raid" and ns.db.split.overallShowRaid then return true end
+    if cat == "dungeon" and ns.db.split.overallShowDungeon then return true end
+    if cat == "outdoor" and ns.db.split.overallShowOutdoor then return true end
     
-    local ovr = ns.Segments and ns.Segments.overall
-    local hasData = ovr and (ovr.totalDamage > 0 or ovr.totalHealing > 0)
+    return false
+end
+
+function UI:IsSplitActiveInCurrentScene()
+    if not ns.db or not ns.db.split then return false end
+    if not ns.db.split.enabled then return false end
     
-    if mode == "mplus" then
-        if ns.state.inMythicPlus then return true
-        elseif ns.state.isInInstance and hasData then
-            local isMplusSeg = ovr and (ovr._mythicLevel or ovr.mythicLevel or ovr._builtByMythicPlus)
-            local mplusActive = ns.MythicPlus and ns.MythicPlus.IsActive and ns.MythicPlus:IsActive()
-            if isMplusSeg or mplusActive then return true end
-        end
-        return false
-    end
-    if mode == "instance" then return ns.state.isInInstance end
+    local cat = ns.state.instanceCategory or "outdoor"
+    if cat == "mplus" and ns.db.split.splitShowMPlus then return true end
+    if cat == "raid" and ns.db.split.splitShowRaid then return true end
+    if cat == "dungeon" and ns.db.split.splitShowDungeon then return true end
+    if cat == "outdoor" and ns.db.split.splitShowOutdoor then return true end
+    
     return false
 end
 
@@ -578,7 +580,8 @@ function UI:LayoutTabs()
     local sp = ns.db and ns.db.split
     local visible = {}
 
-    if sp and sp.enabled then
+    local isSplitActive = self:IsSplitActiveInCurrentScene()
+    if sp and isSplitActive then
         local pName = L[ns.MODE_NAMES[sp.primaryMode] or sp.primaryMode]
         local sName = L[ns.MODE_NAMES[sp.secondaryMode] or sp.secondaryMode]
         self.splitTab.text:SetText(pName .. "|" .. sName)
@@ -594,7 +597,7 @@ function UI:LayoutTabs()
             t.text:SetText(L[ns.MODE_NAMES[t.mode]])
         end
 
-        if sp and sp.enabled
+        if sp and isSplitActive
            and (t.mode == sp.primaryMode or t.mode == sp.secondaryMode) then
             t:Hide()
         else
@@ -639,6 +642,10 @@ function UI:Layout()
     -- ★ 防抖：如果已有一个 DoLayout 在等待执行，直接返回，不重复创建
     if self._layoutPending then return end
     self._layoutPending = true
+ 
+    if ns.db.display.mode == "split" and not self:IsSplitActiveInCurrentScene() then
+        ns.db.display.mode = (ns.db.split and ns.db.split.primaryMode) or "damage"
+    end
 
     self:LayoutTabs()
 
@@ -728,7 +735,7 @@ function UI:DoLayout(retryCount)
 
     local sp = ns.db.split
     local useOvr = self:IsOverallColumnActive()
-    local isSplitView = sp.enabled and (ns.db.display.mode == "split")
+    local isSplitView = self:IsSplitActiveInCurrentScene() and (ns.db.display.mode == "split")
 
     -- 1. 计算四大容器的边界 (当前 vs 总计)
     local curW, curH = bodyW, bodyH
@@ -982,7 +989,8 @@ function UI:Refresh()
     local mode = ns.db.display.mode
     local useOvr = self:IsOverallColumnActive()
     
-    local isSplitView = sp.enabled and (mode == "split")
+    -- local isSplitView = sp.enabled and (mode == "split")
+    local isSplitView = self:IsSplitActiveInCurrentScene() and (ns.db.display.mode == "split")
 
     self:RefreshTitle()
 
