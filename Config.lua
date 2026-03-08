@@ -466,8 +466,8 @@ function Config:BuildLayoutPage()
     sec4:SetWidth(inner:GetWidth())
     local y4 = 0
     y4 = self:H(sec4, L["自适应布局比例"], y4)
-    y4 = self:Slider(sec4, L["上下分栏比例"], y4, 0.2, 0.8, 0.05, function() return ns.db.split.tbRatio or 0.5 end, function(v) ns.db.split.tbRatio = v; self:RefreshUI() end, true)
-    y4 = self:Slider(sec4, L["左右分栏比例"], y4, 0.2, 0.8, 0.05, function() return ns.db.split.lrRatio or 0.5 end, function(v) ns.db.split.lrRatio = v; self:RefreshUI() end, true)
+    y4 = self:Slider(sec4, L["上下分栏比例"], y4, 0.2, 0.8, 0.01, function() return ns.db.split.tbRatio or 0.5 end, function(v) ns.db.split.tbRatio = v; self:RefreshUI() end, true)
+    y4 = self:Slider(sec4, L["左右分栏比例"], y4, 0.2, 0.8, 0.01, function() return ns.db.split.lrRatio or 0.5 end, function(v) ns.db.split.lrRatio = v; self:RefreshUI() end, true)
     sec4:SetHeight(math.abs(y4))
     self.laySec4 = sec4
 

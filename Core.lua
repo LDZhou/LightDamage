@@ -538,7 +538,26 @@ function ns:UpdateInstanceStatus()
     if ns.state.inMythicPlus then
         cat = "mplus"
     end
+    
+    local oldCat = ns.state.instanceCategory
     ns.state.instanceCategory = cat
+
+    -- ★ 核心修复：跨越场景时，自动恢复或降级双栏模式
+    if oldCat ~= cat and ns.db and ns.db.split then
+        local isActive = false
+        if cat == "mplus" and ns.db.split.splitShowMPlus then isActive = true end
+        if cat == "raid" and ns.db.split.splitShowRaid then isActive = true end
+        if cat == "dungeon" and ns.db.split.splitShowDungeon then isActive = true end
+        if cat == "outdoor" and ns.db.split.splitShowOutdoor then isActive = true end
+
+        if isActive and ns.db.split.enabled then
+            -- 如果新场景允许双栏，并且总开关开着，进本瞬间自动帮你切回双栏
+            ns.db.display.mode = "split"
+        elseif not isActive and ns.db.display.mode == "split" then
+            -- 如果新场景不允许双栏（比如出本回城），自动降级为单栏伤害
+            ns.db.display.mode = ns.db.split.primaryMode or "damage"
+        end
+    end
 
     if ns.state.inMythicPlus and not wasInMPlus then
         if ns.MythicPlus then ns.MythicPlus:OnEnterDungeon() end
