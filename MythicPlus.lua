@@ -122,7 +122,7 @@ function MP:Init()
 
         local level = getKeystoneLevel() or 0
         enterInstance(id, name or GetZoneText() or L["大秘境"], level, timeLimit)
-        print(string.format(L["|cff4cb8e8[LD Stats]|r 检测到大秘境: %s +%d (reload)"], name, level))
+        print(string.format(L["|cff4cb8e8[Light Damage]|r 检测到大秘境: %s +%d (reload)"], name, level))
 
         --   CT._currentMythicLevel停留在0，需手动同步，确保出副本时层数正确
         if ns.CombatTracker then
@@ -205,7 +205,7 @@ function MP:OnCompleted(time, onTime)
 
     MP:BuildMythicSegment(runName, onTime)
 
-    print(string.format(L["|cff4cb8e8[LD Stats]|r M+ 完成: %s (计时: %s)"],
+    print(string.format(L["|cff4cb8e8[Light Damage]|r M+ 完成: %s (计时: %s)"],
         runName, ns:FormatTime((time or 0) / 1000)))
 
     -- 完成后的清理
@@ -263,7 +263,7 @@ function MP:OnLeaveInstance()
     end
 
     MP:BuildMythicSegment(runName, nil)
-    print(string.format(L["|cff4cb8e8[LD Stats]|r 离开副本，数据已归档"]))
+    print(string.format(L["|cff4cb8e8[Light Damage]|r 离开副本，数据已归档"]))
 
     leaveInstance()
 

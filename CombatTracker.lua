@@ -7,6 +7,30 @@ local addonName, ns = ...
 local L = ns.L
 
 local CT = {}
+
+local function SmartTrimHistory()
+    local segs = ns.Segments
+    if not segs or not segs.history then return end
+    local maxSeg = ns.db and ns.db.tracking and ns.db.tracking.maxSegments or 30
+    
+    while #segs.history > maxSeg do
+        local removed = false
+        -- 优先从最旧的记录开始寻找并删除“普通小怪”（非Boss且非全程合并）
+        for j = #segs.history, 1, -1 do
+            local s = segs.history[j]
+            if not s._isBoss and not s._isMerged then
+                table.remove(segs.history, j)
+                removed = true
+                break
+            end
+        end
+        -- 如果找不到小怪，说明剩下的全是Boss或全程等重要记录，只能删除最旧的
+        if not removed then
+            table.remove(segs.history, #segs.history)
+        end
+    end
+end
+
 ns.CombatTracker = CT
 
 CT._internalReset = false
@@ -289,10 +313,7 @@ local function processArchivedSessions()
                 -- ★ 不再判断 totalDamage > 0，只要时长够就插入
                 --   数据按需由 LoadSegmentData 加载，此时可能还是 0
                 table.insert(segs.history, 1, seg)
-                local maxSeg = ns.db and ns.db.tracking and ns.db.tracking.maxSegments or 30
-                while #segs.history > maxSeg do
-                    table.remove(segs.history)
-                end
+                SmartTrimHistory()
                 segs.viewIndex = 1
                 if ns.SaveSessionHistory then ns:SaveSessionHistory() end
             end
@@ -623,8 +644,7 @@ local function mergeAndCleanInstance(instanceTag, mythicLevel, mythicMapName, in
                 segs.viewIndex = 1
             end
 
-            local maxSeg = ns.db and ns.db.tracking and ns.db.tracking.maxSegments or 30
-            while #segs.history > maxSeg do table.remove(segs.history) end
+            SmartTrimHistory()
 
             if ns.CombatTracker then ns.CombatTracker:ResetBaselineToCurrentCount() end
             if ns.Segments then 
@@ -641,7 +661,7 @@ local function mergeAndCleanInstance(instanceTag, mythicLevel, mythicMapName, in
             if ns.UI then C_Timer.After(0, function() ns.UI:Layout() end) end
 
             local bossStr = bossCount > 0 and string.format(L["，保留 %d 个 Boss"], bossCount) or ""
-            print(string.format(L["|cff00ccff[LD Stats]|r 副本 %s 已整理%s + 1 条全程汇总"], pending.mapName, bossStr))
+            print(string.format(L["|cff00ccff[Light Damage]|r 副本 %s 已整理%s + 1 条全程汇总"], pending.mapName, bossStr))
             return
         end
     end
@@ -759,8 +779,7 @@ local function mergeAndCleanInstance(instanceTag, mythicLevel, mythicMapName, in
         segs.viewIndex = 1
     end
 
-    local maxSeg = ns.db and ns.db.tracking and ns.db.tracking.maxSegments or 30
-    while #segs.history > maxSeg do table.remove(segs.history) end
+    SmartTrimHistory()
 
     if ns.CombatTracker then ns.CombatTracker:ResetBaselineToCurrentCount() end
 
@@ -770,6 +789,15 @@ local function mergeAndCleanInstance(instanceTag, mythicLevel, mythicMapName, in
         if not ns.state.isInInstance then
             -- ★ 离开副本且归档后，强制执行一次暴雪统计Reset，让野外重新开始计算
             if C_DamageMeter.ResetAllCombatSessions then
+                -- ★ 修复：重置暴雪底层前，强制加载历史中尚未读取的重要段落(Boss/全程)，防止数据变空
+                if ns.Segments and ns.Segments.history then
+                    for _, s in ipairs(ns.Segments.history) do
+                        if s._sessionID and not s._dataLoaded and (s._isBoss or s._isMerged) then
+                            CT:LoadSegmentData(s)
+                        end
+                    end
+                end
+                
                 CT._internalReset = true
                 C_DamageMeter.ResetAllCombatSessions()
             end
@@ -785,7 +813,7 @@ local function mergeAndCleanInstance(instanceTag, mythicLevel, mythicMapName, in
     if ns.UI then C_Timer.After(0, function() ns.UI:Layout() end) end
 
     local bossStr = bossCount > 0 and string.format(L["，保留 %d 个 Boss"], bossCount) or ""
-    print(string.format(L["|cff00ccff[LD Stats]|r 副本 %s 已整理%s + 1 条全程汇总"], zoneName, bossStr))
+    print(string.format(L["|cff00ccff[Light Damage]|r 副本 %s 已整理%s + 1 条全程汇总"], zoneName, bossStr))
 end
 
 -- ============================================================
@@ -1432,6 +1460,15 @@ function CT:RegisterEvents()
                             -- 全新的副本，强制清空可能残留的历史快照并重置底层
                             if ns.Segments then
                                 ns.Segments._preReloadOverallData = nil
+                                
+                                -- ★ 修复：进本重置底层前，保护并强制加载之前的历史重要数据
+                                if ns.Segments.history then
+                                    for _, s in ipairs(ns.Segments.history) do
+                                        if s._sessionID and not s._dataLoaded and (s._isBoss or s._isMerged) then
+                                            CT:LoadSegmentData(s)
+                                        end
+                                    end
+                                end
                             end
                             CT:ResetMeterForNewRun()
                             if ns.Segments then
@@ -1514,7 +1551,7 @@ end
 -- Sessions 专项诊断（/ldcs sessions）
 -- ============================================================
 function CT:DebugSessions()
-    print(L["=== [LD Stats] Sessions 诊断 ==="])
+    print(L["=== [Light Damage] Sessions 诊断 ==="])
     print(string.format("  baseline=%d  lastProcessed=%d  inCombat=%s  isInInstance=%s",
         CT._baselineSessionCount, CT._lastProcessedCount,
         tostring(ns.state.inCombat), tostring(ns.state.isInInstance)))
@@ -1544,7 +1581,7 @@ end
 -- API Debug（/ldcs debug）
 -- ============================================================
 function CT:DebugAPI()
-    print("=== [LD Stats] API Debug ===")
+    print("=== [Light Damage] API Debug ===")
     print("  inCombat:", ns.state.inCombat)
     print("  updateCount:", CT._updateCount)
     print("  baseline:", CT._baselineSessionCount)

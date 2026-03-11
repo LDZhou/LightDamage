@@ -143,7 +143,7 @@ function HL:Build()
             if ns.UI then ns.UI:Refresh() end
         end
         self:Hide()
-        print(L["|cff00ccff[LD Stats]|r 已清空所有野外历史记录，只保留副本与首领战数据。"])
+        print(L["|cff00ccff[Light Damage]|r 已清空所有野外历史记录，只保留副本与首领战数据。"])
     end)
     self.clearBtn = clrBtn
 

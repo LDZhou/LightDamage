@@ -110,7 +110,7 @@ ns.defaults = {
         autoReset       = false,
         minCombatTime   = 2,
         deathLogSize    = 15,
-        maxSegments     = 20,
+        maxSegments     = 50,
     },
     smartRefresh = {
         combatInterval = 0.3,
