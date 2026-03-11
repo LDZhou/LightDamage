@@ -31,15 +31,18 @@ ns.defaults = {
         animDuration    = 0.4,
     },
     fade = {
-        autoFade         = false,
-        unfadeOnHover    = true,
-        fadeBars         = true,        -- "顶部与底部菜单"
-        fadeBody         = true,        -- "数据栏"
-        barsAlpha        = 0.3,         -- 顶/底部菜单渐隐后透明度
-        bodyAlpha        = 0.15,        -- 数据栏渐隐后透明度
-        delay            = 1.5,
-        enableAnim       = true,
-        animDuration     = 0.5,
+        unfadeOnHover       = true,
+        fadeBars            = false,
+        barsWhen            = "ooc",        -- "always" / "ooc"
+        barsNeverInInstance = false,
+        barsAlpha           = 0.3,
+        fadeBody            = false,
+        bodyWhen            = "ooc",        -- "always" / "ooc"
+        bodyNeverInInstance = false,
+        bodyAlpha           = 0.15,
+        delay               = 1.5,
+        enableAnim          = true,
+        animDuration        = 0.5,
     },
     window = {
         width = 400, height = 280,

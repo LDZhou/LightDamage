@@ -471,113 +471,137 @@ function Config:BuildLayoutPage()
     sec4:SetHeight(math.abs(y4))
     self.laySec4 = sec4
 
-    -- 区域5：折叠与隐藏
-    local sec5 = CreateFrame("Frame", nil, inner)
-    sec5:SetWidth(inner:GetWidth())
-    local y5 = 0
-    y5 = self:H(sec5, L["折叠与隐藏"], y5)
-
-    -- ── 折叠 ──
-    y5 = y5 - 4
-    local sec5a_hdr = sec5:CreateFontString(nil, "OVERLAY")
-    sec5a_hdr:SetFont(STANDARD_TEXT_FONT, 11, "OUTLINE")
-    sec5a_hdr:SetPoint("TOPLEFT", 6, y5)
-    sec5a_hdr:SetTextColor(0.6, 0.8, 1.0)
-    sec5a_hdr:SetText(" -  " .. L["折叠"])
-    y5 = y5 - 20
-
-    y5 = self:Check(sec5, L["脱战后自动折叠"], y5,
-        function() return ns.db.collapse.autoCollapse end,
-        function(v) ns.db.collapse.autoCollapse = v; if ns.UI then ns.UI:CheckAutoCollapse() end end)
-    y5 = self:Check(sec5, L["副本中永不自动折叠"], y5,
-        function() return ns.db.collapse.neverInInstance end,
-        function(v) ns.db.collapse.neverInInstance = v; if ns.UI then ns.UI:CheckAutoCollapse() end end)
-    y5 = self:Slider(sec5, L["脱战后多久后开始折叠 (秒)"], y5, 0, 10, 0.5,
-        function() return ns.db.collapse.delay or 1.5 end,
-        function(v) ns.db.collapse.delay = v end)
-    y5 = self:Check(sec5, L["开启折叠动画"], y5,
-        function() return ns.db.collapse.enableAnim end,
-        function(v) ns.db.collapse.enableAnim = v end)
-    y5 = self:Slider(sec5, L["折叠动画持续时间"], y5, 0.1, 2.0, 0.1,
-        function() return ns.db.collapse.animDuration end,
-        function(v) ns.db.collapse.animDuration = v end)
-
-    -- 记录折叠部分结束的 Y 偏移
-    local y5_afterCollapse = y5
-
-    -- ── 自动渐隐 ──
-    y5 = y5 - 12
-    local sec5b_hdr = sec5:CreateFontString(nil, "OVERLAY")
-    sec5b_hdr:SetFont(STANDARD_TEXT_FONT, 11, "OUTLINE")
-    sec5b_hdr:SetPoint("TOPLEFT", 6, y5)
-    sec5b_hdr:SetTextColor(0.6, 0.8, 1.0)
-    sec5b_hdr:SetText(" -  " .. L["自动渐隐"])
-    y5 = y5 - 20
-
-    y5 = self:Check(sec5, L["脱战后自动渐隐"], y5,
-        function() return ns.db.fade.autoFade end,
-        function(v) ns.db.fade.autoFade = v; if ns.UI then ns.UI:CheckAutoFade(true) end; self:UpdateFadeVisibility() end)
-
-    -- 渐隐子选项容器（缩进 16px）
-    local sec5bSub = CreateFrame("Frame", nil, sec5)
-    sec5bSub:SetWidth(inner:GetWidth() - 16)
-    sec5bSub:SetPoint("TOPLEFT", sec5, "TOPLEFT", 16, y5)
-    local y5b = 0
-
-    y5b = self:Check(sec5bSub, L["鼠标移到窗口上时取消渐隐"], y5b,
-        function() return ns.db.fade.unfadeOnHover end,
-        function(v) ns.db.fade.unfadeOnHover = v; if ns.UI then ns.UI:CheckAutoFade(true) end end)
-    y5b = self:Slider(sec5bSub, L["脱战后自动渐隐延迟 (秒)"], y5b, 0, 10, 0.5,
-        function() return ns.db.fade.delay or 1.5 end,
-        function(v) ns.db.fade.delay = v; if ns.UI then ns.UI:CheckAutoFade(true) end end)
-    y5b = y5b - 8
-
-    y5b = self:Desc(sec5bSub, y5b, L["自动渐隐的内容"] .. ":")
-    y5b = self:Check(sec5bSub, L["顶部与底部菜单"], y5b,
-        function() return ns.db.fade.fadeBars end,
-        function(v) ns.db.fade.fadeBars = v; if ns.UI then ns.UI:CheckAutoFade(true) end end)
-    y5b = self:Slider(sec5bSub, L["顶/底部菜单渐隐后透明度"], y5b, 0, 1, 0.05,
-        function() return ns.db.fade.barsAlpha end,
-        function(v) ns.db.fade.barsAlpha = v; if ns.UI then ns.UI:CheckAutoFade(true) end end, true)
-
-    y5b = self:Check(sec5bSub, L["数据栏"], y5b,
-        function() return ns.db.fade.fadeBody end,
-        function(v) ns.db.fade.fadeBody = v; if ns.UI then ns.UI:CheckAutoFade(true) end end)
-    y5b = self:Slider(sec5bSub, L["数据栏渐隐后透明度"], y5b, 0, 1, 0.05,
-        function() return ns.db.fade.bodyAlpha end,
-        function(v) ns.db.fade.bodyAlpha = v; if ns.UI then ns.UI:CheckAutoFade(true) end end, true)
-
-    y5b = y5b - 8
-    y5b = self:Check(sec5bSub, L["开启渐隐动画"], y5b,
-        function() return ns.db.fade.enableAnim end,
-        function(v) ns.db.fade.enableAnim = v; if ns.UI then ns.UI:CheckAutoFade(true) end end)
-    y5b = self:Slider(sec5bSub, L["渐隐动画持续时间"], y5b, 0.1, 2.0, 0.1,
-        function() return ns.db.fade.animDuration end,
-        function(v) ns.db.fade.animDuration = v end)
-
-    sec5bSub:SetHeight(math.abs(y5b))
-    self.laySec5bSub = sec5bSub
-    self.laySec5_baseY = y5   -- 渐隐子区域展开前的 Y 偏移（负值）
-
-    sec5:SetHeight(math.abs(y5) + (ns.db.fade.autoFade and math.abs(y5b) or 0))
-    self.laySec5 = sec5
+    
     
     self:UpdateLayoutVisibility()
 end
 
+function Config:RebuildFoldAndHide()
+    local container = self._foldContainer
+    if not container then return end
 
-function Config:UpdateFadeVisibility()
-    if not self.laySec5bSub or not self.laySec5 then return end
+    -- 清空旧内容
+    for _, child in ipairs({container:GetChildren()}) do child:Hide(); child:SetParent(nil) end
+    for _, region in ipairs({container:GetRegions()}) do region:Hide() end
 
-    if ns.db.fade and ns.db.fade.autoFade then
-        self.laySec5bSub:Show()
-        self.laySec5:SetHeight(math.abs(self.laySec5_baseY or 0) + self.laySec5bSub:GetHeight())
-    else
-        self.laySec5bSub:Hide()
-        self.laySec5:SetHeight(math.abs(self.laySec5_baseY or 0))
+    local y = 0
+
+    y = self:H(container, L["折叠与隐藏"], y)
+
+    -- ── 折叠 ──
+    y = y - 4
+    local colHdr = container:CreateFontString(nil, "OVERLAY")
+    colHdr:SetFont(STANDARD_TEXT_FONT, 11, "OUTLINE")
+    colHdr:SetPoint("TOPLEFT", 6, y)
+    colHdr:SetTextColor(0.6, 0.8, 1.0)
+    colHdr:SetText(" -  " .. L["折叠"])
+    y = y - 20
+
+    y = self:Check(container, L["脱战后自动折叠"], y,
+        function() return ns.db.collapse.autoCollapse end,
+        function(v) ns.db.collapse.autoCollapse = v; if ns.UI then ns.UI:CheckAutoCollapse() end end)
+    y = self:Check(container, L["副本中永不自动折叠"], y,
+        function() return ns.db.collapse.neverInInstance end,
+        function(v) ns.db.collapse.neverInInstance = v; if ns.UI then ns.UI:CheckAutoCollapse() end end)
+    y = self:Slider(container, L["脱战后多久后开始折叠 (秒)"], y, 0, 10, 0.5,
+        function() return ns.db.collapse.delay or 1.5 end,
+        function(v) ns.db.collapse.delay = v end)
+    y = self:Check(container, L["开启折叠动画"], y,
+        function() return ns.db.collapse.enableAnim end,
+        function(v) ns.db.collapse.enableAnim = v end)
+    y = self:Slider(container, L["折叠动画持续时间"], y, 0.1, 2.0, 0.1,
+        function() return ns.db.collapse.animDuration end,
+        function(v) ns.db.collapse.animDuration = v end)
+
+    -- ── 自动隐藏 ──
+    y = y - 12
+    local fadeHdr = container:CreateFontString(nil, "OVERLAY")
+    fadeHdr:SetFont(STANDARD_TEXT_FONT, 11, "OUTLINE")
+    fadeHdr:SetPoint("TOPLEFT", 6, y)
+    fadeHdr:SetTextColor(0.6, 0.8, 1.0)
+    fadeHdr:SetText(" -  " .. L["自动隐藏"])
+    y = y - 20
+
+    y = self:Check(container, L["鼠标移到窗口上时取消隐藏"], y,
+        function() return ns.db.fade.unfadeOnHover end,
+        function(v) ns.db.fade.unfadeOnHover = v; if ns.UI then ns.UI:CheckAutoFade(true) end end)
+    y = self:Slider(container, L["自动隐藏延迟 (秒)"], y, 0, 10, 0.5,
+        function() return ns.db.fade.delay or 1.5 end,
+        function(v) ns.db.fade.delay = v; if ns.UI then ns.UI:CheckAutoFade(true) end end)
+    y = y - 8
+
+    -- ★ 顶部与底部菜单
+    y = self:Check(container, L["顶部与底部菜单"], y,
+        function() return ns.db.fade.fadeBars end,
+        function(v) ns.db.fade.fadeBars = v; if ns.UI then ns.UI:CheckAutoFade(true) end; self:RebuildFoldAndHide(); self:UpdateLookPageHeight() end)
+
+    if ns.db.fade.fadeBars then
+        local sub = CreateFrame("Frame", nil, container)
+        sub:SetWidth(container:GetWidth() - 16)
+        sub:SetPoint("TOPLEFT", container, "TOPLEFT", 16, y)
+        local ys = 0
+
+        local whenOpts = { {l=L["永远"], v="always"}, {l=L["脱战时"], v="ooc"} }
+        ys = self:Dropdown(sub, L["顶部与底部菜单隐藏的场合"], ys, whenOpts,
+            function() return ns.db.fade.barsWhen or "ooc" end,
+            function(v) ns.db.fade.barsWhen = v; if ns.UI then ns.UI:CheckAutoFade(true) end end)
+        ys = self:Check(sub, L["副本中永不隐藏顶部与底部菜单"], ys,
+            function() return ns.db.fade.barsNeverInInstance end,
+            function(v) ns.db.fade.barsNeverInInstance = v; if ns.UI then ns.UI:CheckAutoFade(true) end end)
+        ys = self:Slider(sub, L["顶部与底部菜单隐藏时透明度"], ys, 0, 1, 0.05,
+            function() return ns.db.fade.barsAlpha end,
+            function(v) ns.db.fade.barsAlpha = v; if ns.UI then ns.UI:CheckAutoFade(true) end end, true)
+
+        sub:SetHeight(math.abs(ys))
+        y = y - math.abs(ys)
     end
 
-    self:UpdateLayoutVisibility()
+    -- ★ 数据栏
+    y = self:Check(container, L["数据栏"], y,
+        function() return ns.db.fade.fadeBody end,
+        function(v) ns.db.fade.fadeBody = v; if ns.UI then ns.UI:CheckAutoFade(true) end; self:RebuildFoldAndHide(); self:UpdateLookPageHeight() end)
+
+    if ns.db.fade.fadeBody then
+        local sub = CreateFrame("Frame", nil, container)
+        sub:SetWidth(container:GetWidth() - 16)
+        sub:SetPoint("TOPLEFT", container, "TOPLEFT", 16, y)
+        local ys = 0
+
+        local whenOpts = { {l=L["永远"], v="always"}, {l=L["脱战时"], v="ooc"} }
+        ys = self:Dropdown(sub, L["数据栏隐藏的场合"], ys, whenOpts,
+            function() return ns.db.fade.bodyWhen or "ooc" end,
+            function(v) ns.db.fade.bodyWhen = v; if ns.UI then ns.UI:CheckAutoFade(true) end end)
+        ys = self:Check(sub, L["副本中永不隐藏数据栏"], ys,
+            function() return ns.db.fade.bodyNeverInInstance end,
+            function(v) ns.db.fade.bodyNeverInInstance = v; if ns.UI then ns.UI:CheckAutoFade(true) end end)
+        ys = self:Slider(sub, L["数据栏隐藏时透明度"], ys, 0, 1, 0.05,
+            function() return ns.db.fade.bodyAlpha end,
+            function(v) ns.db.fade.bodyAlpha = v; if ns.UI then ns.UI:CheckAutoFade(true) end end, true)
+
+        sub:SetHeight(math.abs(ys))
+        y = y - math.abs(ys)
+    end
+
+    -- 动画选项
+    y = y - 8
+    y = self:Check(container, L["开启隐藏动画"], y,
+        function() return ns.db.fade.enableAnim end,
+        function(v) ns.db.fade.enableAnim = v end)
+    y = self:Slider(container, L["隐藏动画持续时间"], y, 0.1, 2.0, 0.1,
+        function() return ns.db.fade.animDuration end,
+        function(v) ns.db.fade.animDuration = v end)
+
+    container:SetHeight(math.abs(y))
+end
+
+function Config:UpdateLookPageHeight()
+    if not self._foldContainer or not self._foldContainerBaseY then return end
+    local inner = self.pages["look"].inner
+    if not inner then return end
+
+    local totalY = math.abs(self._foldContainerBaseY) + self._foldContainer:GetHeight()
+    inner:SetHeight(totalY + 20)
+    self:UpdatePageScroll("look")
 end
 
 function Config:UpdateLayoutVisibility()
@@ -605,22 +629,22 @@ function Config:UpdateLayoutVisibility()
     self.laySec3:SetPoint("TOPLEFT", self.laySec2, "BOTTOMLEFT", 0, -12)
     self.laySec4:SetPoint("TOPLEFT", self.laySec3, "BOTTOMLEFT", 0, -12)
     
-    -- ★ 动态折叠渐隐子区域
-    if self.laySec5bSub then
-        if ns.db.fade and ns.db.fade.autoFade then
-            self.laySec5bSub:Show()
-            self.laySec5:SetHeight(math.abs(self.laySec5_baseY or 0) + self.laySec5bSub:GetHeight())
-        else
-            self.laySec5bSub:Hide()
-            self.laySec5:SetHeight(math.abs(self.laySec5_baseY or 0))
-        end
-    end
+    -- -- ★ 动态折叠渐隐子区域
+    -- if self.laySec5bSub then
+    --     if ns.db.fade and ns.db.fade.autoFade then
+    --         self.laySec5bSub:Show()
+    --         self.laySec5:SetHeight(math.abs(self.laySec5_baseY or 0) + self.laySec5bSub:GetHeight())
+    --     else
+    --         self.laySec5bSub:Hide()
+    --         self.laySec5:SetHeight(math.abs(self.laySec5_baseY or 0))
+    --     end
+    -- end
 
-    -- ★ 将展开与折叠区块垫在最后
-    self.laySec5:SetPoint("TOPLEFT", self.laySec4, "BOTTOMLEFT", 0, -12)
+    -- -- ★ 将展开与折叠区块垫在最后
+    -- self.laySec5:SetPoint("TOPLEFT", self.laySec4, "BOTTOMLEFT", 0, -12)
 
     -- ★ 更新总高度计算，包含 laySec5 的高度
-    local totalH = self.laySec1:GetHeight() + self.laySec2:GetHeight() + self.laySec3:GetHeight() + self.laySec4:GetHeight() + self.laySec5:GetHeight() + 60
+    local totalH = self.laySec1:GetHeight() + self.laySec2:GetHeight() + self.laySec3:GetHeight() + self.laySec4:GetHeight() + 60
     inner:SetHeight(totalH)
     
     self:UpdatePageScroll("layout")
@@ -654,7 +678,6 @@ function Config:BuildLookPage()
         function() return ns.db.window.locked end,
         function(v) 
             ns.db.window.locked = v
-            -- 勾选后立刻触发 UI 更新，隐藏或显示右下角
             if ns.UI and ns.UI.UpdateLockState then 
                 ns.UI:UpdateLockState() 
             end 
@@ -663,7 +686,6 @@ function Config:BuildLookPage()
     -- ── 颜色 ──────────────────────────────────────────────────
     y = y - 12; y = self:H(inner, L["界面颜色"], y)
 
-    -- 主题色
     y = self:ColorSwatch(inner, L["标题栏/页签主题色"], y,
         function()
             local c = ns.db.window.themeColor or {0.08, 0.08, 0.12, 1}
@@ -674,7 +696,6 @@ function Config:BuildLookPage()
             if ns.UI and ns.UI.ApplyTheme then ns.UI:ApplyTheme() end
         end)
 
-    -- 数据背景色
     y = self:ColorSwatch(inner, L["数据区背景色"], y,
         function()
             local c = ns.db.window.bgColor or {0.04, 0.04, 0.05, 0.90}
@@ -685,7 +706,6 @@ function Config:BuildLookPage()
             if ns.UI and ns.UI.ApplyTheme then ns.UI:ApplyTheme() end
         end)
 
-    -- 总计区域背景色
     y = self:ColorSwatch(inner, L["总计区域背景色"], y,
         function()
             local c = ns.db.window.ovrBgColor or {0.02, 0.04, 0.08, 0.95}
@@ -709,8 +729,6 @@ function Config:BuildLookPage()
             ns.db.display.textColorMode = v
             self:RefreshUI()
         end)
-
-    -- 自定义文字颜色（无透明度）
     y = self:ColorSwatchNoAlpha(inner, L["自定义名称颜色"], y,
         function()
             local c = ns.db.display.textColor or {1.0, 1.0, 1.0}
@@ -723,8 +741,6 @@ function Config:BuildLookPage()
 
     -- ── 字体设置 ───────────────────────────────────────────────
     y = y - 12; y = self:H(inner, L["字体设置"], y)
-    
-    -- ★ 替换开始：使用系统自带的字体选项
     local chatFont = select(1, ChatFontNormal:GetFont())
     local fonts = { 
         {l=L["系统默认"], v=STANDARD_TEXT_FONT}, 
@@ -735,11 +751,9 @@ function Config:BuildLookPage()
     y = self:Dropdown(inner, L["全局字体"], y, fonts,
         function() return ns.db.display.font or STANDARD_TEXT_FONT end,
         function(v) ns.db.display.font=v; self:RefreshUI() end)
-    -- ★ 替换结束
     y = self:Slider(inner, L["字体基础大小"], y, 8, 20, 1,
         function() return ns.db.display.fontSizeBase or 10 end,
         function(v) ns.db.display.fontSizeBase=v; self:RefreshUI() end)
-
     local outlines = { {l=L["无"], v=""}, {l=L["发光描边 (Outline)"], v="OUTLINE"}, {l=L["加粗描边"], v="THICKOUTLINE"} }
     y = self:Dropdown(inner, L["字体描边"], y, outlines,
         function() return ns.db.display.fontOutline or "OUTLINE" end,
@@ -792,27 +806,35 @@ function Config:BuildLookPage()
     y = self:Slider(inner, L["数据条透明度"], y, 0.1, 1.0, 0.05,
         function() return ns.db.detailDisplay.barAlpha or 0.92 end,
         function(v) ns.db.detailDisplay.barAlpha=v; if ns.DetailView then ns.DetailView:Refresh() end end)
-
     y = self:Dropdown(inner, L["数据条材质"], y, textures,
         function() return ns.db.detailDisplay.barTexture or "Interface\\Buttons\\WHITE8X8" end,
         function(v) ns.db.detailDisplay.barTexture=v; if ns.DetailView then ns.DetailView:Refresh() end end)
-
     y = self:Dropdown(inner, L["技能详情页字体"], y, fonts,
         function() return ns.db.detailDisplay.font or STANDARD_TEXT_FONT end,
         function(v) ns.db.detailDisplay.font=v; if ns.DetailView then ns.DetailView:Refresh() end end)
-        
     y = self:Slider(inner, L["字体基础大小"], y, 8, 20, 1,
         function() return ns.db.detailDisplay.fontSizeBase or 10 end,
         function(v) ns.db.detailDisplay.fontSizeBase=v; if ns.DetailView then ns.DetailView:Refresh() end end)
-        
     y = self:Dropdown(inner, L["字体描边"], y, outlines,
         function() return ns.db.detailDisplay.fontOutline or "OUTLINE" end,
         function(v) ns.db.detailDisplay.fontOutline=v; if ns.DetailView then ns.DetailView:Refresh() end end)
-        
     y = self:Check(inner, L["开启文字阴影"], y,
         function() return ns.db.detailDisplay.fontShadow end,
         function(v) ns.db.detailDisplay.fontShadow=v; if ns.DetailView then ns.DetailView:Refresh() end end)
 
+    -- ── 折叠与隐藏 ────────────────────────────────────────────
+    -- ★ 使用独立容器，内容动态重建
+    y = y - 12
+    local foldContainer = CreateFrame("Frame", nil, inner)
+    foldContainer:SetWidth(inner:GetWidth())
+    foldContainer:SetPoint("TOPLEFT", inner, "TOPLEFT", 0, y)
+    self._foldContainer = foldContainer
+    self._foldContainerBaseY = y
+
+    self:RebuildFoldAndHide()
+
+    -- ★ 用容器动态高度计算页面总高
+    y = y - (self._foldContainer:GetHeight() or 0)
     inner:SetHeight(math.abs(y) + 20)
 end
 

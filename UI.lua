@@ -185,15 +185,17 @@ function UI:Build()
     -- 鼠标悬停检测（OnUpdate 轮询，子控件不会误触）
     local fadeHoverFrame = CreateFrame("Frame")
     fadeHoverFrame:SetScript("OnUpdate", function()
-        if not ns.db or not ns.db.fade or not ns.db.fade.autoFade or not ns.db.fade.unfadeOnHover then return end
+        if not ns.db or not ns.db.fade then return end
+        if not (ns.db.fade.fadeBars or ns.db.fade.fadeBody) then return end
+        if not ns.db.fade.unfadeOnHover then return end
         if not self._faded then return end
         if not self.frame or not self.frame:IsShown() then return end
 
         local isOver = self.frame:IsMouseOver()
         if isOver and not self._wasMouseOver then
-            self:ApplyFadeAlpha(false)
+            self:ApplyFadeAlpha(false, false)
         elseif not isOver and self._wasMouseOver then
-            self:ApplyFadeAlpha(true)
+            self:CheckAutoFade(true)
         end
         self._wasMouseOver = isOver
     end)
@@ -444,54 +446,72 @@ function UI:CheckAutoFade(force)
     if self._collapsed then
         if self._faded then
             self._faded = false
-            self:ApplyFadeAlpha(false)
+            self:ApplyFadeAlpha(false, false)
         end
         return
     end
 
-    -- 战斗中：取消渐隐
-    if ns.state.inCombat then
-        if self._faded then
-            self._faded = false
-            self:ApplyFadeAlpha(false)
-        end
-        return
-    end
-
-    -- 脱战后
-    if fdb.autoFade then
-        -- ★ 修复：添加 force 参数，设置变更时强制重新应用渐隐
-        if not self._faded or force then
-            self._faded = true
-            if fdb.unfadeOnHover and self.frame:IsMouseOver() then
-                -- ★ 修复：鼠标悬停时也要确保 unfade 被正确应用（而非直接 return 什么都不做）
-                self:ApplyFadeAlpha(false)
-                return
-            end
-            self:ApplyFadeAlpha(true)
-        end
-    else
-        -- ★ 修复：关闭渐隐时也需要 force 检查，确保能立即恢复
+    local anyFadeEnabled = fdb.fadeBars or fdb.fadeBody
+    if not anyFadeEnabled then
+        -- 没有任何渐隐开关, 恢复全透明
         if self._faded or force then
             self._faded = false
-            self:ApplyFadeAlpha(false)
+            self:ApplyFadeAlpha(false, false)
         end
+        return
+    end
+
+    -- ★ 分别计算两个组件是否应该渐隐
+    local shouldFadeBars = false
+    if fdb.fadeBars then
+        if fdb.barsWhen == "always" then
+            shouldFadeBars = true
+        else -- "ooc"
+            shouldFadeBars = not ns.state.inCombat
+        end
+        -- 副本中永不隐藏
+        if shouldFadeBars and fdb.barsNeverInInstance and ns.state.isInInstance then
+            shouldFadeBars = false
+        end
+    end
+
+    local shouldFadeBody = false
+    if fdb.fadeBody then
+        if fdb.bodyWhen == "always" then
+            shouldFadeBody = true
+        else -- "ooc"
+            shouldFadeBody = not ns.state.inCombat
+        end
+        if shouldFadeBody and fdb.bodyNeverInInstance and ns.state.isInInstance then
+            shouldFadeBody = false
+        end
+    end
+
+    -- 鼠标悬停时取消渐隐
+    if fdb.unfadeOnHover and self.frame:IsMouseOver() then
+        shouldFadeBars = false
+        shouldFadeBody = false
+    end
+
+    local newFaded = shouldFadeBars or shouldFadeBody
+    if newFaded ~= self._faded or force then
+        self._faded = newFaded
+        self:ApplyFadeAlpha(shouldFadeBars, shouldFadeBody)
     end
 end
 
-function UI:ApplyFadeAlpha(shouldFade)
+function UI:ApplyFadeAlpha(shouldFadeBars, shouldFadeBody)
     local fdb = ns.db and ns.db.fade
     if not fdb then return end
 
-    -- ★ 修复：强制取消正在进行的渐隐动画，避免新旧动画冲突
+    -- 取消正在进行的渐隐动画
     if self._fadeAnimFrame then
         self._fadeAnimFrame:SetScript("OnUpdate", nil)
     end
     self._fadeAnimating = false
 
-    -- 分两组：顶底菜单 / 数据栏，各自有独立的目标透明度
-    local barsAlpha = shouldFade and fdb.barsAlpha or 1.0
-    local bodyAlpha = shouldFade and fdb.bodyAlpha or 1.0
+    local barsAlpha = shouldFadeBars and fdb.barsAlpha or 1.0
+    local bodyAlpha = shouldFadeBody and fdb.bodyAlpha or 1.0
 
     local barsTargets = {}
     local bodyTargets = {}
@@ -499,10 +519,22 @@ function UI:ApplyFadeAlpha(shouldFade)
     if fdb.fadeBars then
         if self.titleBar then table.insert(barsTargets, self.titleBar) end
         if self.tabBar   then table.insert(barsTargets, self.tabBar)   end
+        if self.resizeHandle then table.insert(barsTargets, self.resizeHandle) end  -- ★ 新增
+
     end
     if fdb.fadeBody then
         if self.bodyFrame   then table.insert(bodyTargets, self.bodyFrame)   end
         if self.summaryBar  then table.insert(bodyTargets, self.summaryBar)  end
+    end
+
+    -- 如果没有渐隐目标但需要恢复，也要执行
+    if not shouldFadeBars and not shouldFadeBody then
+        -- 恢复所有可能被渐隐过的目标
+        if self.titleBar   then table.insert(barsTargets, self.titleBar) end
+        if self.tabBar     then table.insert(barsTargets, self.tabBar)   end
+        if self.resizeHandle then table.insert(barsTargets, self.resizeHandle) end  -- ★ 新增
+        if self.bodyFrame  then table.insert(bodyTargets, self.bodyFrame)  end
+        if self.summaryBar then table.insert(bodyTargets, self.summaryBar) end
     end
 
     if #barsTargets == 0 and #bodyTargets == 0 then return end
@@ -1433,7 +1465,7 @@ function UI:OnCombatStateChanged(inCombat)
 
     if inCombat then
         self:CheckAutoCollapse()
-        self:CheckAutoFade()   -- ★ 进战时取消渐隐
+        self:CheckAutoFade(true)   -- 进战时，让 CheckAutoFade 自动判断是否需要取消渐隐
     else
         -- 折叠延迟
         local collapseDelay = ns.db.collapse.delay or 1.5
