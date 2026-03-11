@@ -255,9 +255,18 @@ function Core:OnInitialize()
                 local ss  = C_DamageMeter.GetAvailableCombatSessions()
                 local cnt = ss and #ss or 0
                 if cnt > 0 and ns.CombatTracker._baselineSessionCount == 0 then
-                    local offset = ns.state.inCombat and 1 or 0
-                    ns.CombatTracker._baselineSessionCount = math.max(0, cnt - offset)
-                    ns.CombatTracker._lastProcessedCount   = math.max(0, cnt - offset)
+                    -- ★ 二次校验：确认这些 session 不是暴雪残留的空壳
+                    --   如果最新的 session 时长为0且无名称，说明是 stale 数据，不设 baseline
+                    local latestSess = ss[cnt]
+                    local isStale = (latestSess.durationSeconds or 0) == 0
+                                and (latestSess.name == nil or latestSess.name == "")
+                    if isStale then
+                        -- 残留空壳，跳过设置，等真正的战斗产生后再对齐
+                    else
+                        local offset = ns.state.inCombat and 1 or 0
+                        ns.CombatTracker._baselineSessionCount = math.max(0, cnt - offset)
+                        ns.CombatTracker._lastProcessedCount   = math.max(0, cnt - offset)
+                    end
                     
                     if ns.Segments and ns.Segments.overall then
                         local hasData = ns.Segments.overall.totalDamage > 0
@@ -433,8 +442,9 @@ function ns:EnterCombat()
 end
 
 function ns:LeaveCombat()
-    ns.state.inCombat      = false
-    ns.state.combatEndTime = GetTime()
+    ns.state.inCombat        = false
+    ns.state.combatStartTime = 0
+    ns.state.combatEndTime   = GetTime()
     if ns.Segments then ns.Segments:OnCombatEnd() end
     if ns.UI       then ns.UI:OnCombatStateChanged(false) end
 end

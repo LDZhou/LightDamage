@@ -199,6 +199,13 @@ local function processArchivedSessions()
     local sessionCount = sessions and #sessions or 0
     if sessionCount == 0 then return end
 
+    -- ★ 防御性修正：如果 baseline 或 lastProcessed 比实际 session 数量大，
+    --   说明暴雪底层在登录后做了内部 reset，需要重新对齐
+    if CT._lastProcessedCount > sessionCount then
+        CT._lastProcessedCount   = 0
+        CT._baselineSessionCount = 0
+    end
+
     local lastProcessed = CT._lastProcessedCount
 
     if sessionCount > lastProcessed then
@@ -1162,12 +1169,24 @@ end
 -- ============================================================
 -- 状态同步
 -- ============================================================
+local function isGroupInCombat()
+    if UnitAffectingCombat("player") then return true end
+    -- 仅副本内才检查队友，避免野外队友远程打怪导致误触发
+    if not ns.state.isInInstance then return false end
+    local prefix = IsInRaid() and "raid" or "party"
+    local count  = GetNumGroupMembers()
+    for i = 1, count do
+        if UnitAffectingCombat(prefix .. i) then return true end
+    end
+    return false
+end
+
 local function syncCombatState()
     CT._updateCount = CT._updateCount + 1
 
     local sessions     = C_DamageMeter.GetAvailableCombatSessions()
     local sessionCount = sessions and #sessions or 0
-    local hasLive      = UnitAffectingCombat("player") == true
+    local hasLive      = isGroupInCombat()
 
     if hasLive then
         if not ns.state.inCombat then
@@ -1356,10 +1375,7 @@ function CT:RegisterEvents()
                     }
 
                     if ns.state.inCombat then
-                        ns.state.inCombat      = false
-                        ns.state.combatEndTime = GetTime()
-                        if ns.Segments then ns.Segments:OnCombatEnd() end
-                        if ns.UI then ns.UI:OnCombatStateChanged(false) end
+                        ns:LeaveCombat()
                     end
 
 
@@ -1524,8 +1540,13 @@ function CT:RegisterEvents()
 
         elseif event == "PLAYER_REGEN_ENABLED" then
             if ns.state.inCombat then
-                ns.state.combatStartTime = 0
-                syncCombatState()
+                -- 延迟检查：玩家脱战但队友可能还在打
+                C_Timer.After(0.3, function()
+                    if not isGroupInCombat() then
+                        ns.state.combatStartTime = 0
+                        syncCombatState()
+                    end
+                end)
             end
         end
     end)
