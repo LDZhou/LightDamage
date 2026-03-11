@@ -471,32 +471,112 @@ function Config:BuildLayoutPage()
     sec4:SetHeight(math.abs(y4))
     self.laySec4 = sec4
 
-    -- 区域5：展开与折叠
+    -- 区域5：折叠与隐藏
     local sec5 = CreateFrame("Frame", nil, inner)
     sec5:SetWidth(inner:GetWidth())
     local y5 = 0
-    y5 = self:H(sec5, L["展开与折叠"], y5)
-    y5 = self:Check(sec5, L["脱战后自动折叠"], y5, 
-        function() return ns.db.collapse.autoCollapse end, 
+    y5 = self:H(sec5, L["折叠与隐藏"], y5)
+
+    -- ── 折叠 ──
+    y5 = y5 - 4
+    local sec5a_hdr = sec5:CreateFontString(nil, "OVERLAY")
+    sec5a_hdr:SetFont(STANDARD_TEXT_FONT, 11, "OUTLINE")
+    sec5a_hdr:SetPoint("TOPLEFT", 6, y5)
+    sec5a_hdr:SetTextColor(0.6, 0.8, 1.0)
+    sec5a_hdr:SetText("▸ " .. L["折叠"])
+    y5 = y5 - 20
+
+    y5 = self:Check(sec5, L["脱战后自动折叠"], y5,
+        function() return ns.db.collapse.autoCollapse end,
         function(v) ns.db.collapse.autoCollapse = v; if ns.UI then ns.UI:CheckAutoCollapse() end end)
-    y5 = self:Check(sec5, L["副本中永不自动折叠"], y5, 
-        function() return ns.db.collapse.neverInInstance end, 
+    y5 = self:Check(sec5, L["副本中永不自动折叠"], y5,
+        function() return ns.db.collapse.neverInInstance end,
         function(v) ns.db.collapse.neverInInstance = v; if ns.UI then ns.UI:CheckAutoCollapse() end end)
-    y5 = self:Slider(sec5, L["脱战后多久后开始折叠 (秒)"], y5, 0, 10, 0.5, 
-        function() return ns.db.collapse.delay or 1.5 end, 
+    y5 = self:Slider(sec5, L["脱战后多久后开始折叠 (秒)"], y5, 0, 10, 0.5,
+        function() return ns.db.collapse.delay or 1.5 end,
         function(v) ns.db.collapse.delay = v end)
-    y5 = self:Slider(sec5, L["折叠后透明度"], y5, 0, 1, 0.05, 
-        function() return ns.db.collapse.alpha end, 
-        function(v) ns.db.collapse.alpha = v; if ns.UI and ns.UI._collapsed then ns.UI.frame:SetAlpha(v) end end, true)
-    y5 = self:Check(sec5, L["开启折叠动画"], y5, 
-        function() return ns.db.collapse.enableAnim end, 
+    y5 = self:Check(sec5, L["开启折叠动画"], y5,
+        function() return ns.db.collapse.enableAnim end,
         function(v) ns.db.collapse.enableAnim = v end)
-    y5 = self:Slider(sec5, L["折叠动画持续时间"], y5, 0.1, 2.0, 0.1, 
-        function() return ns.db.collapse.animDuration end, 
+    y5 = self:Slider(sec5, L["折叠动画持续时间"], y5, 0.1, 2.0, 0.1,
+        function() return ns.db.collapse.animDuration end,
         function(v) ns.db.collapse.animDuration = v end)
-    sec5:SetHeight(math.abs(y5))
+
+    -- 记录折叠部分结束的 Y 偏移
+    local y5_afterCollapse = y5
+
+    -- ── 自动渐隐 ──
+    y5 = y5 - 12
+    local sec5b_hdr = sec5:CreateFontString(nil, "OVERLAY")
+    sec5b_hdr:SetFont(STANDARD_TEXT_FONT, 11, "OUTLINE")
+    sec5b_hdr:SetPoint("TOPLEFT", 6, y5)
+    sec5b_hdr:SetTextColor(0.6, 0.8, 1.0)
+    sec5b_hdr:SetText("▸ " .. L["自动渐隐"])
+    y5 = y5 - 20
+
+    y5 = self:Check(sec5, L["脱战后自动渐隐"], y5,
+        function() return ns.db.fade.autoFade end,
+        function(v) ns.db.fade.autoFade = v; if ns.UI then ns.UI:CheckAutoFade() end; self:UpdateFadeVisibility() end)
+
+    -- 渐隐子选项容器（缩进 16px）
+    local sec5bSub = CreateFrame("Frame", nil, sec5)
+    sec5bSub:SetWidth(inner:GetWidth() - 16)
+    sec5bSub:SetPoint("TOPLEFT", sec5, "TOPLEFT", 16, y5)
+    local y5b = 0
+
+    y5b = self:Check(sec5bSub, L["鼠标移到窗口上时取消渐隐"], y5b,
+        function() return ns.db.fade.unfadeOnHover end,
+        function(v) ns.db.fade.unfadeOnHover = v end)
+    y5b = self:Slider(sec5bSub, L["脱战后自动渐隐延迟 (秒)"], y5b, 0, 10, 0.5,
+        function() return ns.db.fade.delay or 1.5 end,
+        function(v) ns.db.fade.delay = v end)
+    y5b = y5b - 8
+
+    y5b = self:Desc(sec5bSub, y5b, L["自动渐隐的内容"] .. ":")
+    y5b = self:Check(sec5bSub, L["顶部与底部菜单"], y5b,
+        function() return ns.db.fade.fadeBars end,
+        function(v) ns.db.fade.fadeBars = v; if ns.UI then ns.UI:CheckAutoFade() end end)
+    y5b = self:Slider(sec5bSub, L["顶/底部菜单渐隐后透明度"], y5b, 0, 1, 0.05,
+        function() return ns.db.fade.barsAlpha end,
+        function(v) ns.db.fade.barsAlpha = v; if ns.UI and ns.UI._faded then ns.UI:ApplyFadeAlpha(true) end end, true)
+
+    y5b = self:Check(sec5bSub, L["数据栏"], y5b,
+        function() return ns.db.fade.fadeBody end,
+        function(v) ns.db.fade.fadeBody = v; if ns.UI then ns.UI:CheckAutoFade() end end)
+    y5b = self:Slider(sec5bSub, L["数据栏渐隐后透明度"], y5b, 0, 1, 0.05,
+        function() return ns.db.fade.bodyAlpha end,
+        function(v) ns.db.fade.bodyAlpha = v; if ns.UI and ns.UI._faded then ns.UI:ApplyFadeAlpha(true) end end, true)
+
+    y5b = y5b - 8
+    y5b = self:Check(sec5bSub, L["开启渐隐动画"], y5b,
+        function() return ns.db.fade.enableAnim end,
+        function(v) ns.db.fade.enableAnim = v end)
+    y5b = self:Slider(sec5bSub, L["渐隐动画持续时间"], y5b, 0.1, 2.0, 0.1,
+        function() return ns.db.fade.animDuration end,
+        function(v) ns.db.fade.animDuration = v end)
+
+    sec5bSub:SetHeight(math.abs(y5b))
+    self.laySec5bSub = sec5bSub
+    self.laySec5_baseY = y5   -- 渐隐子区域展开前的 Y 偏移（负值）
+
+    sec5:SetHeight(math.abs(y5) + (ns.db.fade.autoFade and math.abs(y5b) or 0))
     self.laySec5 = sec5
     
+    self:UpdateLayoutVisibility()
+end
+
+
+function Config:UpdateFadeVisibility()
+    if not self.laySec5bSub or not self.laySec5 then return end
+
+    if ns.db.fade and ns.db.fade.autoFade then
+        self.laySec5bSub:Show()
+        self.laySec5:SetHeight(math.abs(self.laySec5_baseY or 0) + self.laySec5bSub:GetHeight())
+    else
+        self.laySec5bSub:Hide()
+        self.laySec5:SetHeight(math.abs(self.laySec5_baseY or 0))
+    end
+
     self:UpdateLayoutVisibility()
 end
 
@@ -524,6 +604,17 @@ function Config:UpdateLayoutVisibility()
     self.laySec2:SetPoint("TOPLEFT", self.laySec1, "BOTTOMLEFT", 0, -12)
     self.laySec3:SetPoint("TOPLEFT", self.laySec2, "BOTTOMLEFT", 0, -12)
     self.laySec4:SetPoint("TOPLEFT", self.laySec3, "BOTTOMLEFT", 0, -12)
+    
+    -- ★ 动态折叠渐隐子区域
+    if self.laySec5bSub then
+        if ns.db.fade and ns.db.fade.autoFade then
+            self.laySec5bSub:Show()
+            self.laySec5:SetHeight(math.abs(self.laySec5_baseY or 0) + self.laySec5bSub:GetHeight())
+        else
+            self.laySec5bSub:Hide()
+            self.laySec5:SetHeight(math.abs(self.laySec5_baseY or 0))
+        end
+    end
     
     -- ★ 将展开与折叠区块垫在最后
     self.laySec5:SetPoint("TOPLEFT", self.laySec4, "BOTTOMLEFT", 0, -12)

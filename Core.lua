@@ -30,6 +30,17 @@ ns.defaults = {
         enableAnim      = true,
         animDuration    = 0.4,
     },
+    fade = {
+        autoFade         = false,
+        unfadeOnHover    = true,
+        fadeBars         = true,        -- "顶部与底部菜单"
+        fadeBody         = true,        -- "数据栏"
+        barsAlpha        = 0.3,         -- 顶/底部菜单渐隐后透明度
+        bodyAlpha        = 0.15,        -- 数据栏渐隐后透明度
+        delay            = 1.5,
+        enableAnim       = true,
+        animDuration     = 0.5,
+    },
     window = {
         width = 400, height = 280,
         point = "BOTTOMRIGHT", relPoint = "BOTTOMRIGHT", x = -20, y = 180,
@@ -206,7 +217,7 @@ function Core:OnInitialize()
         end
 
         -- 3. 清理旧的角色级配置数据(节约空间，只保留战斗历史等)
-        local CONFIG_KEYS = { window=true, display=true, split=true, mythicPlus=true, tracking=true, smartRefresh=true, useBlizzMeter=true, detailWindow=true, detailDisplay=true, collapse=true }
+        local CONFIG_KEYS = { window=true, display=true, split=true, mythicPlus=true, tracking=true, smartRefresh=true, useBlizzMeter=true, detailWindow=true, detailDisplay=true, collapse=true, fade=true }
         for k in pairs(CONFIG_KEYS) do
             if LDCombatStatsDB[k] then LDCombatStatsDB[k] = nil end
         end

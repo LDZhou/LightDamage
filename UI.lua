@@ -176,6 +176,28 @@ function UI:Build()
 
     self._lastFontHash = nil
     self._sessionCache = {}
+
+    -- ★ 渐隐系统初始化
+    self._faded = false
+    self._fadeAnimating = false
+    self._wasMouseOver = false
+
+    -- 鼠标悬停检测（OnUpdate 轮询，子控件不会误触）
+    local fadeHoverFrame = CreateFrame("Frame")
+    fadeHoverFrame:SetScript("OnUpdate", function()
+        if not ns.db or not ns.db.fade or not ns.db.fade.autoFade or not ns.db.fade.unfadeOnHover then return end
+        if not self._faded then return end
+        if not self.frame or not self.frame:IsShown() then return end
+
+        local isOver = self.frame:IsMouseOver()
+        if isOver and not self._wasMouseOver then
+            self:ApplyFadeAlpha(false)
+        elseif not isOver and self._wasMouseOver then
+            self:ApplyFadeAlpha(true)
+        end
+        self._wasMouseOver = isOver
+    end)
+    self._fadeHoverFrame = fadeHoverFrame
 end
 
 local TEX = "Interface\\AddOns\\LDCombatStats\\Textures\\"
@@ -322,6 +344,10 @@ function UI:ToggleCollapse(collapse, skipAnim)
                 self.frame:SetPoint(unpack(self._savedAnchor))
             end
             self:Layout()
+            -- ★ 展开后若脱战，恢复渐隐
+            if not ns.state.inCombat then
+                C_Timer.After(0.1, function() self:CheckAutoFade() end)
+            end
         end
     end
 
@@ -397,6 +423,114 @@ function UI:CheckAutoCollapse(skipAnim)
             self:ToggleCollapse(true, skipAnim)
         end
     end
+end
+
+-- ============================================================
+-- 渐隐系统
+-- ============================================================
+function UI:CheckAutoFade()
+    local fdb = ns.db and ns.db.fade
+    if not fdb then return end
+    if not self.frame or not self.frame:IsShown() then return end
+
+    -- 折叠状态下不处理渐隐
+    if self._collapsed then
+        if self._faded then
+            self._faded = false
+            self:ApplyFadeAlpha(false)
+        end
+        return
+    end
+
+    -- 战斗中：取消渐隐
+    if ns.state.inCombat then
+        if self._faded then
+            self._faded = false
+            self:ApplyFadeAlpha(false)
+        end
+        return
+    end
+
+    -- 脱战后
+    if fdb.autoFade then
+        if not self._faded then
+            self._faded = true
+            if fdb.unfadeOnHover and self.frame:IsMouseOver() then
+                return  -- 鼠标在窗口上，暂不渐隐
+            end
+            self:ApplyFadeAlpha(true)
+        end
+    else
+        if self._faded then
+            self._faded = false
+            self:ApplyFadeAlpha(false)
+        end
+    end
+end
+
+function UI:ApplyFadeAlpha(shouldFade)
+    local fdb = ns.db and ns.db.fade
+    if not fdb then return end
+
+    -- 分两组：顶底菜单 / 数据栏，各自有独立的目标透明度
+    local barsAlpha = shouldFade and fdb.barsAlpha or 1.0
+    local bodyAlpha = shouldFade and fdb.bodyAlpha or 1.0
+
+    local barsTargets = {}
+    local bodyTargets = {}
+
+    if fdb.fadeBars then
+        if self.titleBar then table.insert(barsTargets, self.titleBar) end
+        if self.tabBar   then table.insert(barsTargets, self.tabBar)   end
+    end
+    if fdb.fadeBody then
+        if self.bodyFrame   then table.insert(bodyTargets, self.bodyFrame)   end
+        if self.summaryBar  then table.insert(bodyTargets, self.summaryBar)  end
+    end
+
+    if #barsTargets == 0 and #bodyTargets == 0 then return end
+
+    if fdb.enableAnim and not self._fadeAnimating then
+        self:StartFadeAnim(barsTargets, barsAlpha, bodyTargets, bodyAlpha)
+    else
+        for _, f in ipairs(barsTargets) do f:SetAlpha(barsAlpha) end
+        for _, f in ipairs(bodyTargets) do f:SetAlpha(bodyAlpha) end
+    end
+end
+
+function UI:StartFadeAnim(barsTargets, barsAlpha, bodyTargets, bodyAlpha)
+    if not self._fadeAnimFrame then
+        self._fadeAnimFrame = CreateFrame("Frame")
+    end
+
+    self._fadeAnimating = true
+
+    -- 记录每个目标的起始 alpha
+    local barsStart = {}
+    for i, f in ipairs(barsTargets) do barsStart[i] = f:GetAlpha() end
+    local bodyStart = {}
+    for i, f in ipairs(bodyTargets) do bodyStart[i] = f:GetAlpha() end
+
+    local duration = (ns.db.fade and ns.db.fade.animDuration) or 0.5
+    local elapsed = 0
+
+    self._fadeAnimFrame:SetScript("OnUpdate", function(frame, dt)
+        elapsed = elapsed + dt
+        local progress = math.min(elapsed / duration, 1)
+        local ease = math.sin(progress * math.pi / 2)  -- ease-out
+
+        for i, f in ipairs(barsTargets) do
+            f:SetAlpha(barsStart[i] + (barsAlpha - barsStart[i]) * ease)
+        end
+        for i, f in ipairs(bodyTargets) do
+            f:SetAlpha(bodyStart[i] + (bodyAlpha - bodyStart[i]) * ease)
+        end
+
+        if progress >= 1 then
+            frame:SetScript("OnUpdate", nil)
+            self._fadeAnimating = false
+        end
+    end)
 end
 
 function UI:BuildMPlusSummary()
@@ -1277,20 +1411,25 @@ end
 
 function UI:OnCombatStateChanged(inCombat)
     self:RefreshTitle(); self:Refresh()
-    
+
     if inCombat then
-        -- 进战时，立刻检查并执行自动展开
         self:CheckAutoCollapse()
+        self:CheckAutoFade()   -- ★ 进战时取消渐隐
     else
-        -- ★ 读取玩家设置的延迟时间（如果没取到，默认1.5秒）
-        local delay = ns.db.collapse.delay or 1.5
-        
-        if delay <= 0 then
-            -- 如果设为0秒，脱战瞬间直接判定折叠
+        -- 折叠延迟
+        local collapseDelay = ns.db.collapse.delay or 1.5
+        if collapseDelay <= 0 then
             self:CheckAutoCollapse()
         else
-            -- 否则，根据设定的时间延迟判定
-            C_Timer.After(delay, function() self:CheckAutoCollapse() end)
+            C_Timer.After(collapseDelay, function() self:CheckAutoCollapse() end)
+        end
+
+        -- 渐隐延迟
+        local fadeDelay = (ns.db.fade and ns.db.fade.delay) or 1.5
+        if fadeDelay <= 0 then
+            self:CheckAutoFade()
+        else
+            C_Timer.After(fadeDelay, function() self:CheckAutoFade() end)
         end
     end
 end
@@ -1927,6 +2066,7 @@ function UI:Toggle()
         self.frame:Show()
         ns.db.window.visible = true   -- ★ 保存显示状态
         self:Layout() 
+        C_Timer.After(0.1, function() self:CheckAutoFade() end)
     end
 end
 function UI:IsVisible()
