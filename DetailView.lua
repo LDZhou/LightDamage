@@ -404,26 +404,32 @@ local function setNameWithIcon(r, iconTex, text)
 end
 
 local function GetSpellIcon(spellID)
-    if not spellID or spellID == 0 then return nil end
-    if C_Spell and C_Spell.GetSpellTexture then
-        local t = C_Spell.GetSpellTexture(spellID); if t then return t end
-    end
-    if GetSpellTexture then
-        local ok, t = pcall(GetSpellTexture, spellID)
-        if ok and t then return t end
-    end
+    if not spellID then return nil end
+    local ok, icon = pcall(function()
+        if spellID == 0 then return nil end
+        if C_Spell and C_Spell.GetSpellTexture then
+            return C_Spell.GetSpellTexture(spellID)
+        end
+        if GetSpellTexture then
+            return GetSpellTexture(spellID)
+        end
+        return nil
+    end)
+    if ok and icon then return icon end
     return nil
 end
 
 -- ============================================================
 -- 技能列表渲染
 -- ============================================================
-function DV:RenderSpellList(name, class, mode, spells, dur, titleSuffix)
-    self._lastRenderArgs = { type = "spell", args = {name, class, mode, spells, dur, titleSuffix} }
+function DV:RenderSpellList(name, class, mode, spells, dur, titleSuffix, apiMaxAmount)
+    self._lastRenderArgs = { type = "spell", args = {name, class, mode, spells, dur, titleSuffix, apiMaxAmount} }
     self:EnsureCreated()
     self.frame:Show()
     self:ApplyTheme()
     self:ClearRows()
+
+    print("|cffff00ff[LD DEBUG RenderSpellList]|r frameShown=", self.frame:IsShown(), "spells=", #spells, "apiMaxAmount=", type(apiMaxAmount))
 
     local ch = ns:GetClassHex(class)
     -- ★ 在这里实时获取翻译
@@ -443,15 +449,24 @@ function DV:RenderSpellList(name, class, mode, spells, dur, titleSuffix)
         return
     end
 
-    local maxV = spells[1] and (spells[1].secretAmt or spells[1].value) or 0
+    local maxV
+    if apiMaxAmount then
+        -- ★ 战斗中：用 API 提供的 secret maxAmount（和暴雪做法一致）
+        maxV = apiMaxAmount
+    else
+        maxV = spells[1] and spells[1].value or 0
+        if maxV == 0 then maxV = 1 end
+    end
 
     for i, sp in ipairs(spells) do
         local r = self:PlaceRow(i, currentY, bh, nil, thickness, vOffset)
         currentY = currentY - (bh + gap)
 
         r.fill:SetStatusBarTexture(texPath)
-        r.fill:SetMinMaxValues(0, maxV)
-        r.fill:SetValue(sp.secretAmt or sp.value)
+        pcall(function()
+            r.fill:SetMinMaxValues(0, maxV)
+            r.fill:SetValue(sp.secretAmt or sp.value)
+        end)
 
         -- ★ 颜色：魔法学派颜色，透明度跟主界面统一
         local sc2 = ns.SCHOOL_COLORS and ns.SCHOOL_COLORS[sp.school] or {0.5, 0.5, 0.7}
@@ -479,8 +494,12 @@ function DV:RenderSpellList(name, class, mode, spells, dur, titleSuffix)
             valStr = ns:FormatNumber(sp.value)
         end
         
-        local pctStr = sp.secretAmt and "--%" or string.format("%.0f%%", sp.percent or 0)
-        r.value:SetText(valStr .. " |cffaaaaaa" .. pctStr .. "|r")
+        if sp.secretAmt then
+            r.value:SetText(valStr)
+        else
+            local pctStr = string.format("%.0f%%", sp.percent or 0)
+            r.value:SetText(valStr .. " |cffaaaaaa" .. pctStr .. "|r")
+        end
 
         -- 【后】再赋予左侧名字，此时超出裁剪框的部分会被完美隐藏
         setNameWithIcon(r, GetSpellIcon(sp.spellID), nc .. sn .. "|r")
@@ -488,10 +507,14 @@ function DV:RenderSpellList(name, class, mode, spells, dur, titleSuffix)
         local sp_c = sp
         r.frame:SetScript("OnEnter", function(fw)
             GameTooltip:SetOwner(fw, "ANCHOR_RIGHT")
-            if sp_c.spellID and sp_c.spellID > 0 then
-                pcall(function() GameTooltip:SetSpellByID(sp_c.spellID) end)
-            else
-                GameTooltip:AddLine(sp_c.name or "?")
+            pcall(function()
+                if sp_c.spellID and sp_c.spellID > 0 then
+                    GameTooltip:SetSpellByID(sp_c.spellID)
+                end
+            end)
+            if not GameTooltip:NumLines() or GameTooltip:NumLines() == 0 then
+                local nameOk, n = pcall(tostring, sp_c.name or "?")
+                GameTooltip:AddLine(nameOk and n or "?")
             end
             GameTooltip:AddLine(" ")
             
@@ -525,62 +548,119 @@ function DV:ShowSpellBreakdown(guid, name, class, mode, seg)
     self:RenderSpellList(name, class, displayMode, spells, dur, "")
 end
 
--- ============================================================
--- 技能细分（战斗中实时 API）
--- ============================================================
-function DV:ShowSpellBreakdownFromAPI(guid, name, class, mode, sessionType)
+function DV:ShowSpellBreakdownFromAPI(sourceGUID, sourceCreatureID, name, class, mode, sessionType)
+    print("|cff00ffff[LD API]|r mode=", mode, "guid=", sourceGUID)
     if mode ~= "damage" and mode ~= "healing" then return end
 
-    local dmType = (mode == "healing") and Enum.DamageMeterType.HealingDone or Enum.DamageMeterType.DamageDone
+    local dmType = (mode == "healing") and Enum.DamageMeterType.HealingDone
+                                        or Enum.DamageMeterType.DamageDone
+    local sType = sessionType or Enum.DamageMeterSessionType.Current
 
-    -- 1. 确认是否为玩家自身
-    local isSelf = false
-    pcall(function()
-        if guid == UnitGUID("player") or (type(name)=="string" and string.find(name, UnitName("player"), 1, true)) then
-            isSelf = true
-        end
-    end)
+    -- ★ 第一步：查玩家自己的技能
+    local ok, srcData = pcall(
+        C_DamageMeter.GetCombatSessionSourceFromType,
+        sType, dmType, sourceGUID, sourceCreatureID
+    )
 
-    -- 2. 直接使用官方 API 获取
-    local queryGuid = isSelf and UnitGUID("player") or guid
-    local srcData
-    local ok, data = pcall(C_DamageMeter.GetCombatSessionSourceFromType, sessionType or Enum.DamageMeterSessionType.Current, dmType, queryGuid)
-    if ok and data and data.combatSpells then srcData = data end
-
-    -- 3. 数据为空，走保护提示
-    if not srcData or not srcData.combatSpells or #srcData.combatSpells == 0 then
-        if ns.state.inCombat then
-            self:ShowCombatLocked(name)
-        else
-            self:ShowSpellBreakdown(guid, name, class, mode)
-        end
+    if not ok or type(srcData) ~= "table" or type(srcData.combatSpells) ~= "table" then
+        self:EnsureCreated(); self.frame:Show(); self:ApplyTheme()
+        self:RenderSpellList(name or "?", class or "WARRIOR", mode, {}, 0, "")
+        self._lastRenderArgs = {
+            type = "spellAPI",
+            args = {sourceGUID, sourceCreatureID, name, class, mode, sessionType}
+        }
         return
     end
 
-    -- 4. 无需排序，原样渲染暴雪提供的数据
     local spells = {}
     local isSecret = false
 
-    for _, sp in ipairs(srcData.combatSpells) do
-        local amt = sp.totalAmount
-        if amt then
-            local isSec = issecretvalue and issecretvalue(amt)
-            if isSec then isSecret = true end
-            
-            local spellName = ""
-            if C_Spell and C_Spell.GetSpellName then spellName = C_Spell.GetSpellName(sp.spellID) or "" end
-            if spellName == "" then spellName = "spell:" .. sp.spellID end
+    -- ★ 通用函数：安全地把 combatSpells 添加到 spells 表
+    local function addSpells(combatSpells, isPet, petName)
+        for _, sp in ipairs(combatSpells) do
+            local amtOk, amt = pcall(function() return sp.totalAmount end)
+            if amtOk and amt then
+                local isSec = issecretvalue and issecretvalue(amt)
+                if isSec then isSecret = true end
 
-            table.insert(spells, {
-                spellID     = sp.spellID,
-                name        = spellName,
-                school      = sp.school or 1,
-                value       = isSec and 0 or amt,
-                secretAmt   = amt,  -- 秘密数值交由底层 StatusBar 处理
-                percent     = 0,
-                isPet       = false,
-                isAvoidable = sp.isAvoidable,
-            })
+                local spellName = ""
+                local nameOk, nameVal = pcall(function()
+                    if C_Spell and C_Spell.GetSpellName then
+                        return C_Spell.GetSpellName(sp.spellID)
+                    end
+                    return nil
+                end)
+                if nameOk and nameVal then
+                    spellName = nameVal
+                else
+                    local sidOk, sid = pcall(function() return sp.spellID end)
+                    spellName = sidOk and sid and ("spell:" .. sid) or "?"
+                end
+
+                -- 宠物技能名前加宠物名
+                if isPet and petName then
+                    local pnOk, pn = pcall(function() return tostring(petName) end)
+                    if pnOk and pn and pn ~= "" then
+                        local snOk, combined = pcall(function() return pn .. ": " .. spellName end)
+                        if snOk and combined then spellName = combined end
+                    end
+                end
+
+                local spellIDSafe = nil
+                pcall(function() spellIDSafe = sp.spellID end)
+
+                table.insert(spells, {
+                    spellID     = spellIDSafe,
+                    name        = spellName,
+                    school      = 1,
+                    value       = isSec and 0 or amt,
+                    secretAmt   = isSec and amt or nil,
+                    percent     = 0,
+                    isPet       = isPet or false,
+                    isAvoidable = false,
+                })
+            end
+        end
+    end
+
+    -- 添加玩家自己的技能
+    addSpells(srcData.combatSpells, false, nil)
+
+    -- ★ 第二步：遍历总会话，查找属于自己的宠物/召唤物
+    local sessionOk, session = pcall(C_DamageMeter.GetCombatSessionFromType, sType, dmType)
+    if sessionOk and session and type(session.combatSources) == "table" then
+        for _, source in ipairs(session.combatSources) do
+            -- 宠物的 classification 是 "pet"，用 NeverSecret 字段判断
+            local isPet = false
+            local isMine = false
+            pcall(function()
+                isPet = (source.classification == "pet") or (source.classification == "guardian")
+            end)
+
+            if isPet then
+                -- 用 sourceCreatureID 或 sourceGUID 去查它的技能细分
+                local petOk, petData = pcall(
+                    C_DamageMeter.GetCombatSessionSourceFromType,
+                    sType, dmType, source.sourceGUID, source.sourceCreatureID
+                )
+                if petOk and type(petData) == "table" and type(petData.combatSpells) == "table" then
+                    -- 宠物名字
+                    local petName = nil
+                    pcall(function() petName = source.name end)
+                    addSpells(petData.combatSpells, true, petName)
+                end
+            end
+        end
+    end
+
+    -- ★ 第三步：排序和百分比
+    if not isSecret then
+        table.sort(spells, function(a, b) return a.value > b.value end)
+        local total = srcData.totalAmount or 0
+        if total > 0 then
+            for _, s in ipairs(spells) do
+                s.percent = s.value / total * 100
+            end
         end
     end
 
@@ -589,8 +669,16 @@ function DV:ShowSpellBreakdownFromAPI(guid, name, class, mode, sessionType)
         dur = GetTime() - ns.state.combatStartTime
     end
 
-    local suffix = isSecret and " |cffaaaaaa[实时加密]|r" or " |cff00ccff[实时]|r"
-    self:RenderSpellList(name, class, mode, spells, dur, suffix)
+    local suffix = ""
+    local apiMaxAmount = isSecret and srcData.maxAmount or nil
+
+    self._lastRenderArgs = {
+        type = "spellAPI",
+        args = {sourceGUID, sourceCreatureID, name, class, mode, sessionType}
+    }
+
+    self:EnsureCreated(); self.frame:Show(); self:ApplyTheme()
+    self:RenderSpellList(name or "?", class or "WARRIOR", mode, spells, dur, suffix, apiMaxAmount)
 end
 
 -- ============================================================
@@ -618,13 +706,23 @@ end
 -- ============================================================
 function DV:GetSpellBreakdownExt(seg, guid, mode)
     if not seg or not guid then return {} end
+
+    -- ★ 架构升级：预留扩展模块路由 (敌人承伤 / 目标明细)
+    -- 后续可以直接在这里拦截，并遍历 combatSpellDetails 来重组数据
+    if mode == "enemyDamageTaken" or mode == "targetBreakdown" then
+        -- TODO: 等待新增模块实现
+        return {}
+    end
+
     local pd = seg.players[guid]
     if not pd then return {} end
 
+    -- 原有伤害/治疗逻辑交由 Analysis 处理
     if mode == "damage" or mode == "healing" then
         return ns.Analysis and ns.Analysis:GetSpellBreakdown(seg, guid, mode) or {}
     end
 
+    -- 承伤模块：彻底剔除无效的暴击/极值字段
     if mode == "damageTaken" then
         if pd.damageTakenSpells and next(pd.damageTakenSpells) then
             local result = {}
@@ -636,10 +734,6 @@ function DV:GetSpellBreakdownExt(seg, guid, mode)
                         school      = sd.school or 1,
                         value       = sd.damage,
                         hits        = sd.hits or 1,
-                        crits       = sd.crits or 0,
-                        maxHit      = sd.maxHit or 0,
-                        minHit      = (sd.minHit and sd.minHit ~= 999999999) and sd.minHit or 0,
-                        critPercent = (sd.hits and sd.hits > 0) and (sd.crits / sd.hits * 100) or 0,
                         isAvoidable = sd.isAvoidable,
                     })
                 end
@@ -653,11 +747,12 @@ function DV:GetSpellBreakdownExt(seg, guid, mode)
         else
             if (pd.damageTaken or 0) > 0 then
                 return {{ spellID=0, name=L["承伤合计"], school=1, value=pd.damageTaken,
-                    hits=0, crits=0, maxHit=0, minHit=0, critPercent=0, percent=100 }}
+                    hits=0, percent=100 }}
             end
         end
     end
 
+    -- 打断/驱散模块：彻底剔除无效的暴击/极值字段
     if mode == "interrupts" or mode == "dispels" then
         local spellTable = (mode == "interrupts") and pd.interruptSpells or pd.dispelSpells
         local totalVal   = (mode == "interrupts") and pd.interrupts or pd.dispels
@@ -670,7 +765,6 @@ function DV:GetSpellBreakdownExt(seg, guid, mode)
                 if amt > 0 then
                     local sName = sd.name or ("spell:" .. spellID)
                     
-                    -- ★ 核心修改：CC 触发的通用打断
                     if mode == "interrupts" and spellID == 32747 then
                         sName = L["控制技能打断"]
                     end
@@ -681,10 +775,6 @@ function DV:GetSpellBreakdownExt(seg, guid, mode)
                         school      = sd.school or 1,
                         value       = amt,
                         hits        = amt,
-                        crits       = 0,
-                        maxHit      = 0,
-                        minHit      = 0,
-                        critPercent = 0,
                     })
                 end
             end
@@ -696,11 +786,11 @@ function DV:GetSpellBreakdownExt(seg, guid, mode)
             end
             return result
         else
-            -- 兜底逻辑：如果底层没有拿到技能明细，但总次数大于0，回退显示合计
+            -- 兜底逻辑
             if (totalVal or 0) > 0 then
                 local fallbackName = (mode == "interrupts") and L["打断合计"] or L["驱散合计"]
                 return {{ spellID=0, name=fallbackName, school=1, value=totalVal,
-                    hits=0, crits=0, maxHit=0, minHit=0, critPercent=0, percent=100 }}
+                    hits=0, percent=100 }}
             end
         end
     end
@@ -874,6 +964,7 @@ function DV:Refresh()
             local t = self._lastRenderArgs.type
             local a = self._lastRenderArgs.args
             if t == "spell" then self:RenderSpellList(unpack(a))
+            elseif t == "spellAPI" then self:ShowSpellBreakdownFromAPI(unpack(a))  -- ★ 新增
             elseif t == "death" then self:ShowDeathDetail(unpack(a))
             elseif t == "combat" then self:ShowCombatLocked(unpack(a)) end
         else

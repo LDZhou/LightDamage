@@ -378,6 +378,7 @@ function CT:LoadSegmentData(seg)
         [Enum.DamageMeterType.HealingDone] = "healing",
         [Enum.DamageMeterType.DamageTaken] = "damageTaken",
     }) do
+        local spellField = field == "damageTaken" and "damageTakenSpells" or "spells"
         local ok, dmSession = pcall(C_DamageMeter.GetCombatSessionFromID, sid, dmType)
         if ok and dmSession then
             if checkSecret(dmSession.totalAmount) then
@@ -397,16 +398,78 @@ function CT:LoadSegmentData(seg)
                         return
                     end
                     local guid  = src.sourceGUID
+                    local creatureID = src.sourceCreatureID -- ★ 12.0.1 新增：精确宠物ID
                     local total = src.totalAmount or 0
+                    
                     if guid and total > 0 then
-                        local pd = segs:GetPlayer(seg, guid, src.name, nil)
+                        -- 判断该数据流是否来自独立宠物
+                        local isPet = (creatureID ~= nil and creatureID > 0)
+                        -- 如果是宠物，不能把主人的名字覆盖成宠物的名字
+                        local playerName = isPet and nil or src.name
+                        local pd = segs:GetPlayer(seg, guid, playerName, nil)
+                        
                         if pd then
-                            pd.class  = src.classFilename or pd.class
-                            pd[field] = total
-                            -- ★ 直接从 session 读暴雪算好的每秒值（活跃时间口径）
-                            local aps = getAmount(src.amountPerSecond)
-                            if aps > 0 then
-                                pd[field .. "PerSec"] = aps
+                            if not isPet then
+                                pd.class  = src.classFilename or pd.class
+                                local aps = getAmount(src.amountPerSecond)
+                                if aps > 0 then pd[field .. "PerSec"] = aps end
+                            end
+                            pd[field] = (pd[field] or 0) + total
+                            
+                            -- ★ 1. 注册高精度宠物节点 (使用 ID 作为 Key，避免同名混淆)
+                            if isPet then
+                                pd.pets = pd.pets or {}
+                                pd.pets[creatureID] = pd.pets[creatureID] or { name = src.name, spells = {}, damageTakenSpells = {}, damage = 0, healing = 0 }
+                                pd.pets[creatureID][field] = (pd.pets[creatureID][field] or 0) + total
+                            end
+                            
+                            -- ★ 2. 立即提取技能明细 (传入第4个参数，完美分离宠物技能)
+                            local ok3, srcData = pcall(C_DamageMeter.GetCombatSessionSourceFromID, sid, dmType, guid, creatureID)
+                            if ok3 and srcData and srcData.combatSpells then
+                                local baseSpells = isPet and pd.pets[creatureID][spellField] or pd[spellField]
+                                
+                                for _, sp in ipairs(srcData.combatSpells) do
+                                    local spellID = getAmount(sp.spellID)
+                                    if spellID > 0 then
+                                        local amt = getAmount(sp.totalAmount)
+                                        if amt > 0 then
+                                            local targetSpells = baseSpells
+                                            
+                                            -- 兜底逻辑：如果暴雪未来在某些情况下仍将宠物技能塞在玩家主体下，通过 creatureName 分离
+                                            if not isPet then
+                                                local petName = sp.creatureName
+                                                if petName and petName ~= "" and petName ~= pd.name and petName ~= srcData.name then
+                                                    local fallbackKey = "pet_" .. petName
+                                                    pd.pets = pd.pets or {}
+                                                    if not pd.pets[fallbackKey] then
+                                                        pd.pets[fallbackKey] = { name = petName, spells = {}, damageTakenSpells = {}, damage = 0, healing = 0 }
+                                                    end
+                                                    targetSpells = pd.pets[fallbackKey][spellField]
+                                                    
+                                                    if dmType == Enum.DamageMeterType.HealingDone then
+                                                        pd.pets[fallbackKey].healing = (pd.pets[fallbackKey].healing or 0) + amt
+                                                    elseif dmType == Enum.DamageMeterType.DamageDone then
+                                                        pd.pets[fallbackKey].damage = (pd.pets[fallbackKey].damage or 0) + amt
+                                                    end
+                                                end
+                                            end
+
+                                            if not targetSpells[spellID] then
+                                                local spellName = (C_Spell and C_Spell.GetSpellName and C_Spell.GetSpellName(spellID)) or ("spell:" .. spellID)
+                                                targetSpells[spellID] = segs:NewSpellData(spellID, spellName, nil)
+                                            end
+                                            local sd = targetSpells[spellID]
+                                            
+                                            if dmType == Enum.DamageMeterType.HealingDone then
+                                                sd.healing = (sd.healing or 0) + amt
+                                            else
+                                                sd.damage = (sd.damage or 0) + amt
+                                            end
+                                            sd.hits = (sd.hits or 0) + 1
+                                            if sp.isAvoidable then sd.isAvoidable = true end
+                                        end
+                                    end
+                                end
                             end
                         end
                     end
@@ -425,17 +488,23 @@ function CT:LoadSegmentData(seg)
         if ok and dmSession and dmSession.combatSources then
             for _, src in ipairs(dmSession.combatSources) do
                 local guid  = src.sourceGUID
+                local creatureID = src.sourceCreatureID
                 local total = getAmount(src.totalAmount)
+                
                 if guid and total > 0 then
-                    local pd = segs:GetPlayer(seg, guid, src.name, nil)
+                    local isPet = (creatureID ~= nil and creatureID > 0)
+                    local playerName = isPet and nil or src.name
+                    local pd = segs:GetPlayer(seg, guid, playerName, nil)
+                    
                     if pd then
-                        pd.class  = src.classFilename or pd.class
+                        if not isPet then
+                            pd.class = src.classFilename or pd.class
+                        end
                         pd[field] = (pd[field] or 0) + total
-                    end
-                    local ok3, srcData = pcall(C_DamageMeter.GetCombatSessionSourceFromID, sid, dmType, guid)
-                    if ok3 and srcData and srcData.combatSpells then
-                        local pdd = segs:GetPlayer(seg, guid, src.name, nil)
-                        if pdd then
+                        
+                        -- 带入 creatureID 提取精准打断明细
+                        local ok3, srcData = pcall(C_DamageMeter.GetCombatSessionSourceFromID, sid, dmType, guid, creatureID)
+                        if ok3 and srcData and srcData.combatSpells then
                             for _, sp in ipairs(srcData.combatSpells) do
                                 local spellID = getAmount(sp.spellID)
                                 if spellID > 0 then
@@ -443,12 +512,12 @@ function CT:LoadSegmentData(seg)
                                     if amt == 0 then amt = getAmount(sp.casts) end
                                     if amt == 0 then amt = 1 end
                                     if amt > 0 then
-                                        if not pdd[spellField][spellID] then
+                                        if not pd[spellField][spellID] then
                                             local spellName = (C_Spell and C_Spell.GetSpellName and C_Spell.GetSpellName(spellID)) or ("spell:" .. spellID)
-                                            pdd[spellField][spellID] = segs:NewSpellData(spellID, spellName, nil)
+                                            pd[spellField][spellID] = segs:NewSpellData(spellID, spellName, nil)
                                         end
-                                        pdd[spellField][spellID].hits   = pdd[spellField][spellID].hits   + amt
-                                        pdd[spellField][spellID].damage = pdd[spellField][spellID].damage + amt
+                                        pd[spellField][spellID].hits   = pd[spellField][spellID].hits   + amt
+                                        pd[spellField][spellID].damage = pd[spellField][spellID].damage + amt
                                     end
                                 end
                             end
@@ -459,75 +528,18 @@ function CT:LoadSegmentData(seg)
         end
     end
 
-    -- 死亡次数
+    -- 死亡次数 (加上 isPet 过滤，避免把宠物死亡算给玩家)
     local ok2, deathSession = pcall(C_DamageMeter.GetCombatSessionFromID, sid, Enum.DamageMeterType.Deaths)
     if ok2 and deathSession and deathSession.combatSources then
         for _, src in ipairs(deathSession.combatSources) do
             local guid   = src.sourceGUID
+            local creatureID = src.sourceCreatureID
             local deaths = getAmount(src.totalAmount)
-            if guid and deaths > 0 then
+            if guid and deaths > 0 and not (creatureID ~= nil and creatureID > 0) then
                 local pd = segs:GetPlayer(seg, guid, src.name, nil)
                 if pd then
                     pd.class  = src.classFilename or pd.class
                     pd.deaths = (pd.deaths or 0) + deaths
-                end
-            end
-        end
-    end
-
-    -- 技能明细
-    for guid, pd in pairs(seg.players) do
-        for dmType, spellTable in pairs({
-            [Enum.DamageMeterType.DamageDone]  = "spells",
-            [Enum.DamageMeterType.HealingDone] = "spells",
-            [Enum.DamageMeterType.DamageTaken] = "damageTakenSpells",
-        }) do
-            local ok3, srcData = pcall(C_DamageMeter.GetCombatSessionSourceFromID, sid, dmType, guid)
-            if ok3 and srcData and srcData.combatSpells then
-                for _, sp in ipairs(srcData.combatSpells) do
-                    local spellID = getAmount(sp.spellID)
-                    if spellID > 0 then
-                        local amt = getAmount(sp.totalAmount)
-                        if amt > 0 then
-                            local targetSpells = pd[spellTable]
-                            
-                            -- ★ 终极正解：通过法术自带的 creatureName 识别宠物
-                            local isPetSpell = false
-                            local petName = sp.creatureName
-                            
-                            -- 如果存在附属生物名字，且不是玩家自己，必然是宝宝放的
-                            if petName and petName ~= "" and petName ~= pd.name and petName ~= srcData.name then
-                                isPetSpell = true
-                            end
-                            
-                            if isPetSpell then
-                                if not pd.pets[petName] then
-                                    pd.pets[petName] = { name = petName, spells = {}, damageTakenSpells = {}, damage = 0, healing = 0 }
-                                end
-                                targetSpells = pd.pets[petName][spellTable]
-                                
-                                if dmType == Enum.DamageMeterType.HealingDone then
-                                    pd.pets[petName].healing = (pd.pets[petName].healing or 0) + amt
-                                elseif dmType == Enum.DamageMeterType.DamageDone then
-                                    pd.pets[petName].damage = (pd.pets[petName].damage or 0) + amt
-                                end
-                            end
-
-                            if not targetSpells[spellID] then
-                                local spellName = (C_Spell and C_Spell.GetSpellName and C_Spell.GetSpellName(spellID)) or ("spell:" .. spellID)
-                                targetSpells[spellID] = segs:NewSpellData(spellID, spellName, nil)
-                            end
-                            local sd = targetSpells[spellID]
-                            
-                            if dmType == Enum.DamageMeterType.HealingDone then
-                                sd.healing = (sd.healing or 0) + amt
-                            else
-                                sd.damage = (sd.damage or 0) + amt
-                            end
-                            sd.hits = (sd.hits or 0) + 1
-                            if sp.isAvoidable then sd.isAvoidable = true end
-                        end
-                    end
                 end
             end
         end
@@ -879,20 +891,30 @@ function CT:RebuildOverall(sessions, sessionCount)
         if dur > 0 then
             totalDur = totalDur + dur
 
+            -- 伤害 / 治疗 / 承伤
             for dmType, field in pairs({
                 [Enum.DamageMeterType.DamageDone]  = "damage",
                 [Enum.DamageMeterType.HealingDone] = "healing",
                 [Enum.DamageMeterType.DamageTaken] = "damageTaken",
             }) do
+                local spellField = field == "damageTaken" and "damageTakenSpells" or "spells"
                 local ok2, dmSession = pcall(C_DamageMeter.GetCombatSessionFromID, sid, dmType)
                 if ok2 and dmSession and dmSession.combatSources then
                     for _, src in ipairs(dmSession.combatSources) do
                         local guid  = src.sourceGUID
+                        local creatureID = src.sourceCreatureID
                         local total = getAmount(src.totalAmount)
+                        
                         if guid and total > 0 then
-                            local pd = getOrCreatePlayer(guid, src.name)
-                            pd.class       = src.classFilename or pd.class
-                            pd[field]      = (pd[field] or 0) + total
+                            local isPet = (creatureID ~= nil and creatureID > 0)
+                            local playerName = isPet and nil or src.name
+                            local pd = getOrCreatePlayer(guid, playerName)
+                            
+                            if not isPet then
+                                pd.class = src.classFilename or pd.class
+                            end
+                            pd[field] = (pd[field] or 0) + total
+                            
                             if field == "damage" then
                                 newTotalDamage  = newTotalDamage  + total
                             elseif field == "healing" then
@@ -900,12 +922,64 @@ function CT:RebuildOverall(sessions, sessionCount)
                             else
                                 newTotalDTaken  = newTotalDTaken  + total
                             end
+
+                            if isPet then
+                                pd.pets = pd.pets or {}
+                                pd.pets[creatureID] = pd.pets[creatureID] or { name = src.name, spells = {}, damageTakenSpells = {}, damage = 0, healing = 0 }
+                                pd.pets[creatureID][field] = (pd.pets[creatureID][field] or 0) + total
+                            end
+
+                            local ok3, srcData = pcall(C_DamageMeter.GetCombatSessionSourceFromID, sid, dmType, guid, creatureID)
+                            if ok3 and srcData and srcData.combatSpells then
+                                local baseSpells = isPet and pd.pets[creatureID][spellField] or pd[spellField]
+                                for _, sp in ipairs(srcData.combatSpells) do
+                                    local spellID = getAmount(sp.spellID)
+                                    if spellID > 0 then
+                                        local amt = getAmount(sp.totalAmount)
+                                        if amt > 0 then
+                                            local targetSpells = baseSpells
+                                            
+                                            if not isPet then
+                                                local petName = sp.creatureName
+                                                if petName and petName ~= "" and petName ~= pd.name and petName ~= srcData.name then
+                                                    local fallbackKey = "pet_" .. petName
+                                                    pd.pets = pd.pets or {}
+                                                    if not pd.pets[fallbackKey] then
+                                                        pd.pets[fallbackKey] = { name = petName, spells = {}, damageTakenSpells = {}, damage = 0, healing = 0 }
+                                                    end
+                                                    targetSpells = pd.pets[fallbackKey][spellField]
+                                                    
+                                                    if dmType == Enum.DamageMeterType.HealingDone then
+                                                        pd.pets[fallbackKey].healing = (pd.pets[fallbackKey].healing or 0) + amt
+                                                    elseif dmType == Enum.DamageMeterType.DamageDone then
+                                                        pd.pets[fallbackKey].damage = (pd.pets[fallbackKey].damage or 0) + amt
+                                                    end
+                                                end
+                                            end
+
+                                            if not targetSpells[spellID] then
+                                                local spellName = (C_Spell and C_Spell.GetSpellName and C_Spell.GetSpellName(spellID)) or ("spell:" .. spellID)
+                                                targetSpells[spellID] = segs:NewSpellData(spellID, spellName, nil)
+                                            end
+                                            local sd = targetSpells[spellID]
+                                            
+                                            if dmType == Enum.DamageMeterType.HealingDone then
+                                                sd.healing = (sd.healing or 0) + amt
+                                            else
+                                                sd.damage = (sd.damage or 0) + amt
+                                            end
+                                            sd.hits = (sd.hits or 0) + 1
+                                            if sp.isAvoidable then sd.isAvoidable = true end
+                                        end
+                                    end
+                                end
+                            end
                         end
                     end
                 end
             end
 
-            -- 死亡（原逻辑保留）
+            -- 死亡次数
             for dmType, field in pairs({
                 [Enum.DamageMeterType.Deaths] = "deaths",
             }) do
@@ -913,8 +987,9 @@ function CT:RebuildOverall(sessions, sessionCount)
                 if ok2 and dmSession and dmSession.combatSources then
                     for _, src in ipairs(dmSession.combatSources) do
                         local guid  = src.sourceGUID
+                        local creatureID = src.sourceCreatureID
                         local total = getAmount(src.totalAmount)
-                        if guid and total > 0 then
+                        if guid and total > 0 and not (creatureID ~= nil and creatureID > 0) then
                             local pd = getOrCreatePlayer(guid, src.name)
                             pd.class  = src.classFilename or pd.class
                             pd[field] = (pd[field] or 0) + total
@@ -923,7 +998,7 @@ function CT:RebuildOverall(sessions, sessionCount)
                 end
             end
 
-            -- 打断/驱散 + 技能提取（原逻辑保留）
+            -- 打断/驱散 
             for dmType, field in pairs({
                 [Enum.DamageMeterType.Interrupts] = "interrupts",
                 [Enum.DamageMeterType.Dispels]    = "dispels",
@@ -933,13 +1008,20 @@ function CT:RebuildOverall(sessions, sessionCount)
                 if ok2 and dmSession and dmSession.combatSources then
                     for _, src in ipairs(dmSession.combatSources) do
                         local guid  = src.sourceGUID
+                        local creatureID = src.sourceCreatureID
                         local total = getAmount(src.totalAmount)
+                        
                         if guid and total > 0 then
-                            local pd = getOrCreatePlayer(guid, src.name)
-                            pd.class  = src.classFilename or pd.class
+                            local isPet = (creatureID ~= nil and creatureID > 0)
+                            local playerName = isPet and nil or src.name
+                            local pd = getOrCreatePlayer(guid, playerName)
+                            
+                            if not isPet then
+                                pd.class = src.classFilename or pd.class
+                            end
                             pd[field] = (pd[field] or 0) + total
 
-                            local ok3, srcData = pcall(C_DamageMeter.GetCombatSessionSourceFromID, sid, dmType, guid)
+                            local ok3, srcData = pcall(C_DamageMeter.GetCombatSessionSourceFromID, sid, dmType, guid, creatureID)
                             if ok3 and srcData and srcData.combatSpells then
                                 for _, sp in ipairs(srcData.combatSpells) do
                                     local spellID = getAmount(sp.spellID)
@@ -956,64 +1038,6 @@ function CT:RebuildOverall(sessions, sessionCount)
                                             pd[spellField][spellID].damage = pd[spellField][spellID].damage + amt
                                         end
                                     end
-                                end
-                            end
-                        end
-                    end
-                end
-            end
-
-            -- 技能明细：伤害/治疗/承伤（原逻辑保留）
-            for guid, pd in pairs(newPlayers) do
-                for dmType, spellField in pairs({
-                    [Enum.DamageMeterType.DamageDone]  = "spells",
-                    [Enum.DamageMeterType.HealingDone] = "spells",
-                    [Enum.DamageMeterType.DamageTaken] = "damageTakenSpells",
-                }) do
-                    local ok3, srcData = pcall(C_DamageMeter.GetCombatSessionSourceFromID, sid, dmType, guid)
-                    if ok3 and srcData and srcData.combatSpells then
-                        for _, sp in ipairs(srcData.combatSpells) do
-                            local spellID = getAmount(sp.spellID)
-                            if spellID > 0 then
-                                local amt = getAmount(sp.totalAmount)
-                                if amt > 0 then
-                                    local targetSpells = pd[spellField]
-                                    
-                                    -- 通过法术自带的 creatureName 识别宠物
-                                    local isPetSpell = false
-                                    local petName = sp.creatureName
-                                    
-                                    -- 如果存在附属生物名字，且不是玩家自己，必然是宝宝放的
-                                    if petName and petName ~= "" and petName ~= pd.name and petName ~= srcData.name then
-                                        isPetSpell = true
-                                    end
-                                    
-                                    if isPetSpell then
-                                        if not pd.pets[petName] then
-                                            pd.pets[petName] = { name = petName, spells = {}, damageTakenSpells = {}, damage = 0, healing = 0 }
-                                        end
-                                        targetSpells = pd.pets[petName][spellField]
-                                        
-                                        if dmType == Enum.DamageMeterType.HealingDone then
-                                            pd.pets[petName].healing = (pd.pets[petName].healing or 0) + amt
-                                        elseif dmType == Enum.DamageMeterType.DamageDone then
-                                            pd.pets[petName].damage = (pd.pets[petName].damage or 0) + amt
-                                        end
-                                    end
-
-                                    if not targetSpells[spellID] then
-                                        local spellName = (C_Spell and C_Spell.GetSpellName and C_Spell.GetSpellName(spellID)) or ("spell:" .. spellID)
-                                        targetSpells[spellID] = segs:NewSpellData(spellID, spellName, nil)
-                                    end
-                                    local sd = targetSpells[spellID]
-                                    
-                                    if dmType == Enum.DamageMeterType.HealingDone then
-                                        sd.healing = (sd.healing or 0) + amt
-                                    else
-                                        sd.damage = (sd.damage or 0) + amt
-                                    end
-                                    sd.hits = (sd.hits or 0) + 1
-                                    if sp.isAvoidable then sd.isAvoidable = true end
                                 end
                             end
                         end
@@ -1195,6 +1219,10 @@ local function syncCombatState()
                 ns.state.combatStartTime = GetTime() - liveDur
             end
             ns:EnterCombat()
+        end
+
+        if ns.UI and ns.UI._collapsed then
+            ns.UI:CheckAutoCollapse()
         end
 
         if ns.Segments and ns.Segments.current and sessionCount > 0 then
@@ -1536,6 +1564,10 @@ function CT:RegisterEvents()
             if not ns.state.inCombat then
                 ns.state.combatStartTime = GetTime()
                 ns:EnterCombat()
+            end
+
+            if ns.UI and ns.UI._collapsed then
+                ns.UI:CheckAutoCollapse()
             end
 
         elseif event == "PLAYER_REGEN_ENABLED" then
