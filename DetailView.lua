@@ -429,7 +429,7 @@ function DV:RenderSpellList(name, class, mode, spells, dur, titleSuffix, apiMaxA
     self:ApplyTheme()
     self:ClearRows()
 
-    print("|cffff00ff[LD DEBUG RenderSpellList]|r frameShown=", self.frame:IsShown(), "spells=", #spells, "apiMaxAmount=", type(apiMaxAmount))
+    -- print("|cffff00ff[LD DEBUG RenderSpellList]|r frameShown=", self.frame:IsShown(), "spells=", #spells, "apiMaxAmount=", type(apiMaxAmount))
 
     local ch = ns:GetClassHex(class)
     -- ★ 在这里实时获取翻译

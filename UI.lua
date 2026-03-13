@@ -715,25 +715,25 @@ function UI:MakeBar(parent, section, index)
             else
                 if ns.DetailView then
                     if bar._data and bar._data.isAPI then
-                        print("|cffff0000[LD DEBUG Click]|r isAPI=true, isLocalPlayer=", bar._data.isLocalPlayer, "type=", type(bar._data.isLocalPlayer))
+                        -- print("|cffff0000[LD DEBUG Click]|r isAPI=true, isLocalPlayer=", bar._data.isLocalPlayer, "type=", type(bar._data.isLocalPlayer))
                         local cleanGUID = nil
                         if bar._data.isLocalPlayer then
                             cleanGUID = UnitGUID("player")
-                            print("|cffff0000[LD DEBUG Click]|r cleanGUID=", cleanGUID)
+                            -- print("|cffff0000[LD DEBUG Click]|r cleanGUID=", cleanGUID)
                         end
                         if cleanGUID then
-                            print("|cffff0000[LD DEBUG Click]|r calling ShowSpellBreakdownFromAPI")
+                            -- print("|cffff0000[LD DEBUG Click]|r calling ShowSpellBreakdownFromAPI")
                             ns.DetailView:ShowSpellBreakdownFromAPI(
                                 cleanGUID, nil,
                                 bar._nameStr, bar._classStr, bar._mode,
                                 bar._data.sessionType
                             )
                         else
-                            print("|cffff0000[LD DEBUG Click]|r no cleanGUID, showing locked")
+                            -- print("|cffff0000[LD DEBUG Click]|r no cleanGUID, showing locked")
                             ns.DetailView:ShowCombatLocked(bar._nameStr)
                         end
                     else
-                        print("|cffff0000[LD DEBUG Click]|r isAPI=", bar._data and bar._data.isAPI, "data=", bar._data ~= nil)
+                        -- print("|cffff0000[LD DEBUG Click]|r isAPI=", bar._data and bar._data.isAPI, "data=", bar._data ~= nil)
                         local isOvr = bar.section and bar.section:sub(1, 3) == "ovr"
                         local seg = isOvr and (ns.Segments and ns.Segments:GetOverallSegment()) or nil
                         ns.DetailView:ShowSpellBreakdown(bar._guid, bar._nameStr, bar._classStr, bar._mode, seg)
@@ -1734,17 +1734,17 @@ function UI:FillBarsFromAPI(bars, listObj, mode, sessionType)
             bar._apiData.sourceCreatureID = src.sourceCreatureID 
             bar._apiData.isLocalPlayer    = src.isLocalPlayer
 
-            if i == 1 then
-                print("|cff00ff00[LD DEBUG FillAPI]|r",
-                    "i=1",
-                    "src.sourceGUID type=", type(src.sourceGUID),
-                    "src.sourceCreatureID type=", type(src.sourceCreatureID),
-                    "src.name type=", type(src.name),
-                    "src.isLocalPlayer=", src.isLocalPlayer,
-                    "sType=", sType,
-                    "mode=", mode
-                )
-            end
+            -- if i == 1 then
+            --     print("|cff00ff00[LD DEBUG FillAPI]|r",
+            --         "i=1",
+            --         "src.sourceGUID type=", type(src.sourceGUID),
+            --         "src.sourceCreatureID type=", type(src.sourceCreatureID),
+            --         "src.name type=", type(src.name),
+            --         "src.isLocalPlayer=", src.isLocalPlayer,
+            --         "sType=", sType,
+            --         "mode=", mode
+            --     )
+            -- end
 
             bar._apiData.totalAmount     = src.totalAmount
             bar._apiData.amountPerSecond = src.amountPerSecond
