@@ -438,7 +438,9 @@ function CT:LoadSegmentData(seg)
                                             -- 兜底逻辑：如果暴雪未来在某些情况下仍将宠物技能塞在玩家主体下，通过 creatureName 分离
                                             if not isPet then
                                                 local petName = sp.creatureName
-                                                if petName and petName ~= "" and petName ~= pd.name and petName ~= srcData.name then
+                                                if petName and petName ~= ""
+                                                    and not (issecretvalue and issecretvalue(pd.name)) and petName ~= pd.name
+                                                    and not (issecretvalue and issecretvalue(srcData.name)) and petName ~= srcData.name then
                                                     local fallbackKey = "pet_" .. petName
                                                     pd.pets = pd.pets or {}
                                                     if not pd.pets[fallbackKey] then
@@ -877,7 +879,7 @@ function CT:RebuildOverall(sessions, sessionCount)
             local _, classEng = GetPlayerInfoByGUID(guid)
             newPlayers[guid] = segs:NewPlayerData(guid, name, classEng or "WARRIOR")
         end
-        if name and name ~= "" then
+        if name and not (issecretvalue and issecretvalue(name)) and name ~= "" then
             newPlayers[guid].name = ns:ShortName(name)
         end
         return newPlayers[guid]
@@ -941,7 +943,9 @@ function CT:RebuildOverall(sessions, sessionCount)
                                             
                                             if not isPet then
                                                 local petName = sp.creatureName
-                                                if petName and petName ~= "" and petName ~= pd.name and petName ~= srcData.name then
+                                                if petName and petName ~= ""
+                                                    and not (issecretvalue and issecretvalue(pd.name)) and petName ~= pd.name
+                                                    and not (issecretvalue and issecretvalue(srcData.name)) and petName ~= srcData.name then
                                                     local fallbackKey = "pet_" .. petName
                                                     pd.pets = pd.pets or {}
                                                     if not pd.pets[fallbackKey] then

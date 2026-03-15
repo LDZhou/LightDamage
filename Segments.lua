@@ -316,7 +316,7 @@ function Segments:GetPlayer(seg, guid, name, flags)
         seg.players[guid] = pd
     end
 
-    if name and name ~= "" and name ~= "?" then
+    if name and not (issecretvalue and issecretvalue(name)) and name ~= "" and name ~= "?" then
         pd.name = ns:ShortName(name)
     end
 
