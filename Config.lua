@@ -8,6 +8,68 @@ local L = ns.L
 local SCROLL_EXTRA_PAD = 150
 local Config = {}
 
+-- ============================================================
+-- ★ 从 LibSharedMedia 动态获取材质列表
+-- ============================================================
+function Config:GetSharedMediaTextures()
+    local result = {}
+
+    -- 始终保留3个内置材质作为兜底
+    local builtins = {
+        {l=L["极简纯色 (Minimal Flat)"],    v="Interface\\Buttons\\WHITE8X8"},
+        {l=L["暴雪默认 (Blizz Default)"],   v="Interface\\TargetingFrame\\UI-StatusBar"},
+        {l=L["平滑渐变 (Smooth)"],           v="Interface\\RaidFrame\\Raid-Bar-Hp-Fill"},
+    }
+    local builtinPaths = {}
+    for _, b in ipairs(builtins) do
+        table.insert(result, b)
+        builtinPaths[b.v] = true
+    end
+
+    -- 从 SharedMedia 获取所有已注册的 StatusBar 材质
+    local LSM = ns.LSM
+    if LSM then
+        local list = LSM:List(LSM.MediaType.STATUSBAR)
+        if list then
+            for _, name in ipairs(list) do
+                local path = LSM:Fetch(LSM.MediaType.STATUSBAR, name)
+                if path and not builtinPaths[path] then
+                    table.insert(result, { l = name, v = path })
+                end
+            end
+        end
+    end
+
+    return result
+end
+
+function Config:GetSharedMediaFonts()
+    local chatFont = select(1, ChatFontNormal:GetFont())
+    local result = {
+        {l=L["系统默认"],   v=STANDARD_TEXT_FONT},
+        {l=L["伤害数字"],   v=DAMAGE_TEXT_FONT},
+        {l=L["聊天框字体"], v=chatFont},
+        {l=L["单位名称"],   v=UNIT_NAME_FONT},
+    }
+    local builtinPaths = {}
+    for _, b in ipairs(result) do builtinPaths[b.v] = true end
+
+    local LSM = ns.LSM
+    if LSM then
+        local list = LSM:List(LSM.MediaType.FONT)
+        if list then
+            for _, name in ipairs(list) do
+                local path = LSM:Fetch(LSM.MediaType.FONT, name)
+                if path and not builtinPaths[path] then
+                    table.insert(result, { l = name, v = path })
+                end
+            end
+        end
+    end
+
+    return result
+end
+
 StaticPopupDialogs["LDCS_RENAME_PROFILE"] = {
     text = L["输入新的配置名称:"],     -- <--- 加上 L[]
     button1 = L["确定"],               -- <--- 加上 L[]
@@ -755,12 +817,8 @@ function Config:BuildLookPage()
     -- ── 字体设置 ───────────────────────────────────────────────
     y = y - 12; y = self:H(inner, L["字体设置"], y)
     local chatFont = select(1, ChatFontNormal:GetFont())
-    local fonts = { 
-        {l=L["系统默认"], v=STANDARD_TEXT_FONT}, 
-        {l=L["伤害数字"], v=DAMAGE_TEXT_FONT},
-        {l=L["聊天框字体"], v=chatFont},
-        {l=L["单位名称"], v=UNIT_NAME_FONT}
-    }
+    local fonts = self:GetSharedMediaFonts()
+
     y = self:Dropdown(inner, L["全局字体"], y, fonts,
         function() return ns.db.display.font or STANDARD_TEXT_FONT end,
         function(v) ns.db.display.font=v; self:RefreshUI() end)
@@ -793,11 +851,8 @@ function Config:BuildLookPage()
         function() return ns.db.display.barAlpha or 0.85 end,
         function(v) ns.db.display.barAlpha=v; self:RefreshUI() end)
 
-    local textures = {
-        {l=L["极简纯色 (Minimal Flat)"], v="Interface\\Buttons\\WHITE8X8"},
-        {l=L["暴雪默认 (Blizz Default)"], v="Interface\\TargetingFrame\\UI-StatusBar"},
-        {l=L["平滑渐变 (Smooth)"], v="Interface\\RaidFrame\\Raid-Bar-Hp-Fill"}
-    }
+    local textures = self:GetSharedMediaTextures()
+
     y = self:Dropdown(inner, L["数据条材质"], y, textures,
         function() return ns.db.display.barTexture or "Interface\\Buttons\\WHITE8X8" end,
         function(v) ns.db.display.barTexture=v; self:RefreshUI() end)

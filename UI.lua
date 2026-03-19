@@ -2231,12 +2231,42 @@ function UI:FillDeathBars(seg, bars, listObj)
     end
 end
 
+
+-- ============================================================
+-- ★ Tooltip 智能锚定：始终在主窗口外部展开
+-- ============================================================
+function UI:AnchorTooltipToWindow(bar)
+    local f = self.frame
+    if not f then
+        GameTooltip:SetOwner(bar.frame, "ANCHOR_LEFT")
+        return
+    end
+
+    GameTooltip:SetOwner(bar.frame, "ANCHOR_NONE")
+    GameTooltip:ClearAllPoints()
+
+    local scale   = f:GetEffectiveScale()
+    local fLeft   = (f:GetLeft()   or 0) * scale
+    local fTop    = (f:GetTop()    or 0) * scale
+    local screenH = GetScreenHeight() * UIParent:GetEffectiveScale()
+
+    -- 左侧空间足够 → 在窗口左侧展开
+    if fLeft > 280 then
+        GameTooltip:SetPoint("TOPRIGHT", f, "TOPLEFT", -4, 0)
+    -- 左侧不够，优先在窗口上方展开
+    elseif fTop < screenH * 0.7 then
+        GameTooltip:SetPoint("BOTTOMLEFT", f, "TOPLEFT", 0, 4)
+    -- 上方也装不下（窗口太靠顶部），才在下方展开
+    else
+        GameTooltip:SetPoint("TOPLEFT", f, "BOTTOMLEFT", 0, -4)
+    end
+end
 -- ============================================================
 -- ★ 修复：完美兼容战斗 API 安全提示框
 -- ============================================================
 function UI:ShowTooltip(bar, section)
     local d = bar._data; if not d then return end
-    GameTooltip:SetOwner(bar.frame, "ANCHOR_LEFT")
+    self:AnchorTooltipToWindow(bar)
 
     local guid = bar._guid
     local seg  = ns.Segments and ns.Segments:GetViewSegment()

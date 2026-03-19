@@ -3,11 +3,13 @@
 ## Notes: Combat Statistics
 ## Notes-zhCN: 战斗统计插件
 ## Author: Yishi
-## Version: 1.1.8
+## Version: 1.1.9
 ## SavedVariables: LDCombatStatsGlobal
 ## SavedVariablesPerCharacter: LDCombatStatsDB
 ## Category: Combat
 ## IconTexture: Interface\AddOns\LDCombatStats\Textures\logo.tga
+
+Libs\LibSharedMedia-3.0\lib.xml
 
 Locale.lua
 Core.lua
