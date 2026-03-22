@@ -1248,6 +1248,12 @@ local function syncCombatState()
         end
     else
         if ns.state.inCombat then
+            -- ★ Boss 阶段间隙守卫：ENCOUNTER_START 已触发但 ENCOUNTER_END 还没触发，
+            --   说明 Boss 战仍在进行中，此时的脱战是阶段间隙，不归档
+            if CT._currentEncounterID then
+                return
+            end
+
             ns:LeaveCombat()
             C_Timer.After(0.5, waitAndProcessArchived)
         end
@@ -1593,7 +1599,8 @@ function CT:RegisterEvents()
 
         elseif event == "PLAYER_REGEN_ENABLED" then
             if ns.state.inCombat then
-                -- 延迟检查：玩家脱战但队友可能还在打
+                if CT._currentEncounterID then return end
+
                 C_Timer.After(0.3, function()
                     if not isGroupInCombat() then
                         ns.state.combatStartTime = 0
