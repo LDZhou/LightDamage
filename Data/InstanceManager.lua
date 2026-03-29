@@ -64,6 +64,7 @@ function ns.CombatTracker:MergeAndCleanInstance(instanceTag, mythicLevel, mythic
         merged.duration = (CT._overallDurationSnapshot and CT._overallDurationSnapshot > 0) and CT._overallDurationSnapshot or (ovr.duration or 0)
         merged.players = CopyTable(ovr.players or {})
         merged.deathLog = CopyTable(ovr.deathLog or {})
+        merged.enemyDamageTakenList = CopyTable(ovr.enemyDamageTakenList or {})
         table.sort(merged.deathLog, function(a, b) if a.isSelf ~= b.isSelf then return a.isSelf end; return (a.gameTime or 0) < (b.gameTime or 0) end)
         while #merged.deathLog > 50 do
             local removed = false
@@ -159,6 +160,23 @@ function ns.CombatTracker:MergeAndCleanInstance(instanceTag, mythicLevel, mythic
                 merged.totalHealing = merged.totalHealing + (src.totalHealing or 0)
                 merged.totalDamageTaken = merged.totalDamageTaken + (src.totalDamageTaken or 0)
                 for _, dr in ipairs(src.deathLog or {}) do table.insert(merged.deathLog, dr) end
+                for _, edt in ipairs(src.enemyDamageTakenList or {}) do
+                    local found = false
+                    for _, existing in ipairs(merged.enemyDamageTakenList) do
+                        if existing.creatureID == edt.creatureID then
+                            existing.total = existing.total + edt.total
+                            for _, s in ipairs(edt.sources or {}) do
+                                local sf = false
+                                for _, es in ipairs(existing.sources) do
+                                    if es.name == s.name then es.amount = es.amount + s.amount; sf = true; break end
+                                end
+                                if not sf then table.insert(existing.sources, CopyTable(s)) end
+                            end
+                            found = true; break
+                        end
+                    end
+                    if not found then table.insert(merged.enemyDamageTakenList, CopyTable(edt)) end
+                end
             end
         end
         merged.duration = (CT._overallDurationSnapshot and CT._overallDurationSnapshot > 0) and CT._overallDurationSnapshot or totalDur

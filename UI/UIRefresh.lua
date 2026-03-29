@@ -105,6 +105,24 @@ function UI:Refresh()
             end
         end
     end
+
+    -- 刷新总计栏标题（友方/敌方切换时同步）
+    if useOvr and self.ovrContainer and self.ovrContainer:IsShown() then
+        local ovrTitleWord = L["总计"]
+        if ns.Segments and ns.Segments.overall and ns.Segments.overall._isMerged then ovrTitleWord = L["全程"] end
+        if isSplitView then
+            local priLabel = L[ns.MODE_NAMES[sp.primaryMode] or ""]
+            local secLabel = L[ns.MODE_NAMES[sp.secondaryMode] or ""]
+            if sp.primaryMode == "damageTaken" and ns.state.damageTakenView == "enemy" then priLabel = L["敌人承伤"] end
+            if sp.secondaryMode == "damageTaken" and ns.state.damageTakenView == "enemy" then secLabel = L["敌人承伤"] end
+            self.ovrPriHead.label:SetText(string.format(L["|cff4cb8e8[%s%s]|r"], ovrTitleWord, priLabel))
+            self.ovrSecHead.label:SetText(string.format(L["|cff4cb8e8[%s%s]|r"], ovrTitleWord, secLabel))
+        else
+            local modeLabel = L[ns.MODE_NAMES[ns.db.display.mode] or ""]
+            if ns.db.display.mode == "damageTaken" and ns.state.damageTakenView == "enemy" then modeLabel = L["敌人承伤"] end
+            self.ovrPriHead.label:SetText(string.format(L["|cff4cb8e8[%s%s]|r"], ovrTitleWord, modeLabel))
+        end
+    end
 end
 
 function UI:FillOvrBars(isSplitView, sp, mode)
