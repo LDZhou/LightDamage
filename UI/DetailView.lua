@@ -42,7 +42,7 @@ end
 function DV:EnsureCreated()
     if self.frame then return end
 
-    local f = CreateFrame("Frame", "LDStatsDetail", UIParent, "BackdropTemplate")
+    local f = CreateFrame("Frame", "LightDamageDetail", UIParent, "BackdropTemplate")
     local dbW = ns.db and ns.db.detailWindow or { width = 380, height = 420 }
     f:SetSize(dbW.width, dbW.height)
     f:SetFrameStrata("HIGH"); f:SetFrameLevel(20)
@@ -165,7 +165,7 @@ function DV:EnsureCreated()
     self.scrollFrame = sc
     self.scrollBar  = sb
     self.rows       = {}
-    tinsert(UISpecialFrames, "LDStatsDetail")
+    tinsert(UISpecialFrames, "LightDamageDetail")
 
     f:SetScript("OnShow", function() self:UpdatePosition() end)
 

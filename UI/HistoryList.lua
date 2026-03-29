@@ -32,7 +32,7 @@ function HL:EnsureCreated()
 end
 
 function HL:Build()
-    local f = CreateFrame("Frame", "LDStatsHistoryList", UIParent, "BackdropTemplate")
+    local f = CreateFrame("Frame", "LightDamageHistory", UIParent, "BackdropTemplate")
     f:SetWidth(LIST_W)
     f:SetFrameStrata("HIGH"); f:SetFrameLevel(100)
     f:SetClampedToScreen(true)

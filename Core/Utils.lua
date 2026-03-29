@@ -1,5 +1,5 @@
 --[[
-    LD Combat Stats - Utils.lua
+    Light Damage - Utils.lua
     工具函数
 ]]
 
@@ -42,7 +42,6 @@ function ns:FormatNumber(num)
     if not num or num == 0 then return "0" end
     local abs = math.abs(num)
     
-    -- 动态获取当前插件实际使用的语言
     local lang = ns.currentLang
     if not lang or lang == "auto" then
         lang = (ns.db and ns.db.display and ns.db.display.language) or "auto"
@@ -56,7 +55,6 @@ function ns:FormatNumber(num)
         elseif abs >= 1e4 then return string.format("%.2f万", num / 1e4)
         else return string.format("%.0f", num) end
     else
-        -- Western formatting (K and M)
         if abs >= 1e6 then return string.format("%.2fM", num / 1e6)
         elseif abs >= 1e3 then return string.format("%.1fK", num / 1e3)
         else return string.format("%.0f", num) end
@@ -101,37 +99,21 @@ end
 
 -- ============================================================
 -- Flag 常量
--- WoW CLEU flags 结构（低8位）:
---   bit 0-2 (0x07): Affiliation  1=自己 2=队伍 4=团队 8=外部 16=敌对
---   bit 3   (0x08): 未使用
---   bit 4-7 (0xF0): Reaction     1=友好 2=中立 4=敌对
 -- ============================================================
-local AFFILIATION_MASK = 0x0000000F   -- 取低4位做 affiliation 判断
-local AFF_MINE         = 0x00000001   -- 自己
-local AFF_PARTY        = 0x00000002   -- 队伍
-local AFF_RAID         = 0x00000004   -- 团队
+local AFFILIATION_MASK = 0x0000000F
+local AFF_MINE         = 0x00000001
+local AFF_PARTY        = 0x00000002
+local AFF_RAID         = 0x00000004
 
 local FLAG_PLAYER      = 0x00000400
 local FLAG_PET         = 0x00001000
 local FLAG_GUARDIAN    = 0x00002000
 
--- ============================================================
--- IsGroupUnit：判断 GUID/flags 是否属于L["我方应记录的单位"]
---
--- 修复逻辑：
---   1. 优先用 GUID 判断自己（最可靠，不依赖 flags）
---   2. 再用 flags 的 affiliation 位判断队友
---   这样单人、组队、团队三种情况都能正确识别
--- ============================================================
 function ns:IsGroupUnit(flags, guid)
-    -- 1. GUID 兜底：自己永远算L["组内单位"]
     if guid and guid == ns.state.playerGUID then
         return true
     end
-
     if not flags then return false end
-
-    -- 2. flags affiliation 位判断
     local aff = bit.band(flags, AFFILIATION_MASK)
     return aff == AFF_MINE or aff == AFF_PARTY or aff == AFF_RAID
 end
@@ -145,7 +127,7 @@ function ns:IsPetType(flags)
 end
 
 -- ============================================================
--- GUID → Unit 缓存 (避免每次伤害都遍历团队)
+-- GUID → Unit 缓存
 -- ============================================================
 ns._guidUnitCache    = {}
 ns._guidUnitCacheAge = 0
@@ -163,7 +145,6 @@ function ns:FindUnitByGUID(guid)
         return cached
     end
 
-    -- 重建缓存
     local prefix = IsInRaid() and "raid" or "party"
     local count  = IsInRaid() and GetNumGroupMembers() or math.max(0, GetNumGroupMembers() - 1)
     for i = 1, count do
@@ -181,12 +162,10 @@ end
 
 -- 获取宠物主人GUID
 function ns:FindPetOwner(petGUID)
-    -- 自己的宠物
     if UnitExists("pet") and UnitGUID("pet") == petGUID then
         return UnitGUID("player")
     end
 
-    -- 队友的宠物
     local prefix = IsInRaid() and "raid" or "party"
     local count  = IsInRaid() and GetNumGroupMembers() or math.max(0, GetNumGroupMembers() - 1)
     for i = 1, count do
@@ -198,26 +177,18 @@ function ns:FindPetOwner(petGUID)
     return nil
 end
 
--- 缩短名称 (不再强制去除服务器后缀，保证底层数据存储全名，实际截断在 DisplayName 进行)
 function ns:ShortName(name)
     if not name then return "?" end
     return name
 end
 
--- UI 显示时动态格式化
 function ns:DisplayName(name)
-    -- 1. 基础存在性判断（加密字符串允许进行是否为 nil 的布尔判断）
     if not name then return "?" end
-    
-    -- 2. 核心防爆：立刻拦截加密字符串！原样放行！（绝对不能放在比较之后）
     if issecretvalue and issecretvalue(name) then
         return name
     end
-    
-    -- 3. 拦截完毕后，确认它是普通字符串了，再做空字符串判断
     if name == "" then return "?" end
     
-    -- 4. 正常的字符串截断或替换逻辑
     local ok, result = pcall(function()
         if ns.db and ns.db.display and ns.db.display.showRealm then
             return name:gsub("%-", " - ")
@@ -246,7 +217,6 @@ ns.MODE_UNITS = {
     damageTaken = "DTPS",
 }
 
--- 模式列表 (循环切换)
 ns.MODE_ORDER = { "damage", "healing", "damageTaken", "deaths", "interrupts", "dispels" }
 
 function ns:NextMode(current)
@@ -258,12 +228,28 @@ function ns:NextMode(current)
     return "damage"
 end
 
--- 格式化值字符串: L["DPS(总量)"] 样式
 function ns:FormatValueStr(perSec, total, mode, dur)
     local unit = ns.MODE_UNITS[mode]
     if unit and dur and dur > 0 then
         return string.format("%s(%s)", ns:FormatNumber(perSec), ns:FormatNumber(total))
     else
         return ns:FormatNumber(total)
+    end
+end
+
+-- ============================================================
+-- 工具函数 (从原 Core.lua 搬入)
+-- ============================================================
+function ns:MergeDefaults(target, defaults)
+    for k, v in pairs(defaults) do
+        if type(v) == "table" then
+            if type(target[k]) ~= "table" then
+                target[k] = CopyTable(v)
+            else
+                ns:MergeDefaults(target[k], v)
+            end
+        elseif target[k] == nil then
+            target[k] = v
+        end
     end
 end

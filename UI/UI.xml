@@ -1,0 +1,11 @@
+<Ui xmlns="http://www.blizzard.com/wow/ui/">
+    <Script file="UICore.lua"/>
+    <Script file="UILayout.lua"/>
+    <Script file="UIBars.lua"/>
+    <Script file="UIPinned.lua"/>
+    <Script file="UIRefresh.lua"/>
+    <Script file="UICollapse.lua"/>
+    <Script file="UITabs.lua"/>
+    <Script file="DetailView.lua"/>
+    <Script file="HistoryList.lua"/>
+</Ui>

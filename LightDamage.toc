@@ -1,0 +1,17 @@
+## Interface: 120001, 120005
+## Title: Light Damage
+## Notes: Combat Statistics
+## Notes-zhCN: 战斗统计插件
+## Author: Yishi
+## Version: 1.3.0
+## SavedVariables: LightDamageGlobal
+## SavedVariablesPerCharacter: LightDamageDB
+## Category: Combat
+## IconTexture: Interface\AddOns\LightDamage\Textures\logo.tga
+
+Libs\embeds.xml
+
+Core\Core.xml
+Data\Data.xml
+UI\UI.xml
+Config\Config.xml
