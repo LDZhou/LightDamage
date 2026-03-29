@@ -107,6 +107,11 @@ function Config:BuildDataPage()
     y = self:Check(inner, L["在排名中永远显示自己"], y, function() return ns.db.display.alwaysShowSelf end, function(v) ns.db.display.alwaysShowSelf=v; self:RefreshUI() end)
     y = self:Check(inner, L["标题下方显示全程摘要行（仅在副本中生效）"], y, function() return ns.db.mythicPlus.dualDisplay end, function(v) ns.db.mythicPlus.dualDisplay=v; self:RefreshUI() end)
     y = self:Check(inner, L["离开副本后自动生成副本全程段落"], y, function() return ns.db.mythicPlus.enabled end, function(v) ns.db.mythicPlus.enabled=v end)
+    y = y - 12
+    y = self:Check(inner, L["启用标签简写"], y,
+        function() return ns.db.display.useShortTabs end,
+        function(v) ns.db.display.useShortTabs = v; if ns.UI then ns.UI:LayoutTabs(); ns.UI:Refresh() end end)
+    y = self:Desc(inner, y, L["标签简写预览"])
     inner:SetHeight(math.abs(y) + 20)
 end
 

@@ -209,6 +209,18 @@ ns.MODE_NAMES = {
     deaths      = "死亡",
     interrupts  = "打断",
     dispels     = "驱散",
+    enemyDamageTaken = "敌人承伤",
+}
+
+ns.MODE_SHORT = {
+    damage          = "伤",
+    healing         = "治",
+    damageTaken     = "承",
+    enemyDamageTaken= "敌",
+    deaths          = "死",
+    interrupts      = "断",
+    dispels         = "驱",
+    enemyDamageTaken= "敌",
 }
 
 ns.MODE_UNITS = {

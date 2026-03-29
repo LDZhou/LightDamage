@@ -33,6 +33,18 @@ function UI:MakeBar(parent, section, index)
         if btn == "RightButton" then ns.db.display.mode = ns:NextMode(ns.db.display.mode); if ns.UI then ns.UI:Layout() end
         else
             if not bar._guid then return end
+            if bar._data and bar._data._isEnemy and bar._data._sources then
+                if ns.DetailView then
+                    ns.DetailView:ShowEnemyDamageTakenDetail(bar._data.name, bar._data._sources, bar._data.value)
+                end
+                return
+            end
+            if bar._mode == "enemyDamageTaken" then
+                if ns.DetailView then
+                    ns.DetailView:ShowCombatLocked(bar._nameStr or "?")
+                end
+                return
+            end
             if bar._isDeath then if ns.DetailView then ns.DetailView:ShowDeathDetail(bar._data) end
             else
                 if ns.DetailView then
@@ -107,6 +119,7 @@ function UI:FillBars(bars, listObj, data, dur, mode)
                 end
                 local icon = nil
                 if specID then _, _, _, icon = GetSpecializationInfoByID(specID) end
+                if d._isEnemy then icon = "Interface\\TargetingFrame\\UI-TargetingFrame-Skull" end
                 if not icon and bar._classStr then icon = CLASS_ICONS[bar._classStr] end
                 if ns.db.display.showSpecIcon and icon then bar.specIcon:SetTexture(icon); bar.specIcon:Show() else bar.specIcon:Hide() end
             end
@@ -178,6 +191,7 @@ function UI:FillBarsFromAPI(bars, listObj, mode, sessionType)
                 local icon = nil
                 if specID then _, _, _, icon = GetSpecializationInfoByID(specID) end
                 if not icon then icon = src.specIconID end
+                if bar._mode == "enemyDamageTaken" then icon = "Interface\\TargetingFrame\\UI-TargetingFrame-Skull" end
                 if not icon and cls then icon = CLASS_ICONS[cls] end
                 if ns.db.display.showSpecIcon and icon then bar.specIcon:SetTexture(icon); bar.specIcon:Show() else bar.specIcon:Hide() end
             end

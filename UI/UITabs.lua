@@ -35,13 +35,23 @@ function UI:LayoutTabs()
     local w = self.tabBar:GetWidth(); if w <= 0 then return end
     local sp = ns.db and ns.db.split; local visible = {}
     local isSplitActive = self:IsSplitActiveInCurrentScene()
+    local useShort = ns.db and ns.db.display and ns.db.display.useShortTabs
     if sp and isSplitActive then
-        local pName = L[ns.MODE_NAMES[sp.primaryMode] or sp.primaryMode]
-        local sName = L[ns.MODE_NAMES[sp.secondaryMode] or sp.secondaryMode]
+        local pName, sName
+        if useShort and ns.MODE_SHORT[sp.primaryMode] then pName = L[ns.MODE_SHORT[sp.primaryMode]]
+        else pName = L[ns.MODE_NAMES[sp.primaryMode] or sp.primaryMode] end
+        if useShort and ns.MODE_SHORT[sp.secondaryMode] then sName = L[ns.MODE_SHORT[sp.secondaryMode]]
+        else sName = L[ns.MODE_NAMES[sp.secondaryMode] or sp.secondaryMode] end
         self.splitTab.text:SetText(pName .. "|" .. sName); self.splitTab:Show(); table.insert(visible, self.splitTab)
     else self.splitTab:Hide() end
     for _, t in ipairs(self.tabs) do
-        if t.mode and ns.MODE_NAMES[t.mode] then t.text:SetText(L[ns.MODE_NAMES[t.mode]]) end
+        if t.mode and ns.MODE_NAMES[t.mode] then
+            if useShort and ns.MODE_SHORT[t.mode] then
+                t.text:SetText(L[ns.MODE_SHORT[t.mode]])
+            else
+                t.text:SetText(L[ns.MODE_NAMES[t.mode]])
+            end
+        end
         if sp and isSplitActive and (t.mode == sp.primaryMode or t.mode == sp.secondaryMode) then t:Hide()
         else t:Show(); table.insert(visible, t) end
     end

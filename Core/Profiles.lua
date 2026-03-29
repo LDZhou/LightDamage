@@ -121,6 +121,7 @@ function ns:SaveSessionHistory()
             _sessionIdx      = seg._sessionIdx,
             players          = {},
             deathLog         = {},
+            enemyDamageTakenList = seg.enemyDamageTakenList or {},
         }
         for guid, pd in pairs(seg.players) do
             compact.players[guid] = {
@@ -166,6 +167,7 @@ function ns:SaveSessionHistory()
             totalHealing     = ovr.totalHealing,
             totalDamageTaken = ovr.totalDamageTaken,
             players          = {},
+            enemyDamageTakenList = ovr.enemyDamageTakenList or {},
         }
         for guid, pd in pairs(ovr.players) do
             compactOvr.players[guid] = {

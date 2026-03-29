@@ -103,6 +103,64 @@ function ns.CombatTracker:LoadSegmentData(seg)
         end
     end
 
+    -- 可规避伤害标记（交叉查询 AvoidableDamageTaken）
+    for guid, pd in pairs(seg.players) do
+        if pd.damageTakenSpells and next(pd.damageTakenSpells) then
+            local okAv, avoidSrc = pcall(
+                C_DamageMeter.GetCombatSessionSourceFromID,
+                sid, Enum.DamageMeterType.AvoidableDamageTaken, guid)
+            if okAv and avoidSrc and avoidSrc.combatSpells then
+                for _, sp in ipairs(avoidSrc.combatSpells) do
+                    local spellID = getAmount(sp.spellID)
+                    if spellID > 0 and pd.damageTakenSpells[spellID] then
+                        pd.damageTakenSpells[spellID].isAvoidable = true
+                    end
+                end
+            end
+        end
+    end
+
+    -- 敌人承伤（EnemyDamageTaken type 10）
+    do
+        seg.enemyDamageTakenList = {}
+        local okET, etSession = pcall(C_DamageMeter.GetCombatSessionFromID, sid, Enum.DamageMeterType.EnemyDamageTaken)
+        if okET and etSession and etSession.combatSources then
+            for _, enemy in ipairs(etSession.combatSources) do
+                local creatureID = enemy.sourceCreatureID
+                local enemyName = enemy.name or "?"
+                local total = getAmount(enemy.totalAmount)
+                if total > 0 then
+                    local entry = { creatureID = creatureID, name = enemyName, total = total, sources = {} }
+                    local okSrc, srcData = pcall(C_DamageMeter.GetCombatSessionSourceFromID,
+                        sid, Enum.DamageMeterType.EnemyDamageTaken, nil, creatureID)
+                    if okSrc and srcData and srcData.combatSpells then
+                        for _, sp in ipairs(srcData.combatSpells) do
+                            local details = sp.combatSpellDetails
+                            if details then
+                                local playerName = details.unitName
+                                local playerClass = details.unitClassFilename or "WARRIOR"
+                                local amt = getAmount(details.amount)
+                                if amt == 0 then amt = getAmount(sp.totalAmount) end
+                                if playerName and amt > 0 then
+                                    local found = false
+                                    for _, s in ipairs(entry.sources) do
+                                        if s.name == playerName then s.amount = s.amount + amt; found = true; break end
+                                    end
+                                    if not found then
+                                        table.insert(entry.sources, { name = playerName, class = playerClass, amount = amt })
+                                    end
+                                end
+                            end
+                        end
+                    end
+                    table.sort(entry.sources, function(a, b) return a.amount > b.amount end)
+                    table.insert(seg.enemyDamageTakenList, entry)
+                end
+            end
+            table.sort(seg.enemyDamageTakenList, function(a, b) return a.total > b.total end)
+        end
+    end
+
     -- 打断 / 驱散
     for dmType, field in pairs({ [Enum.DamageMeterType.Interrupts] = "interrupts", [Enum.DamageMeterType.Dispels] = "dispels" }) do
         local spellField = field == "interrupts" and "interruptSpells" or "dispelSpells"
@@ -230,6 +288,66 @@ function ns.CombatTracker:RebuildOverall(sessions, sessionCount)
                     end
                 end
             end
+
+            -- 可规避伤害标记（交叉查询 AvoidableDamageTaken）
+            for guid, pd in pairs(newPlayers) do
+                if pd.damageTakenSpells and next(pd.damageTakenSpells) then
+                    local okAv, avoidSrc = pcall(
+                        C_DamageMeter.GetCombatSessionSourceFromID,
+                        sid, Enum.DamageMeterType.AvoidableDamageTaken, guid)
+                    if okAv and avoidSrc and avoidSrc.combatSpells then
+                        for _, sp in ipairs(avoidSrc.combatSpells) do
+                            local spellID = getAmount(sp.spellID)
+                            if spellID > 0 and pd.damageTakenSpells[spellID] then
+                                pd.damageTakenSpells[spellID].isAvoidable = true
+                            end
+                        end
+                    end
+                end
+            end
+
+            -- 敌人承伤聚合
+            do
+                local okET, etSession = pcall(C_DamageMeter.GetCombatSessionFromID, sid, Enum.DamageMeterType.EnemyDamageTaken)
+                if okET and etSession and etSession.combatSources then
+                    if not segs.overall.enemyDamageTakenList then segs.overall.enemyDamageTakenList = {} end
+                    local edtMap = {}
+                    for _, existing in ipairs(segs.overall.enemyDamageTakenList) do edtMap[existing.creatureID or existing.name] = existing end
+                    for _, enemy in ipairs(etSession.combatSources) do
+                        local key = enemy.sourceCreatureID or enemy.name
+                        local total = getAmount(enemy.totalAmount)
+                        if total > 0 then
+                            if not edtMap[key] then
+                                edtMap[key] = { creatureID = enemy.sourceCreatureID, name = enemy.name or "?", total = 0, sources = {} }
+                                table.insert(segs.overall.enemyDamageTakenList, edtMap[key])
+                            end
+                            edtMap[key].total = edtMap[key].total + total
+                            local okSrc, srcData = pcall(C_DamageMeter.GetCombatSessionSourceFromID,
+                                sid, Enum.DamageMeterType.EnemyDamageTaken, nil, enemy.sourceCreatureID)
+                            if okSrc and srcData and srcData.combatSpells then
+                                for _, sp in ipairs(srcData.combatSpells) do
+                                    local details = sp.combatSpellDetails
+                                    if details and details.unitName then
+                                        local amt = getAmount(details.amount)
+                                        if amt == 0 then amt = getAmount(sp.totalAmount) end
+                                        if amt > 0 then
+                                            local found = false
+                                            for _, s in ipairs(edtMap[key].sources) do
+                                                if s.name == details.unitName then s.amount = s.amount + amt; found = true; break end
+                                            end
+                                            if not found then
+                                                table.insert(edtMap[key].sources, { name = details.unitName, class = details.unitClassFilename or "WARRIOR", amount = amt })
+                                            end
+                                        end
+                                    end
+                                end
+                            end
+                        end
+                    end
+                    table.sort(segs.overall.enemyDamageTakenList, function(a, b) return a.total > b.total end)
+                end
+            end
+
             -- 死亡
             local ok2, dmSession = pcall(C_DamageMeter.GetCombatSessionFromID, sid, Enum.DamageMeterType.Deaths)
             if ok2 and dmSession and dmSession.combatSources then
@@ -275,5 +393,47 @@ function ns.CombatTracker:RebuildOverall(sessions, sessionCount)
     if CT._baselineSessionCount == 0 then segs.overall.duration = C_DamageMeter.GetSessionDurationSeconds(Enum.DamageMeterSessionType.Overall) or totalDur
     else segs.overall.duration = totalDur end
     segs.overall.isActive = false
+    -- 敌人承伤：直接查 Overall session type，不手动累加
+    do
+        segs.overall.enemyDamageTakenList = {}
+        local okET, etSession = pcall(C_DamageMeter.GetCombatSessionFromType,
+            Enum.DamageMeterSessionType.Overall, Enum.DamageMeterType.EnemyDamageTaken)
+        if okET and etSession and etSession.combatSources then
+            for _, enemy in ipairs(etSession.combatSources) do
+                local creatureID = enemy.sourceCreatureID
+                local enemyName = enemy.name or "?"
+                local total = getAmount(enemy.totalAmount)
+                if total > 0 then
+                    local entry = { creatureID = creatureID, name = enemyName, total = total, sources = {} }
+                    local okSrc, srcData = pcall(C_DamageMeter.GetCombatSessionSourceFromType,
+                        Enum.DamageMeterSessionType.Overall, Enum.DamageMeterType.EnemyDamageTaken,
+                        nil, creatureID)
+                    if okSrc and srcData and srcData.combatSpells then
+                        for _, sp in ipairs(srcData.combatSpells) do
+                            local details = sp.combatSpellDetails
+                            if details then
+                                local playerName = details.unitName
+                                local playerClass = details.unitClassFilename or "WARRIOR"
+                                local amt = getAmount(details.amount)
+                                if amt == 0 then amt = getAmount(sp.totalAmount) end
+                                if playerName and amt > 0 then
+                                    local found = false
+                                    for _, s in ipairs(entry.sources) do
+                                        if s.name == playerName then s.amount = s.amount + amt; found = true; break end
+                                    end
+                                    if not found then
+                                        table.insert(entry.sources, { name = playerName, class = playerClass, amount = amt })
+                                    end
+                                end
+                            end
+                        end
+                    end
+                    table.sort(entry.sources, function(a, b) return a.amount > b.amount end)
+                    table.insert(segs.overall.enemyDamageTakenList, entry)
+                end
+            end
+            table.sort(segs.overall.enemyDamageTakenList, function(a, b) return a.total > b.total end)
+        end
+    end
     if snap and snap.deathLog then segs.overall.deathLog = CopyTable(snap.deathLog) elseif not segs.overall.deathLog then segs.overall.deathLog = {} end
 end

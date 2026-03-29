@@ -33,6 +33,7 @@ function Segments:NewSegment(segType, name)
         success       = nil,
 
         deathLog = {},
+        enemyDamageTakenList = {},
     }
 end
 

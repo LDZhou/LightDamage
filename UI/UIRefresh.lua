@@ -18,6 +18,12 @@ function UI:Refresh()
     local sp   = ns.db.split; local mode = ns.db.display.mode
     local useOvr = self:IsOverallColumnActive()
     local isSplitView = self:IsSplitActiveInCurrentScene() and (ns.db.display.mode == "split")
+
+    local function effMode(m)
+        if m == "damageTaken" and ns.state.damageTakenView == "enemy" then return "enemyDamageTaken" end
+        return m
+    end
+
     self:RefreshTitle()
 
     -- Summary 栏
@@ -62,20 +68,20 @@ function UI:Refresh()
         local sType = Enum.DamageMeterSessionType.Current
         if isSplitView then
             self:RefreshHead(self.priHead, sp.primaryMode, nil, 0, sType); self:RefreshHead(self.secHead, sp.secondaryMode, nil, 0, sType)
-            self:FillBarsFromAPI(self.priBars, self.priList, sp.primaryMode, sType); self:FillBarsFromAPI(self.secBars, self.secList, sp.secondaryMode, sType)
+            self:FillBarsFromAPI(self.priBars, self.priList, effMode(sp.primaryMode), sType); self:FillBarsFromAPI(self.secBars, self.secList, effMode(sp.secondaryMode), sType)            
             if useOvr then self:FillOvrBars(isSplitView, sp, mode) end
         else
-            self:RefreshHead(self.priHead, mode, nil, 0, sType); self:FillBarsFromAPI(self.priBars, self.priList, mode, sType)
+            self:RefreshHead(self.priHead, mode, nil, 0, sType); self:FillBarsFromAPI(self.priBars, self.priList, effMode(mode), sType)
             if useOvr then self:FillOvrBars(isSplitView, sp, mode) end
         end
     elseif showingOverallInCombat and not forceDataMode then
         local sType = Enum.DamageMeterSessionType.Overall
         if isSplitView then
             self:RefreshHead(self.priHead, sp.primaryMode, nil, 0, sType); self:RefreshHead(self.secHead, sp.secondaryMode, nil, 0, sType)
-            self:FillBarsFromAPI(self.priBars, self.priList, sp.primaryMode, sType); self:FillBarsFromAPI(self.secBars, self.secList, sp.secondaryMode, sType)
+            self:FillBarsFromAPI(self.priBars, self.priList, effMode(sp.primaryMode), sType); self:FillBarsFromAPI(self.secBars, self.secList, effMode(sp.secondaryMode), sType)
             if useOvr then self:FillOvrBars(isSplitView, sp, mode) end
         else
-            self:RefreshHead(self.priHead, mode, nil, 0, sType); self:FillBarsFromAPI(self.priBars, self.priList, mode, sType)
+            self:RefreshHead(self.priHead, mode, nil, 0, sType); self:FillBarsFromAPI(self.priBars, self.priList, effMode(mode), sType)
             if useOvr then self:FillOvrBars(isSplitView, sp, mode) end
         end
     else
@@ -102,11 +108,15 @@ function UI:Refresh()
 end
 
 function UI:FillOvrBars(isSplitView, sp, mode)
+    local function effMode(m)
+        if m == "damageTaken" and ns.state.damageTakenView == "enemy" then return "enemyDamageTaken" end
+        return m
+    end
     if ns.state.inCombat then
         local ovr = ns.Segments and ns.Segments.overall; local hasPriorData = ovr and (ovr.totalDamage > 0 or ovr.totalHealing > 0)
         local sType = hasPriorData and Enum.DamageMeterSessionType.Overall or Enum.DamageMeterSessionType.Current
-        if isSplitView then self:FillBarsFromAPI(self.ovrPriBars, self.ovrPriList, sp.primaryMode, sType); self:FillBarsFromAPI(self.ovrSecBars, self.ovrSecList, sp.secondaryMode, sType)
-        else self:FillBarsFromAPI(self.ovrPriBars, self.ovrPriList, mode, sType) end
+        if isSplitView then self:FillBarsFromAPI(self.ovrPriBars, self.ovrPriList, effMode(sp.primaryMode), sType); self:FillBarsFromAPI(self.ovrSecBars, self.ovrSecList, effMode(sp.secondaryMode), sType)
+        else self:FillBarsFromAPI(self.ovrPriBars, self.ovrPriList, effMode(mode), sType) end
     else
         local ovrSeg = ns.Segments and ns.Segments:GetOverallSegment(); local ovrDur = ns.Analysis and ns.Analysis:GetSegmentDuration(ovrSeg) or 0
         if isSplitView then
@@ -144,16 +154,64 @@ end
 function UI:RefreshHead(h, mode, seg, dur, apiSessionType)
     if not h:IsShown() then return end
     local mn = L[ns.MODE_NAMES[mode] or mode]
+
+    -- 承伤模式下显示友方/敌方双按钮
+    if h.dtFriendly then
+        if mode == "damageTaken" then
+            local isEnemy = (ns.state.damageTakenView == "enemy")
+            h.dtFriendlyText:SetText(L["友方"])
+            h.dtEnemyText:SetText(L["敌方"])
+            if isEnemy then
+                h.dtFriendlyText:SetTextColor(0.3, 0.5, 0.3)
+                h.dtEnemyText:SetTextColor(1.0, 0.4, 0.4)
+                mn = L["敌人承伤"]
+            else
+                h.dtFriendlyText:SetTextColor(0.3, 1.0, 0.3)
+                h.dtEnemyText:SetTextColor(0.5, 0.3, 0.3)
+            end
+            h.dtFriendly:Show(); h.dtEnemy:Show()
+        else
+            h.dtFriendly:Hide(); h.dtEnemy:Hide()
+        end
+    end
     local ac = mode=="damage" and T.dmgC or mode=="healing" and T.healC or mode=="damageTaken" and T.takenC or T.accent
     h.label:SetText(string.format("|cff%02x%02x%02x%s|r", ac[1]*255, ac[2]*255, ac[3]*255, mn))
+
+    -- 承伤模式：固定按钮位置，防止跳动
+    if mode == "damageTaken" and h.dtFriendly then
+        if not h._dtMaxLabelW then
+            -- 首次计算：测量两种文字的最大宽度并缓存
+            local savedText = h.label:GetText()
+            h.label:SetWidth(0)
+            local fmt = "|cff%02x%02x%02x%s|r"
+            h.label:SetText(string.format(fmt, ac[1]*255, ac[2]*255, ac[3]*255, L[ns.MODE_NAMES["damageTaken"]]))
+            local w1 = h.label:GetStringWidth()
+            h.label:SetText(string.format(fmt, ac[1]*255, ac[2]*255, ac[3]*255, L["敌人承伤"]))
+            local w2 = h.label:GetStringWidth()
+            h._dtMaxLabelW = math.max(w1, w2) + 2
+            h.label:SetText(savedText)
+        end
+        -- 按钮锚定到 header LEFT + 固定偏移，不跟随 label 宽度
+        h.dtFriendly:ClearAllPoints()
+        h.dtFriendly:SetPoint("LEFT", h, "LEFT", 6 + h._dtMaxLabelW + 4, 0)
+        h.dtEnemy:ClearAllPoints()
+        h.dtEnemy:SetPoint("LEFT", h.dtFriendly, "RIGHT", 2, 0)
+    end
     if seg then
         local total = 0
-        if COUNT_MODES[mode] then for _, p in pairs(seg.players) do total = total + (p[mode] or 0) end
-        else total = mode=="damage" and seg.totalDamage or mode=="healing" and seg.totalHealing or mode=="damageTaken" and seg.totalDamageTaken or 0 end
+        if mode == "damageTaken" and ns.state.damageTakenView == "enemy" then
+            for _, entry in ipairs(seg.enemyDamageTakenList or {}) do total = total + entry.total end
+        elseif COUNT_MODES[mode] then
+            for _, p in pairs(seg.players) do total = total + (p[mode] or 0) end
+        else
+            total = mode=="damage" and seg.totalDamage or mode=="healing" and seg.totalHealing or mode=="damageTaken" and seg.totalDamageTaken or 0
+        end
         local valStr = COUNT_MODES[mode] and (ns:FormatNumber(total)..L["次"]) or ns:FormatNumber(total)
         h.info:SetText(string.format(L["团队总%s: %s"], mn, valStr))
     elseif apiSessionType then
-        local dmType = MODE_TO_DM[mode]
+        local effM = mode
+        if mode == "damageTaken" and ns.state.damageTakenView == "enemy" then effM = "enemyDamageTaken" end
+        local dmType = MODE_TO_DM[effM]
         if dmType then
             local session = self:GetCachedSession(apiSessionType, dmType)
             if session and session.totalAmount then

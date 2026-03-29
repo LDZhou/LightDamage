@@ -36,6 +36,7 @@ local MODE_TO_DM = {
     interrupts  = Enum.DamageMeterType.Interrupts,
     dispels     = Enum.DamageMeterType.Dispels,
     deaths      = Enum.DamageMeterType.Deaths,
+    enemyDamageTaken   = Enum.DamageMeterType.EnemyDamageTaken,
 }
 UI.MODE_TO_DM = MODE_TO_DM
 
@@ -294,6 +295,31 @@ function UI:MakeSectHead(parent)
     h.info = self:FS(h, 9, "OUTLINE"); h.info:SetJustifyH("RIGHT"); h.info:SetTextColor(0.55, 0.55, 0.55, 0.9)
     local line = h:CreateTexture(nil,"ARTWORK"); line:SetHeight(1)
     line:SetPoint("BOTTOMLEFT",0,0); line:SetPoint("BOTTOMRIGHT",0,0); line:SetColorTexture(0.3,0.3,0.35,0.4)
+
+    -- 承伤子视图切换：友方(绿) + 敌方(红) 双按钮
+    local dtFriendly = CreateFrame("Button", nil, h)
+    dtFriendly:SetSize(32, SECTH_H - 4); dtFriendly:SetPoint("LEFT", h, "LEFT", 60, 0)
+    local dtFriendlyText = self:FS(dtFriendly, 8, "OUTLINE"); dtFriendlyText:SetPoint("CENTER")
+    dtFriendly:SetScript("OnClick", function()
+        ns.state.damageTakenView = "friendly"
+        if ns.Analysis then ns.Analysis:InvalidateCache() end
+        if ns.UI then ns.UI:Refresh() end
+    end)
+    dtFriendly:Hide()
+
+    local dtEnemy = CreateFrame("Button", nil, h)
+    dtEnemy:SetSize(32, SECTH_H - 4); dtEnemy:SetPoint("LEFT", dtFriendly, "RIGHT", 2, 0)
+    local dtEnemyText = self:FS(dtEnemy, 8, "OUTLINE"); dtEnemyText:SetPoint("CENTER")
+    dtEnemy:SetScript("OnClick", function()
+        ns.state.damageTakenView = "enemy"
+        if ns.Analysis then ns.Analysis:InvalidateCache() end
+        if ns.UI then ns.UI:Refresh() end
+    end)
+    dtEnemy:Hide()
+
+    h.dtFriendly = dtFriendly; h.dtFriendlyText = dtFriendlyText
+    h.dtEnemy = dtEnemy; h.dtEnemyText = dtEnemyText
+
     return h
 end
 

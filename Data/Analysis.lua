@@ -17,7 +17,30 @@ function Analysis:Init() end
 function Analysis:GetSorted(segment, mode)
     if not segment then return {} end
 
-    local cacheKey = tostring(segment) .. "|" .. mode
+    -- 敌人承伤走独立数据结构
+    if mode == "damageTaken" and ns.state.damageTakenView == "enemy" then
+        local list = segment.enemyDamageTakenList or {}
+        local result = {}
+        local totalValue = 0
+        for _, entry in ipairs(list) do totalValue = totalValue + entry.total end
+        for i, entry in ipairs(list) do
+            table.insert(result, {
+                guid     = "creature_" .. (entry.creatureID or i),
+                name     = entry.name,
+                class    = "WARRIOR",
+                value    = entry.total,
+                perSec   = 0,
+                percent  = totalValue > 0 and (entry.total / totalValue * 100) or 0,
+                deaths   = 0, interrupts = 0, dispels = 0,
+                _isEnemy = true,
+                _sources = entry.sources,
+            })
+        end
+        return result
+    end
+
+    local viewSuffix = (mode == "damageTaken" and ns.state.damageTakenView == "enemy") and "|enemy" or ""
+    local cacheKey = tostring(segment) .. "|" .. mode .. viewSuffix
 
     -- 检查两个缓存槽
     if self._sortedCache and self._sortedCacheKey == cacheKey then

@@ -88,6 +88,7 @@ ns.defaults = {
         textColorMode = "white",
         textColor     = {1.0, 1.0, 1.0},
         alwaysShowSelf = false,
+        useShortTabs   = false,
     },
     split = {
         enabled           = true,
@@ -141,6 +142,7 @@ ns.state = {
     mythicPlusLevel  = 0,
     playerGUID       = nil,
     playerName       = nil,
+    damageTakenView  = "friendly",
     playerClass      = nil,
 }
 

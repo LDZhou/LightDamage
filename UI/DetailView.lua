@@ -477,8 +477,8 @@ function DV:RenderSpellList(name, class, mode, spells, dur, titleSuffix, apiMaxA
         local nc = sp.isPet and "|cff55bb55" or "|cffffffff"
         
         if sp.isAvoidable then
-            r.bg:SetColorTexture(0.35, 0.25, 0.05, 0.85)
-            nc = "|cffffcc00[规避] "
+            sc2 = {0.85, 0.70, 0.15}
+            sn = sn .. " |cffffcc00[可规避]|r"
         end
         
         -- 【先】设定右侧值文字，让它把占位大小确定下来
@@ -958,6 +958,52 @@ end
 -- 接口
 -- ============================================================
 function DV:IsVisible() return self.frame and self.frame:IsShown() end
+
+function DV:ShowEnemyDamageTakenDetail(enemyName, sources, totalDmg)
+    self._lastRenderArgs = { type = "enemyDmgTaken", args = {enemyName, sources, totalDmg} }
+    self:EnsureCreated()
+    self.frame:Show()
+    self:ApplyTheme()
+    self:ClearRows()
+
+    self.titleText:SetText(string.format(L["%s 的承伤来源"], ns:DisplayName(enemyName)))
+
+    local bh, gap, alpha, _, _, _, _, thickness, vOffset, texPath = self:GetBarConfig()
+    local currentY = 0
+
+    if not sources or #sources == 0 then
+        local r = self:PlaceRow(1, 0, bh, nil, thickness, vOffset)
+        r.name:SetText(L["|cff555555暂无承伤数据|r"]); r.value:SetText("")
+        self:UpdateScroll(bh + 5); return
+    end
+
+    table.sort(sources, function(a, b) return a.amount > b.amount end)
+    local maxV = sources[1].amount
+
+    for i, src in ipairs(sources) do
+        local r = self:PlaceRow(i, currentY, bh, nil, thickness, vOffset)
+        currentY = currentY - (bh + gap)
+
+        r.fill:SetStatusBarTexture(texPath)
+        r.fill:SetMinMaxValues(0, maxV)
+        r.fill:SetValue(src.amount)
+
+        local cc = ns:GetClassColor(src.class) or {0.5, 0.5, 0.5}
+        r.fill:SetStatusBarColor(cc[1], cc[2], cc[3], alpha)
+
+        r.name:SetText(ns:DisplayName(src.name))
+        r.name:SetTextColor(cc[1], cc[2], cc[3])
+
+        local pct = totalDmg > 0 and (src.amount / totalDmg * 100) or 0
+        r.value:SetText(string.format("%s  |cffaaaaaa%.0f%%|r", ns:FormatNumber(src.amount), pct))
+
+        r.frame:SetScript("OnEnter", nil)
+        r.frame:SetScript("OnLeave", nil)
+        r.frame:Show()
+    end
+    self:UpdateScroll(math.abs(currentY))
+end
+
 function DV:Refresh()
     if self.frame and self.frame:IsShown() then
         if self._lastRenderArgs then
@@ -966,7 +1012,8 @@ function DV:Refresh()
             if t == "spell" then self:RenderSpellList(unpack(a))
             elseif t == "spellAPI" then self:ShowSpellBreakdownFromAPI(unpack(a))  -- ★ 新增
             elseif t == "death" then self:ShowDeathDetail(unpack(a))
-            elseif t == "combat" then self:ShowCombatLocked(unpack(a)) end
+            elseif t == "combat" then self:ShowCombatLocked(unpack(a))
+            elseif t == "enemyDmgTaken" then self:ShowEnemyDamageTakenDetail(unpack(a)) end
         else
             self:ApplyTheme()
         end
