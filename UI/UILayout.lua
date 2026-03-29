@@ -37,7 +37,15 @@ function UI:DoLayout(retryCount)
 
     local bodyH = self.bodyFrame:GetHeight(); local bodyW = self.bodyFrame:GetWidth()
     if bodyW <= 0 or bodyH <= 0 then
-        if retryCount < 20 then C_Timer.After(0.05, function() self:DoLayout(retryCount + 1) end) end
+        if retryCount < 20 then
+            C_Timer.After(0.05, function() self:DoLayout(retryCount + 1) end)
+        else
+            -- 重试耗尽，强制恢复到默认尺寸
+            local dw, dh = self:ClampSize(ns.db.window.width, ns.db.window.height)
+            self.frame:SetSize(dw, dh)
+            ns.db.window.width = dw; ns.db.window.height = dh
+            C_Timer.After(0.1, function() self:DoLayout(0) end)
+        end
         return
     end
 

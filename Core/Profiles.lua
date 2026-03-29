@@ -21,7 +21,7 @@ function ns:SwitchProfile(name)
 
     if ns.UI and ns.UI.frame then
         local w = ns.db.window
-        ns.UI.frame:SetSize(w.width, w.height)
+        ns.UI.frame:SetSize(ns.UI:ClampSize(w.width, w.height))
         ns.UI.frame:ClearAllPoints()
         ns.UI.frame:SetPoint(w.point, UIParent, w.relPoint, w.x, w.y)
         ns.UI.frame:SetScale(w.scale or 1.0)

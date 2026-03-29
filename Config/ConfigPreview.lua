@@ -93,7 +93,7 @@ function Config:ApplyPreviewScene(sceneId)
     -- 预览模式：只应用场景尺寸，不改变位置
     if ns.db.window.rememberSceneSize and ns.db.window.sceneSizes then
         local s = ns.db.window.sceneSizes[sceneId]
-        if s then ns.UI.frame:SetSize(s.width, s.height) end
+        if s then ns.UI.frame:SetSize(ns.UI:ClampSize(s.width, s.height)) end
     end
     ns.UI:Layout()
 end

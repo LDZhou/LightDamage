@@ -139,6 +139,15 @@ function UI:ApplyFont(fs, font, size, outline, shadow)
     else fs:SetShadowOffset(0,0) end
 end
 
+-- ============================================================
+-- 尺寸安全钳制（防止 frame 高度为 0）
+-- ============================================================
+function UI:ClampSize(w, h)
+    if type(w) ~= "number" or w ~= w or w <= 0 then w = ns.defaults.window.width end
+    if type(h) ~= "number" or h ~= h or h <= 0 then h = ns.defaults.window.height end
+    return w, h
+end
+
 function UI:ApplyAllFontsIfNeeded()
     local db = ns.db.display
     local hash = (db.font or "") .. "|" .. (db.fontSizeBase or 10) .. "|" .. (db.fontOutline or "")
@@ -179,11 +188,11 @@ function UI:Build()
     BAR_H = ns.db.display.barHeight or 18
 
     local f = CreateFrame("Frame","LightDamageFrame",UIParent,"BackdropTemplate")
-    f:SetSize(db.width, db.height)
+    f:SetSize(self:ClampSize(db.width, db.height))
     if db.rememberSceneSize and db.sceneSizes then
         local cat = ns.state.instanceCategory or "outdoor"
         local s = db.sceneSizes[cat]
-        if s then f:SetSize(s.width, s.height) end
+        if s then f:SetSize(self:ClampSize(s.width, s.height)) end
     end
     f:SetPoint(db.point, UIParent, db.relPoint, db.x, db.y)
     f:SetScale(db.scale); f:SetAlpha(db.alpha)
@@ -393,7 +402,8 @@ function UI:BuildResize()
     g:SetScript("OnMouseDown", function() if ns.db.window.locked then return end; self.frame:StartSizing("BOTTOMRIGHT"); self._resizing = true end)
     g:SetScript("OnMouseUp", function()
         if not self._resizing then return end; self._resizing = false; self.frame:StopMovingOrSizing()
-        local w, h = self.frame:GetWidth(), self.frame:GetHeight()
+        local w, h = self:ClampSize(self.frame:GetWidth(), self.frame:GetHeight())
+        self.frame:SetSize(w, h)  -- 确保 frame 本身也被修正
         ns.db.window.width = w; ns.db.window.height = h
         if ns.db.window.rememberSceneSize then
             local cat = ns.state.instanceCategory or "outdoor"
@@ -466,7 +476,7 @@ function UI:ApplySceneSize(cat)
     elseif anchor:find("BOTTOM") then ay = bottom
     else ay = bottom + oldH / 2 end
 
-    self.frame:SetSize(s.width, s.height)
+    self.frame:SetSize(self:ClampSize(s.width, s.height))
 
     local newLeft, newBottom
     if anchor:find("LEFT") then newLeft = ax
