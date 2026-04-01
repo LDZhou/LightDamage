@@ -569,6 +569,11 @@ function ns:UpdateInstanceStatus()
     if oldCat ~= cat and ns.UI and ns.UI.frame and ns.UI.frame:IsShown() then
         if ns.UI.ApplySceneSize then ns.UI:ApplySceneSize(cat) end
     end
+
+    -- 进出副本时刷新渐隐状态（修复"副本中永不隐藏"不即时生效）
+    if oldCat ~= cat and ns.UI and ns.UI.CheckAutoFade then
+        ns.UI:CheckAutoFade(true)
+    end
 end
 
 -- ============================================================

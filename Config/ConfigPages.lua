@@ -37,7 +37,7 @@ function Config:BuildLayoutPage()
     y2s = self:Check(sec2_sub, L["非副本 (开放世界)"], y2s, function() return ns.db.split.overallShowOutdoor end, function(v) ns.db.split.overallShowOutdoor=v; self:RefreshUI(); self:UpdateLayoutVisibility() end)
     y2s = y2s - 8
     local curPosBtn
-    y2s = self:Dropdown(sec2_sub, L["当前/总计划分方向"], y2s, dirs, function() return ns.db.split.overallDir or "LR" end, function(v) ns.db.split.overallDir = v; ns.db.split.splitDir = (v == "LR") and "TB" or "LR"; if curPosBtn then curPosBtn.UpdateOpts(v == "TB" and posesTB or posesLR) end; if self.priPosBtn then self.priPosBtn.UpdateOpts(ns.db.split.splitDir == "TB" and posesTB or posesLR) end; self:RefreshUI(); self:UpdateLayoutVisibility() end)
+    y2s, self.ovrDirBtn = self:Dropdown(sec2_sub, L["当前/总计划分方向"], y2s, dirs, function() return ns.db.split.overallDir or "LR" end, function(v) ns.db.split.overallDir = v; ns.db.split.splitDir = (v == "LR") and "TB" or "LR"; if curPosBtn then curPosBtn.UpdateOpts(v == "TB" and posesTB or posesLR) end; if self.priPosBtn then self.priPosBtn.UpdateOpts(ns.db.split.splitDir == "TB" and posesTB or posesLR) end; if self.splitDirBtn then self.splitDirBtn.UpdateOpts(dirs) end; self:RefreshUI(); self:UpdateLayoutVisibility() end)
     y2s, curPosBtn = self:Dropdown(sec2_sub, L["当前数据位置"], y2s, (ns.db.split.overallDir == "TB") and posesTB or posesLR, function() return ns.db.split.currentPos or 1 end, function(v) ns.db.split.currentPos = v; self:RefreshUI() end)
     sec2_sub:SetHeight(math.abs(y2s)); self.laySec2Sub = sec2_sub; self.laySec2 = sec2
 
@@ -51,6 +51,7 @@ function Config:BuildLayoutPage()
     y3s = self:Check(sec3_sub, L["其他副本 (含地下堡/战场/竞技场)"], y3s, function() return ns.db.split.splitShowDungeon end, function(v) ns.db.split.splitShowDungeon=v; if v and ns.db.split.enabled and ns.state.instanceCategory == "dungeon" then ns.db.display.mode = "split" end; self:RefreshUI() end)
     y3s = self:Check(sec3_sub, L["非副本 (开放世界)"], y3s, function() return ns.db.split.splitShowOutdoor end, function(v) ns.db.split.splitShowOutdoor=v; if v and ns.db.split.enabled and ns.state.instanceCategory == "outdoor" then ns.db.display.mode = "split" end; self:RefreshUI() end)
     y3s = y3s - 8
+    y3s, self.splitDirBtn = self:Dropdown(sec3_sub, L["双数据划分方向"], y3s, dirs, function() return ns.db.split.splitDir or "TB" end, function(v) ns.db.split.splitDir = v; ns.db.split.overallDir = (v == "LR") and "TB" or "LR"; if self.priPosBtn then self.priPosBtn.UpdateOpts(v == "TB" and posesTB or posesLR) end; if curPosBtn then curPosBtn.UpdateOpts(ns.db.split.overallDir == "TB" and posesTB or posesLR) end; if self.ovrDirBtn then self.ovrDirBtn.UpdateOpts(dirs) end; self:RefreshUI(); self:UpdateLayoutVisibility() end)
     y3s, self.priPosBtn = self:Dropdown(sec3_sub, L["主数据位置"], y3s, (ns.db.split.splitDir == "TB") and posesTB or posesLR, function() return ns.db.split.primaryPos or 1 end, function(v) ns.db.split.primaryPos = v; self:RefreshUI() end)
     y3s = self:Dropdown(sec3_sub, L["主数据内容"], y3s, allModes, function() return ns.db.split.primaryMode end, function(v) ns.db.split.primaryMode=v; self:RefreshUI() end)
     y3s = self:Dropdown(sec3_sub, L["副数据内容"], y3s, allModes, function() return ns.db.split.secondaryMode end, function(v) ns.db.split.secondaryMode=v; self:RefreshUI() end)
