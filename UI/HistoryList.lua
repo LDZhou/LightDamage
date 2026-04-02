@@ -123,6 +123,7 @@ function HL:Build()
             -- 如果当前在野外，连带清空当前的 overall 和重置 API Baseline
             if not ns.state.isInInstance then
                 if C_DamageMeter.ResetAllCombatSessions then
+                    ns.CombatTracker:ClearLoadedSessionIDs()
                     ns.CombatTracker._internalReset = true
                     C_DamageMeter.ResetAllCombatSessions()
                 end

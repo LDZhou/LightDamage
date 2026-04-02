@@ -318,12 +318,23 @@ end
 -- ============================================================
 -- 公开接口
 -- ============================================================
+function CT:ClearLoadedSessionIDs()
+    local segs = ns.Segments
+    if not segs or not segs.history then return end
+    for _, seg in ipairs(segs.history) do
+        if seg._dataLoaded and seg._sessionID then
+            seg._sessionID = nil
+        end
+    end
+end
 function CT:ResetMeterForNewRun()
+    self:ClearLoadedSessionIDs()
     if C_DamageMeter.ResetAllCombatSessions then CT._internalReset = true; C_DamageMeter.ResetAllCombatSessions() end
     CT._baselineSessionCount = 0; CT._lastProcessedCount = 0; CT._initialBaselineSet = true; CT._bossSessionIndices = {}
     if ns.MythicPlus then ns.MythicPlus:ResetBaseline() end
 end
 function CT:MarkReset()
+    self:ClearLoadedSessionIDs()
     if C_DamageMeter.ResetAllCombatSessions then C_DamageMeter.ResetAllCombatSessions() end
     CT._baselineSessionCount = 0; CT._lastProcessedCount = 0; CT._initialBaselineSet = true
 end
@@ -421,7 +432,7 @@ function CT:RegisterEvents()
                 if isSameInstance then
                     C_Timer.After(1.5, function()
                         if ns.Segments then
-                            if ns.Segments.history then for _, seg in ipairs(ns.Segments.history) do if seg._sessionID then seg._dataLoaded = false; CT:LoadSegmentData(seg) end end end
+                            if ns.Segments.history then for _, seg in ipairs(ns.Segments.history) do if seg._sessionID and seg._instanceTag == CT._currentInstanceTag then seg._dataLoaded = false; CT:LoadSegmentData(seg) end end
                             ns.Segments._preReloadOverallData = nil
                             local sess = C_DamageMeter.GetAvailableCombatSessions(); CT:RebuildOverall(sess, sess and #sess or 0)
                             if ns.UI and ns.UI:IsVisible() then ns.UI:Layout() end
