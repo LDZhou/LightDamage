@@ -54,10 +54,20 @@ function UI:FillPinnedFromData(pinnedBar, listObj, d, rank, dur, mode, maxV, pos
     pinnedBar._data = d; pinnedBar._mode = mode; pinnedBar._isDeath = false; pinnedBar._guid = d.guid; pinnedBar._nameStr = d.name; pinnedBar._classStr = d.class
     if pinnedBar.specIcon then
         local specID = d.specID
-        if d.guid == ns.state.playerGUID then local idx = GetSpecialization(); if idx then specID = GetSpecializationInfo(idx) end end
-        local icon = nil; if specID then _, _, _, icon = GetSpecializationInfoByID(specID) end
+        local seg = ns.Segments and ns.Segments:GetViewSegment()
+        if seg and seg.isActive and d.guid == ns.state.playerGUID then
+            local idx = GetSpecialization()
+            if idx then specID = GetSpecializationInfo(idx) end
+        end
+        local icon = nil
+        if specID then _, _, _, icon = GetSpecializationInfoByID(specID) end
         if not icon and d.class then icon = CLASS_ICONS[d.class] end
-        if ns.db.display.showSpecIcon and icon then pinnedBar.specIcon:SetTexture(icon); pinnedBar.specIcon:Show() else pinnedBar.specIcon:Hide() end
+        if ns.db.display.showSpecIcon and icon then 
+            pinnedBar.specIcon:SetTexture(icon)
+            pinnedBar.specIcon:Show() 
+        else 
+            pinnedBar.specIcon:Hide() 
+        end
     end
     pinnedBar.frame:Show()
 end
