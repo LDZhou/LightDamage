@@ -33,29 +33,9 @@ function ns.CombatTracker:SmartTrimHistory()
     local segs = ns.Segments
     if not segs or not segs.history then return end
     local maxSeg = ns.db and ns.db.tracking and ns.db.tracking.maxSegments or 30
-    
+
     while #segs.history > maxSeg do
-        local removed = false
-        -- 优先删最旧的小怪段落
-        for j = #segs.history, 1, -1 do
-            local s = segs.history[j]
-            if not s._isBoss and not s._isMerged then
-                table.remove(segs.history, j); removed = true; break
-            end
-        end
-        -- 其次删最旧的Boss段落（保留全程合并段）
-        if not removed then
-            for j = #segs.history, 1, -1 do
-                local s = segs.history[j]
-                if not s._isMerged then
-                    table.remove(segs.history, j); removed = true; break
-                end
-            end
-        end
-        -- 兜底：删最旧的任何段落（确保永远不会卡住）
-        if not removed then
-            table.remove(segs.history, #segs.history)
-        end
+        table.remove(segs.history, #segs.history)
     end
 end
 
