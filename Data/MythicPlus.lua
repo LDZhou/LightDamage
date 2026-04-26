@@ -318,26 +318,28 @@ end
 function MP:GetElapsed()
     if MP._elapsedOnStop then return MP._elapsedOnStop / 1000 end
 
-    local timerIDs = { GetWorldElapsedTimers() }
-    for _, timerID in ipairs(timerIDs) do
-        local ok, description, elapsedTime, timerType = pcall(GetWorldElapsedTime, timerID)
+    -- 不创建中间 table，直接用 select 遍历 vararg
+    local n = select("#", GetWorldElapsedTimers())
+    for i = 1, n do
+        local timerID = select(i, GetWorldElapsedTimers())
+        local ok, _, elapsedTime, timerType = pcall(GetWorldElapsedTime, timerID)
         if ok and timerType == LE_WORLD_ELAPSED_TIMER_TYPE_CHALLENGE_MODE then
             if elapsedTime and elapsedTime > 0 then
                 return elapsedTime
             end
         end
     end
-
 end
 
+-- 复用 table，避免每秒 3 次的新分配
+local _headerInfoCache = {}
 function MP:GetHeaderInfo()
     if not MP._active then return nil end
-    return {
-        level     = MP._level   or 0,
-        name      = MP._mapName or L["副本"],
-        elapsed   = MP:GetElapsed(),
-        timeLimit = MP._timeLimit or 0, -- ★ 增加返回值
-    }
+    _headerInfoCache.level     = MP._level   or 0
+    _headerInfoCache.name      = MP._mapName or L["副本"]
+    _headerInfoCache.elapsed   = MP:GetElapsed()
+    _headerInfoCache.timeLimit = MP._timeLimit or 0
+    return _headerInfoCache
 end
 
 function MP:FormatSegLabel(seg)

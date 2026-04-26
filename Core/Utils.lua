@@ -18,12 +18,24 @@ ns.CLASS_COLORS = {
 }
 
 -- NPC GUID 判断（用于区分玩家与生物，避免 NPC 被误染战士色）
+-- 用首字节快速过滤，避免 4 次 string.match 调用
+local NPC_GUID_PREFIX_BYTES = {
+    [67] = true,  -- 'C' Creature
+    [86] = true,  -- 'V' Vehicle
+    [80] = true,  -- 'P' Pet
+    [71] = true,  -- 'G' GameObject
+}
 function ns:IsNPCGUID(guid)
-    if not guid then return false end
-    return guid:match("^Creature%-") ~= nil
-        or guid:match("^Vehicle%-") ~= nil
-        or guid:match("^Pet%-") ~= nil
-        or guid:match("^GameObject%-") ~= nil
+    if not guid or #guid < 5 then return false end
+    local b = guid:byte(1)
+    if not NPC_GUID_PREFIX_BYTES[b] then return false end
+    -- 只在首字节命中时才做精确匹配，避免 Player- 之类误判
+    if b == 67 then return guid:byte(2) == 114 -- "Cr"eature
+    elseif b == 86 then return guid:byte(2) == 101 -- "Ve"hicle
+    elseif b == 80 then return guid:byte(2) == 101 -- "Pe"t
+    elseif b == 71 then return guid:byte(2) == 97  -- "Ga"meObject
+    end
+    return false
 end
 
 function ns:GetClassColor(class)

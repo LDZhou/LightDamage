@@ -119,7 +119,6 @@ function ns:SaveSessionHistory()
             _builtByMythicPlus = seg._builtByMythicPlus,
             _sessionID       = seg._sessionID,
             _sessionIdx      = seg._sessionIdx,
-            _dataLoaded      = true,
             players          = {},
             deathLog         = {},
             enemyDamageTakenList = seg.enemyDamageTakenList or {},
@@ -222,6 +221,8 @@ function ns:LoadSessionHistory()
     if not ns.db.savedHistory or #ns.db.savedHistory == 0 then return end
     ns.Segments.history = {}
     for _, seg in ipairs(ns.db.savedHistory) do
+        seg._sessionID = nil
+        seg._dataLoaded = true
         table.insert(ns.Segments.history, seg)
     end
     if #ns.Segments.history > 0 then

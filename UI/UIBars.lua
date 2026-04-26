@@ -157,9 +157,13 @@ function UI:FillBarsFromAPI(bars, listObj, mode, sessionType)
             bar.statusbar:SetStatusBarColor(cc[1], cc[2], cc[3], alpha)
             local tex = bar.statusbar:GetStatusBarTexture(); if tex then tex:SetVertexColor(cc[1], cc[2], cc[3], alpha) end
             bar.fill:SetVertexColor(cc[1], cc[2], cc[3], alpha)
-            pcall(function() bar.statusbar:SetMinMaxValues(0, maxAmt or 1); bar.statusbar:SetValue(src.totalAmount) end)
+            local maxAmtSafe = (type(maxAmt) == "number") and maxAmt or 1
+            local totalAmtSafe = (type(src.totalAmount) == "number") and src.totalAmount or 0
+            bar.statusbar:SetMinMaxValues(0, maxAmtSafe)
+            bar.statusbar:SetValue(totalAmtSafe)
             bar.rank:SetText(ns.db.display.showRank and (i .. ".") or "")
-            local nameStr = ""; pcall(function() nameStr = tostring(src.name or "") end)
+            local nameRaw = src.name
+            local nameStr = (type(nameRaw) == "string") and nameRaw or ""
             bar.name:SetText(ns:DisplayName(nameStr)); bar._nameStr = nameStr
             do local nr, ng, nb
                 if textMode == "white" then nr, ng, nb = 1, 1, 1
@@ -167,11 +171,13 @@ function UI:FillBarsFromAPI(bars, listObj, mode, sessionType)
                 else nr, ng, nb = cc[1], cc[2], cc[3] end
                 bar.name:SetTextColor(nr, ng, nb)
             end
-            if COUNT_MODES[mode] then bar.value:SetFormattedText("%s" .. L["次"], AbbreviateNumbers(src.totalAmount))
-            else pcall(function()
-                if ns.db.display.showPerSecond then bar.value:SetFormattedText("%s (%s)", AbbreviateNumbers(src.totalAmount), AbbreviateNumbers(src.amountPerSecond))
-                else bar.value:SetText(AbbreviateNumbers(src.totalAmount)) end
-            end) end
+            if COUNT_MODES[mode] then
+                bar.value:SetFormattedText("%s" .. L["次"], AbbreviateNumbers(src.totalAmount))
+            elseif ns.db.display.showPerSecond then
+                bar.value:SetFormattedText("%s (%s)", AbbreviateNumbers(src.totalAmount), AbbreviateNumbers(src.amountPerSecond))
+            else
+                bar.value:SetText(AbbreviateNumbers(src.totalAmount))
+            end
             if not bar._apiData then bar._apiData = {} end
             bar._apiData.isAPI = true; bar._apiData.sourceGUID = src.sourceGUID; bar._apiData.sourceCreatureID = src.sourceCreatureID
             bar._apiData.isLocalPlayer = src.isLocalPlayer; bar._apiData.totalAmount = src.totalAmount; bar._apiData.amountPerSecond = src.amountPerSecond; bar._apiData.sessionType = sType

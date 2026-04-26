@@ -242,6 +242,13 @@ function Segments:GetViewSegment()
         seg = self.current or self.history[1] or self.overall
     end
 
+    -- 懒加载：只有用户实际查看到的段才加载完整数据
+    if seg and seg._sessionID and not seg._dataLoaded then
+        if ns.CombatTracker then
+            ns.CombatTracker:LoadSegmentData(seg)
+        end
+    end
+
     return seg
 end
 

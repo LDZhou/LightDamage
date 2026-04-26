@@ -11,7 +11,11 @@ local MODE_TO_DM = UI.MODE_TO_DM
 
 function UI:Refresh()
     if not self.frame or not self.frame:IsShown() then return end
-    if self._sessionCache then wipe(self._sessionCache) else self._sessionCache = {} end
+    if self._sessionCache then
+        for _, sub in pairs(self._sessionCache) do wipe(sub) end
+    else
+        self._sessionCache = {}
+    end
 
     local seg  = ns.Segments and ns.Segments:GetViewSegment()
     local dur  = ns.Analysis  and ns.Analysis:GetSegmentDuration(seg) or 0

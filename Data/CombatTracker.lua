@@ -139,8 +139,6 @@ local function processArchivedSessions()
                 seg._instanceDisplayName = CT._currentInstanceName or nil
                 seg._sessionIdx = i; seg._sessionID = sid; seg._dataLoaded = false
 
-                ns.CombatTracker:LoadSegmentData(seg)
-
                 local ok2, deathSession = pcall(C_DamageMeter.GetCombatSessionFromID, sid, Enum.DamageMeterType.Deaths)
                 if ok2 and deathSession and deathSession.combatSources then
                     for _, src in ipairs(deathSession.combatSources) do
@@ -225,8 +223,19 @@ local waitTicker, waitAttempts = nil, 0
 
 local function waitAndProcessArchived(fastPath)
     if waitTicker then return end
+    -- fastPath 节流：500ms 内只处理一次，防止事件风暴
+    if fastPath then
+        local now = GetTime()
+        if CT._lastFastPathTime and (now - CT._lastFastPathTime) < 0.5 then return end
+        CT._lastFastPathTime = now
+
+        -- 没有未处理的新 session 直接跳出，避免无意义工作
+        local sessions = C_DamageMeter.GetAvailableCombatSessions()
+        local count = sessions and #sessions or 0
+        if count <= CT._lastProcessedCount then return end
+    end
+
     waitAttempts = 0
-    -- fastPath: 由 DAMAGE_METER_COMBAT_SESSION_UPDATED 事件直接触发，跳过等待
     if fastPath then
         local function quickCheck()
             local sessions = C_DamageMeter.GetAvailableCombatSessions()
@@ -299,7 +308,7 @@ local function waitAndProcessArchived(fastPath)
         end)
     end
     if not anyUnprocessedStillSecret() then doAfterProcess(); return end
-    waitTicker = C_Timer.NewTicker(0.2, function()
+    waitTicker = C_Timer.NewTicker(0.3, function()
         waitAttempts = waitAttempts + 1
         if InCombatLockdown() then return end
         if waitAttempts >= 10 then if waitTicker then waitTicker:Cancel(); waitTicker = nil end; doAfterProcess(); return end
@@ -342,7 +351,7 @@ local function syncCombatState()
         if ns.state.inCombat then
             if CT._currentEncounterID then return end
             ns:LeaveCombat()
-            C_Timer.After(0.1, waitAndProcessArchived)
+            C_Timer.After(0.3, waitAndProcessArchived)
         end
     end
 end
@@ -408,7 +417,6 @@ function CT:RegisterEvents()
             return
         end
         if event == "DAMAGE_METER_COMBAT_SESSION_UPDATED" then
-            -- 仅在脱战时处理（战斗中数据变化是正常的，不需要归档）
             if not ns.state.inCombat and not isGroupInCombat() then
                 C_Timer.After(0, function() waitAndProcessArchived(true) end)
             end

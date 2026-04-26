@@ -79,20 +79,26 @@ function UI:FillPinnedFromAPI(pinnedBar, listObj, src, rank, mode, maxAmt, sType
     pinnedBar.fill:Hide(); pinnedBar.statusbar:Show()
     local cls = src.classFilename or "WARRIOR"; local cc = ns:GetClassColor(cls) or {0.5, 0.5, 0.5}
     pinnedBar.statusbar:SetStatusBarTexture(texPath); pinnedBar.statusbar:SetStatusBarColor(cc[1], cc[2], cc[3], alpha)
-    pcall(function() pinnedBar.statusbar:SetMinMaxValues(0, maxAmt or 1); pinnedBar.statusbar:SetValue(src.totalAmount) end)
+    local maxAmtSafe = (type(maxAmt) == "number") and maxAmt or 1
+    local totalAmtSafe = (type(src.totalAmount) == "number") and src.totalAmount or 0
+    pinnedBar.statusbar:SetMinMaxValues(0, maxAmtSafe)
+    pinnedBar.statusbar:SetValue(totalAmtSafe)
     pinnedBar.rank:SetText(ns.db.display.showRank and (rank .. ".") or "")
-    local nameStr = ""; pcall(function() nameStr = tostring(src.name or "") end)
+    local nameRaw = src.name
+    local nameStr = (type(nameRaw) == "string") and nameRaw or ""
     pinnedBar.name:SetText(ns:DisplayName(nameStr))
     do local nr, ng, nb
         if textMode == "white" then nr, ng, nb = 1, 1, 1
         elseif textMode == "custom" then local c = ns.db.display.textColor or {1,1,1}; nr, ng, nb = c[1], c[2], c[3]
         else nr, ng, nb = cc[1], cc[2], cc[3] end; pinnedBar.name:SetTextColor(nr, ng, nb)
     end
-    if UI.COUNT_MODES[mode] then pinnedBar.value:SetFormattedText("%s" .. L["次"], AbbreviateNumbers(src.totalAmount))
-    else pcall(function()
-        if ns.db.display.showPerSecond then pinnedBar.value:SetFormattedText("%s (%s)", AbbreviateNumbers(src.totalAmount), AbbreviateNumbers(src.amountPerSecond))
-        else pinnedBar.value:SetText(AbbreviateNumbers(src.totalAmount)) end
-    end) end
+    if UI.COUNT_MODES[mode] then
+        pinnedBar.value:SetFormattedText("%s" .. L["次"], AbbreviateNumbers(src.totalAmount))
+    elseif ns.db.display.showPerSecond then
+        pinnedBar.value:SetFormattedText("%s (%s)", AbbreviateNumbers(src.totalAmount), AbbreviateNumbers(src.amountPerSecond))
+    else
+        pinnedBar.value:SetText(AbbreviateNumbers(src.totalAmount))
+    end
     if not pinnedBar._apiData then pinnedBar._apiData = {} end
     pinnedBar._apiData.isAPI = true; pinnedBar._apiData.sourceGUID = src.sourceGUID; pinnedBar._apiData.sourceCreatureID = src.sourceCreatureID
     pinnedBar._apiData.isLocalPlayer = true; pinnedBar._apiData.totalAmount = src.totalAmount; pinnedBar._apiData.amountPerSecond = src.amountPerSecond; pinnedBar._apiData.sessionType = sType
