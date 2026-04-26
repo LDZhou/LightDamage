@@ -286,3 +286,33 @@ function ns:MergeDefaults(target, defaults)
         end
     end
 end
+
+do
+    local lang = GetLocale()
+    local asian = lang == "zhCN" or lang == "zhTW" or lang == "koKR"
+
+    local options
+    if asian then
+        -- 中文/韩文：< 10000 不缩写，10000 起用 萬，1亿 起用 億
+        options = {
+            {breakpoint=100000000, abbreviation="SECOND_NUMBER_CAP_NO_SPACE", significandDivisor=1000000, fractionDivisor=100, abbreviationIsGlobal=true},  -- 億
+            {breakpoint=10000,     abbreviation="FIRST_NUMBER_CAP_NO_SPACE",  significandDivisor=100,     fractionDivisor=100, abbreviationIsGlobal=true},  -- 萬
+            {breakpoint=1,         abbreviation="",                            significandDivisor=1,       fractionDivisor=1,   abbreviationIsGlobal=false},
+        }
+    else
+        -- 英文：1K / 1M / 1B
+        options = {
+            {breakpoint=1000000000, abbreviation="B", significandDivisor=10000000, fractionDivisor=100, abbreviationIsGlobal=false},
+            {breakpoint=1000000,    abbreviation="M", significandDivisor=10000,    fractionDivisor=100, abbreviationIsGlobal=false},
+            {breakpoint=1000,       abbreviation="K", significandDivisor=10,       fractionDivisor=100, abbreviationIsGlobal=false},
+            {breakpoint=1,          abbreviation="",  significandDivisor=1,        fractionDivisor=1,   abbreviationIsGlobal=false},
+        }
+    end
+
+    local cfg = CreateAbbreviateConfig(options)
+    local settings = {config = cfg}
+    function ns.AbbrevNumber(n)
+        if n == nil then return "0" end
+        return AbbreviateNumbers(n, settings)
+    end
+end

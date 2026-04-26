@@ -7,14 +7,15 @@ local L = ns.L
 local UI = ns.UI
 local CLASS_ICONS = { WARRIOR=132355, PALADIN=135490, HUNTER=132222, ROGUE=132320, PRIEST=135940, DEATHKNIGHT=135771, SHAMAN=135962, MAGE=135932, WARLOCK=136145, MONK=608951, DRUID=132115, DEMONHUNTER=1260827, EVOKER=4567212 }
 
+
 -- module-level helper：用于 pcall 调用而不创建闭包
 local function _safeSetBarValue(fs, total, ps, showPS, isCount, suffix)
     if isCount then
-        fs:SetFormattedText("%s" .. suffix, AbbreviateNumbers(total))
+        fs:SetFormattedText("%s" .. suffix, ns.AbbrevNumber(total))
     elseif showPS then
-        fs:SetFormattedText("%s (%s)", AbbreviateNumbers(total), AbbreviateNumbers(ps))
+        fs:SetFormattedText("%s (%s)", ns.AbbrevNumber(total), ns.AbbrevNumber(ps))
     else
-        fs:SetText(AbbreviateNumbers(total))
+        fs:SetText(ns.AbbrevNumber(total))
     end
 end
 
