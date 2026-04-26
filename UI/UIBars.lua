@@ -9,7 +9,7 @@ local MAX_BARS = UI.MAX_BARS
 local COUNT_MODES = UI.COUNT_MODES
 local MODE_TO_DM = UI.MODE_TO_DM
 local CLASS_ICONS = { WARRIOR=132355, PALADIN=135490, HUNTER=132222, ROGUE=132320, PRIEST=135940, DEATHKNIGHT=135771, SHAMAN=135962, MAGE=135932, WARLOCK=136145, MONK=608951, DRUID=132115, DEMONHUNTER=1260827, EVOKER=4567212 }
-
+local INTERP = Enum and Enum.StatusBarInterpolation and Enum.StatusBarInterpolation.ExponentialEaseOut
 
 -- module-level helper：用于 pcall 调用而不创建闭包
 local function _safeSetBarValue(fs, total, ps, showPS, isCount, suffix)
@@ -23,8 +23,13 @@ local function _safeSetBarValue(fs, total, ps, showPS, isCount, suffix)
 end
 
 local function _safeSetStatusBar(sb, maxV, val)
-    sb:SetMinMaxValues(0, maxV)
-    sb:SetValue(val)
+    if INTERP then
+        sb:SetMinMaxValues(0, maxV, INTERP)
+        sb:SetValue(val, INTERP)
+    else
+        sb:SetMinMaxValues(0, maxV)
+        sb:SetValue(val)
+    end
 end
 
 function UI:MakeBar(parent, section, index)
@@ -111,13 +116,18 @@ function UI:FillBars(bars, listObj, data, dur, mode)
             self:AnchorBarTexts(bar)
             self:ApplyFont(bar.rank, font, fSz-1, fOut, fShad); self:ApplyFont(bar.name, font, fSz, fOut, fShad); self:ApplyFont(bar.value, font, fSz-1, fOut, fShad)
             local d = data[i]; bar._data = d; bar._mode = mode; bar._isDeath = false; bar._guid = d.guid; bar._nameStr = d.name; bar._classStr = d.class
-            bar.statusbar:Hide(); bar.fill:Show()
+            bar.fill:Hide(); bar.statusbar:Show()
             local cc = ns:GetClassColor(d.class) or {0.5, 0.5, 0.5}
             local offset = ns.db.display.showSpecIcon and (bh + 4) or 0
-            local maxBarWidth = math.max(1, listObj.child:GetWidth() - offset)
-            bar.fill:SetWidth(math.max(1, maxBarWidth * (maxV > 0 and (d.value / maxV) or 0)))
-            bar.statusbar:SetStatusBarTexture(texPath); bar.fill:SetTexture(texPath)
-            bar.statusbar:SetStatusBarColor(cc[1], cc[2], cc[3], alpha); bar.fill:SetVertexColor(cc[1], cc[2], cc[3], alpha)
+            if INTERP then
+                bar.statusbar:SetMinMaxValues(0, maxV > 0 and maxV or 1, INTERP)
+                bar.statusbar:SetValue(d.value or 0, INTERP)
+            else
+                bar.statusbar:SetMinMaxValues(0, maxV > 0 and maxV or 1)
+                bar.statusbar:SetValue(d.value or 0)
+            end
+            bar.statusbar:SetStatusBarTexture(texPath)
+            bar.statusbar:SetStatusBarColor(cc[1], cc[2], cc[3], alpha)
             bar.rank:SetText(ns.db.display.showRank and (i..".") or "")
             bar.name:SetText(ns:DisplayName(d.name))
             do local nr, ng, nb

@@ -6,7 +6,7 @@ local addonName, ns = ...
 local L = ns.L
 local UI = ns.UI
 local CLASS_ICONS = { WARRIOR=132355, PALADIN=135490, HUNTER=132222, ROGUE=132320, PRIEST=135940, DEATHKNIGHT=135771, SHAMAN=135962, MAGE=135932, WARLOCK=136145, MONK=608951, DRUID=132115, DEMONHUNTER=1260827, EVOKER=4567212 }
-
+local INTERP = Enum and Enum.StatusBarInterpolation and Enum.StatusBarInterpolation.ExponentialEaseOut
 
 -- module-level helper：用于 pcall 调用而不创建闭包
 local function _safeSetBarValue(fs, total, ps, showPS, isCount, suffix)
@@ -20,8 +20,13 @@ local function _safeSetBarValue(fs, total, ps, showPS, isCount, suffix)
 end
 
 local function _safeSetStatusBar(sb, maxV, val)
-    sb:SetMinMaxValues(0, maxV)
-    sb:SetValue(val)
+    if INTERP then
+        sb:SetMinMaxValues(0, maxV, INTERP)
+        sb:SetValue(val, INTERP)
+    else
+        sb:SetMinMaxValues(0, maxV)
+        sb:SetValue(val)
+    end
 end
 
 function UI:MakePinnedSelfBar(container, sf, section)
