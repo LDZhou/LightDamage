@@ -55,36 +55,57 @@ function UI:MakeBar(parent, section, index)
     bar.section = section; bar.index = index
 
     bar.frame:SetScript("OnClick", function(self2, btn)
-        if btn == "RightButton" then ns.db.display.mode = ns:NextMode(ns.db.display.mode); if ns.UI then ns.UI:Layout() end
-        else
-            if not bar._guid then return end
-            if bar._data and bar._data._isEnemy and bar._data._sources then
-                if ns.DetailView then
-                    ns.DetailView:ShowEnemyDamageTakenDetail(bar._data.name, bar._data._sources, bar._data.value)
-                end
-                return
-            end
-            if bar._mode == "enemyDamageTaken" then
-                if ns.DetailView then
-                    ns.DetailView:ShowCombatLocked(bar._nameStr or "?")
-                end
-                return
-            end
-            if bar._isDeath then if ns.DetailView then ns.DetailView:ShowDeathDetail(bar._data) end
-            else
-                if ns.DetailView then
-                    if bar._data and bar._data.isAPI then
-                        local cleanGUID = bar._data.isLocalPlayer and UnitGUID("player") or nil
-                        if cleanGUID then ns.DetailView:ShowSpellBreakdownFromAPI(cleanGUID, nil, bar._nameStr, bar._classStr, bar._mode, bar._data.sessionType, bar._data.sessionID)
-                        else ns.DetailView:ShowCombatLocked(bar._nameStr) end
-                    else
-                        local isOvr = bar.section and bar.section:sub(1, 3) == "ovr"
-                        local seg = isOvr and (ns.Segments and ns.Segments:GetOverallSegment()) or nil
-                        ns.DetailView:ShowSpellBreakdown(bar._guid, bar._nameStr, bar._classStr, bar._mode, seg)
-                    end
-                end
-            end
+        if btn == "RightButton" then ns.db.display.mode = ns:NextMode(ns.db.display.mode); if ns.UI then ns.UI:Layout() end; return end
+        if not ns.DetailView then return end
+
+        -- 死亡条
+        if bar._isDeath then
+            ns.DetailView:ShowDeathDetail(bar._data)
+            return
         end
+
+        -- 归档段(seg.players 数据路径)的敌人承伤行：直接展示来源列表
+        if bar._data and bar._data._isEnemy and bar._data._sources then
+            ns.DetailView:ShowEnemyDamageTakenDetail(bar._data.name, bar._data._sources, bar._data.value)
+            return
+        end
+
+        -- API 路径下的敌人承伤：查 EnemyDamageTaken source，按攻击玩家聚合后展示
+        if bar._data and bar._data.isAPI and bar._mode == "enemyDamageTaken" then
+            ns.DetailView:ShowEnemyDamageTakenFromAPI(
+                bar._data.sourceCreatureID,
+                bar._nameStr,
+                bar._data.totalAmount,
+                bar._data.sessionType,
+                bar._data.sessionID
+            )
+            return
+        end
+
+        -- API 路径(普通玩家技能细分)
+        if bar._data and bar._data.isAPI then
+            -- secret GUID 防御：自己用 UnitGUID 兜底，队友放弃 GUID 靠 creatureID
+            local resolvedGUID = bar._data.sourceGUID
+            if resolvedGUID and issecretvalue and issecretvalue(resolvedGUID) then
+                resolvedGUID = bar._data.isLocalPlayer and UnitGUID("player") or nil
+            end
+            ns.DetailView:ShowSpellBreakdownFromAPI(
+                resolvedGUID,
+                bar._data.sourceCreatureID,
+                bar._nameStr,
+                bar._classStr,
+                bar._mode,
+                bar._data.sessionType,
+                bar._data.sessionID
+            )
+            return
+        end
+
+        -- 归档段(Analysis 数据路径)
+        if not bar._guid then return end
+        local isOvr = bar.section and bar.section:sub(1, 3) == "ovr"
+        local seg = isOvr and (ns.Segments and ns.Segments:GetOverallSegment()) or nil
+        ns.DetailView:ShowSpellBreakdown(bar._guid, bar._nameStr, bar._classStr, bar._mode, seg)
     end)
     bar.frame:SetScript("OnEnter", function() UI:ShowTooltip(bar, bar.section) end)
     bar.frame:SetScript("OnLeave", function() GameTooltip:Hide() end)

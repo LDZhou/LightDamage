@@ -549,26 +549,40 @@ function DV:ShowSpellBreakdown(guid, name, class, mode, seg)
     self:RenderSpellList(name, class, displayMode, spells, dur, "")
 end
 
-function DV:ShowSpellBreakdownFromAPI(sourceGUID, sourceCreatureID, name, class, mode, sessionType)
-    print("|cff00ffff[LD API]|r mode=", mode, "guid=", sourceGUID)
-    if mode ~= "damage" and mode ~= "healing" then return end
+function DV:ShowSpellBreakdownFromAPI(sourceGUID, sourceCreatureID, name, class, mode, sessionType, sessionID)
+    -- 走通用 dmType 映射，承伤/打断/驱散/敌人承伤一并支持
+    local dmType = ns.UI and ns.UI.MODE_TO_DM and ns.UI.MODE_TO_DM[mode]
+    if not dmType then
+        self:EnsureCreated(); self.frame:Show(); self:ApplyTheme()
+        self:RenderSpellList(name or "?", class or "WARRIOR", mode, {}, 0, "")
+        self._lastRenderArgs = {
+            type = "spellAPI",
+            args = {sourceGUID, sourceCreatureID, name, class, mode, sessionType, sessionID}
+        }
+        return
+    end
 
-    local dmType = (mode == "healing") and Enum.DamageMeterType.HealingDone
-                                        or Enum.DamageMeterType.DamageDone
-    local sType = sessionType or Enum.DamageMeterSessionType.Current
-
-    -- ★ 第一步：查玩家自己的技能
-    local ok, srcData = pcall(
-        C_DamageMeter.GetCombatSessionSourceFromType,
-        sType, dmType, sourceGUID, sourceCreatureID
-    )
+    -- 路由：有 sessionID 走 FromID(虚拟段/归档段)，否则走 FromType(current/overall)
+    local ok, srcData
+    if sessionID then
+        ok, srcData = pcall(
+            C_DamageMeter.GetCombatSessionSourceFromID,
+            sessionID, dmType, sourceGUID, sourceCreatureID
+        )
+    else
+        local sType = sessionType or Enum.DamageMeterSessionType.Current
+        ok, srcData = pcall(
+            C_DamageMeter.GetCombatSessionSourceFromType,
+            sType, dmType, sourceGUID, sourceCreatureID
+        )
+    end
 
     if not ok or type(srcData) ~= "table" or type(srcData.combatSpells) ~= "table" then
         self:EnsureCreated(); self.frame:Show(); self:ApplyTheme()
         self:RenderSpellList(name or "?", class or "WARRIOR", mode, {}, 0, "")
         self._lastRenderArgs = {
             type = "spellAPI",
-            args = {sourceGUID, sourceCreatureID, name, class, mode, sessionType}
+            args = {sourceGUID, sourceCreatureID, name, class, mode, sessionType, sessionID}
         }
         return
     end
@@ -576,85 +590,62 @@ function DV:ShowSpellBreakdownFromAPI(sourceGUID, sourceCreatureID, name, class,
     local spells = {}
     local isSecret = false
 
-    -- ★ 通用函数：安全地把 combatSpells 添加到 spells 表
-    local function addSpells(combatSpells, isPet, petName)
-        for _, sp in ipairs(combatSpells) do
-            local amtOk, amt = pcall(function() return sp.totalAmount end)
-            if amtOk and amt then
-                local isSec = issecretvalue and issecretvalue(amt)
-                if isSec then isSecret = true end
+    -- 单次遍历：玩家法术 + 宠物法术(creatureName 非空就是宠物施放的)
+    for _, sp in ipairs(srcData.combatSpells) do
+        local amtOk, amt = pcall(function() return sp.totalAmount end)
+        if amtOk and amt then
+            local isSec = issecretvalue and issecretvalue(amt)
+            if isSec then isSecret = true end
 
-                local spellName = ""
-                local nameOk, nameVal = pcall(function()
-                    if C_Spell and C_Spell.GetSpellName then
-                        return C_Spell.GetSpellName(sp.spellID)
-                    end
-                    return nil
-                end)
-                if nameOk and nameVal then
-                    spellName = nameVal
-                else
-                    local sidOk, sid = pcall(function() return sp.spellID end)
-                    spellName = sidOk and sid and ("spell:" .. sid) or "?"
+            local spellName = ""
+            local nameOk, nameVal = pcall(function()
+                if C_Spell and C_Spell.GetSpellName then
+                    return C_Spell.GetSpellName(sp.spellID)
                 end
-
-                -- 宠物技能名前加宠物名
-                if isPet and petName then
-                    local pnOk, pn = pcall(function() return tostring(petName) end)
-                    if pnOk and pn and pn ~= "" then
-                        local snOk, combined = pcall(function() return pn .. ": " .. spellName end)
-                        if snOk and combined then spellName = combined end
-                    end
-                end
-
-                local spellIDSafe = nil
-                pcall(function() spellIDSafe = sp.spellID end)
-
-                table.insert(spells, {
-                    spellID     = spellIDSafe,
-                    name        = spellName,
-                    school      = 1,
-                    value       = isSec and 0 or amt,
-                    secretAmt   = isSec and amt or nil,
-                    percent     = 0,
-                    isPet       = isPet or false,
-                    isAvoidable = false,
-                })
-            end
-        end
-    end
-
-    -- 添加玩家自己的技能
-    addSpells(srcData.combatSpells, false, nil)
-
-    -- ★ 第二步：遍历总会话，查找属于自己的宠物/召唤物
-    local sessionOk, session = pcall(C_DamageMeter.GetCombatSessionFromType, sType, dmType)
-    if sessionOk and session and type(session.combatSources) == "table" then
-        for _, source in ipairs(session.combatSources) do
-            -- 宠物的 classification 是 "pet"，用 NeverSecret 字段判断
-            local isPet = false
-            local isMine = false
-            pcall(function()
-                isPet = (source.classification == "pet") or (source.classification == "guardian")
+                return nil
             end)
+            if nameOk and nameVal then
+                spellName = nameVal
+            else
+                local sidOk, sid = pcall(function() return sp.spellID end)
+                spellName = sidOk and sid and ("spell:" .. sid) or "?"
+            end
 
-            if isPet then
-                -- 用 sourceCreatureID 或 sourceGUID 去查它的技能细分
-                local petOk, petData = pcall(
-                    C_DamageMeter.GetCombatSessionSourceFromType,
-                    sType, dmType, source.sourceGUID, source.sourceCreatureID
-                )
-                if petOk and type(petData) == "table" and type(petData.combatSpells) == "table" then
-                    -- 宠物名字
-                    local petName = nil
-                    pcall(function() petName = source.name end)
-                    addSpells(petData.combatSpells, true, petName)
+            -- 宠物名直接从 sp.creatureName 读，不需要二次查询
+            local creatureName = nil
+            local cnOk, cnVal = pcall(function() return sp.creatureName end)
+            if cnOk and type(cnVal) == "string"
+            and not (issecretvalue and issecretvalue(cnVal)) then
+                if cnVal ~= "" then
+                    creatureName = cnVal
                 end
             end
+            local isPet = creatureName ~= nil
+            if isPet then
+                spellName = creatureName .. ": " .. spellName
+            end
+
+            local spellIDSafe = nil
+            pcall(function() spellIDSafe = sp.spellID end)
+
+            -- 可规避标记
+            local isAvoidable = false
+            pcall(function() isAvoidable = sp.isAvoidable and true or false end)
+
+            table.insert(spells, {
+                spellID     = spellIDSafe,
+                name        = spellName,
+                school      = 1,
+                value       = isSec and 0 or amt,
+                secretAmt   = isSec and amt or nil,
+                percent     = 0,
+                isPet       = isPet,
+                isAvoidable = isAvoidable,
+            })
         end
     end
 
-    -- ★ 第三步：排序和百分比
+    -- 排序与百分比
     if not isSecret then
         table.sort(spells, function(a, b) return a.value > b.value end)
         local total = srcData.totalAmount or 0
@@ -670,16 +661,15 @@ function DV:ShowSpellBreakdownFromAPI(sourceGUID, sourceCreatureID, name, class,
         dur = GetTime() - ns.state.combatStartTime
     end
 
-    local suffix = ""
     local apiMaxAmount = isSecret and srcData.maxAmount or nil
 
     self._lastRenderArgs = {
         type = "spellAPI",
-        args = {sourceGUID, sourceCreatureID, name, class, mode, sessionType}
+        args = {sourceGUID, sourceCreatureID, name, class, mode, sessionType, sessionID}
     }
 
     self:EnsureCreated(); self.frame:Show(); self:ApplyTheme()
-    self:RenderSpellList(name or "?", class or "WARRIOR", mode, spells, dur, suffix, apiMaxAmount)
+    self:RenderSpellList(name or "?", class or "WARRIOR", mode, spells, dur, "", apiMaxAmount)
 end
 
 -- ============================================================
@@ -1008,13 +998,83 @@ function DV:ShowEnemyDamageTakenDetail(enemyName, sources, totalDmg)
     self:UpdateScroll(math.abs(currentY))
 end
 
+-- ============================================================
+-- API 路径下的敌人承伤明细(虚拟段/current/overall)
+-- 查 EnemyDamageTaken source，按攻击玩家聚合 → 复用 ShowEnemyDamageTakenDetail 渲染
+-- ============================================================
+function DV:ShowEnemyDamageTakenFromAPI(creatureID, enemyName, totalAmount, sessionType, sessionID)
+    if not creatureID then
+        self:EnsureCreated(); self.frame:Show(); self:ApplyTheme()
+        self:ShowEnemyDamageTakenDetail(enemyName or "?", {}, totalAmount or 0)
+        self._lastRenderArgs = {
+            type = "enemyDmgTakenAPI",
+            args = {creatureID, enemyName, totalAmount, sessionType, sessionID}
+        }
+        return
+    end
+
+    local dmType = Enum.DamageMeterType.EnemyDamageTaken
+    local ok, srcData
+    if sessionID then
+        ok, srcData = pcall(
+            C_DamageMeter.GetCombatSessionSourceFromID,
+            sessionID, dmType, nil, creatureID
+        )
+    else
+        local sType = sessionType or Enum.DamageMeterSessionType.Current
+        ok, srcData = pcall(
+            C_DamageMeter.GetCombatSessionSourceFromType,
+            sType, dmType, nil, creatureID
+        )
+    end
+
+    local sources = {}
+    if ok and srcData and type(srcData.combatSpells) == "table" then
+        local agg = {}  -- name → {name, class, amount}
+        pcall(function()
+            for _, sp in ipairs(srcData.combatSpells) do
+                local details = sp.combatSpellDetails
+                if details then
+                    local pName = details.unitName
+                    local pClass = details.unitClassFilename
+                    if not pClass or pClass == "" then pClass = "NPC" end
+
+                    local amt = 0
+                    pcall(function() amt = details.amount or 0 end)
+                    if amt == 0 then
+                        pcall(function() amt = sp.totalAmount or 0 end)
+                    end
+
+                    if pName and type(pName) == "string" and amt > 0
+                       and not (issecretvalue and issecretvalue(pName)) then
+                        if not agg[pName] then
+                            agg[pName] = { name = pName, class = pClass, amount = 0 }
+                        end
+                        agg[pName].amount = agg[pName].amount + amt
+                    end
+                end
+            end
+        end)
+        for _, entry in pairs(agg) do
+            table.insert(sources, entry)
+        end
+    end
+
+    self:ShowEnemyDamageTakenDetail(enemyName or "?", sources, totalAmount or 0)
+    self._lastRenderArgs = {
+        type = "enemyDmgTakenAPI",
+        args = {creatureID, enemyName, totalAmount, sessionType, sessionID}
+    }
+end
+
 function DV:Refresh()
     if self.frame and self.frame:IsShown() then
         if self._lastRenderArgs then
             local t = self._lastRenderArgs.type
             local a = self._lastRenderArgs.args
             if t == "spell" then self:RenderSpellList(unpack(a))
-            elseif t == "spellAPI" then self:ShowSpellBreakdownFromAPI(unpack(a))  -- ★ 新增
+            elseif t == "spellAPI" then self:ShowSpellBreakdownFromAPI(unpack(a))
+            elseif t == "enemyDmgTakenAPI" then self:ShowEnemyDamageTakenFromAPI(unpack(a))
             elseif t == "death" then self:ShowDeathDetail(unpack(a))
             elseif t == "combat" then self:ShowCombatLocked(unpack(a))
             elseif t == "enemyDmgTaken" then self:ShowEnemyDamageTakenDetail(unpack(a)) end

@@ -80,19 +80,75 @@ function ns.CombatTracker:MergeAndCleanInstance(instanceTag, mythicLevel, mythic
     elseif instSegs[1].seg._instanceDisplayName and instSegs[1].seg._instanceDisplayName ~= "" then zoneName = instSegs[1].seg._instanceDisplayName
     else zoneName = instanceTag:match("^([^|]+)") or L["副本"] end
 
-    -- 公共逻辑:克隆 Overall 到合并段
     local function cloneOverallToMerged(merged)
+        -- ★ 直接从暴雪 Overall session 拉数据,避开手动累加导致的"全程汇总 session 被重复计入"问题
+        local function getAmount(val)
+            if issecretvalue and issecretvalue(val) then return 0 end
+            if type(val) == "number" then return val end
+            return 0
+        end
+
+        local sType = Enum.DamageMeterSessionType.Overall
+        local function fetchTotal(dmType)
+            local ok, sess = pcall(C_DamageMeter.GetCombatSessionFromType, sType, dmType)
+            if ok and sess and sess.totalAmount then return getAmount(sess.totalAmount) end
+            return 0
+        end
+
+        merged.totalDamage      = fetchTotal(Enum.DamageMeterType.DamageDone)
+        merged.totalHealing     = fetchTotal(Enum.DamageMeterType.HealingDone)
+        merged.totalDamageTaken = fetchTotal(Enum.DamageMeterType.DamageTaken)
+
+        local apiDur = C_DamageMeter.GetSessionDurationSeconds(Enum.DamageMeterSessionType.Overall) or 0
+        merged.duration = (CT._overallDurationSnapshot and CT._overallDurationSnapshot > 0)
+                          and CT._overallDurationSnapshot
+                          or (apiDur > 0 and apiDur or 0)
+
+        -- 玩家数据：从暴雪 Overall session 的 combatSources 重建
+        merged.players = {}
+        for dmType, field in pairs({
+            [Enum.DamageMeterType.DamageDone]  = "damage",
+            [Enum.DamageMeterType.HealingDone] = "healing",
+            [Enum.DamageMeterType.DamageTaken] = "damageTaken",
+        }) do
+            local ok, sess = pcall(C_DamageMeter.GetCombatSessionFromType, sType, dmType)
+            if ok and sess and sess.combatSources then
+                for _, src in ipairs(sess.combatSources) do
+                    local guid = src.sourceGUID
+                    local total = getAmount(src.totalAmount)
+                    if guid and total > 0 then
+                        local hasValidClass = src.classFilename and src.classFilename ~= ""
+                        local creatureID = src.sourceCreatureID
+                        local isPet = (creatureID ~= nil and creatureID > 0) and not hasValidClass
+                        if not isPet then
+                            local pd = merged.players[guid]
+                            if not pd then
+                                pd = segs:NewPlayerData(guid, src.name, src.classFilename or "WARRIOR")
+                                merged.players[guid] = pd
+                            end
+                            pd.class = src.classFilename or pd.class
+                            if src.specIconID and src.specIconID > 0 then pd.specIconID = src.specIconID end
+                            pd[field] = (pd[field] or 0) + total
+                        end
+                    end
+                end
+            end
+        end
+
+        -- deathLog 和 enemyDamageTakenList 仍从 segs.overall 拷贝（这两个手动维护的）
         local ovr = segs.overall
-        if not ovr then return end
-        merged.totalDamage = ovr.totalDamage or 0; merged.totalHealing = ovr.totalHealing or 0; merged.totalDamageTaken = ovr.totalDamageTaken or 0
-        merged.duration = (CT._overallDurationSnapshot and CT._overallDurationSnapshot > 0) and CT._overallDurationSnapshot or (ovr.duration or 0)
-        merged.players = CopyTable(ovr.players or {})
-        merged.deathLog = CopyTable(ovr.deathLog or {})
-        merged.enemyDamageTakenList = CopyTable(ovr.enemyDamageTakenList or {})
-        table.sort(merged.deathLog, function(a, b) if a.isSelf ~= b.isSelf then return a.isSelf end; return (a.gameTime or 0) < (b.gameTime or 0) end)
+        merged.deathLog              = CopyTable((ovr and ovr.deathLog) or {})
+        merged.enemyDamageTakenList  = CopyTable((ovr and ovr.enemyDamageTakenList) or {})
+
+        table.sort(merged.deathLog, function(a, b)
+            if a.isSelf ~= b.isSelf then return a.isSelf end
+            return (a.gameTime or 0) < (b.gameTime or 0)
+        end)
         while #merged.deathLog > 50 do
             local removed = false
-            for i = 1, #merged.deathLog do if not merged.deathLog[i].isSelf then table.remove(merged.deathLog, i); removed = true; break end end
+            for i = 1, #merged.deathLog do
+                if not merged.deathLog[i].isSelf then table.remove(merged.deathLog, i); removed = true; break end
+            end
             if not removed then table.remove(merged.deathLog, 2) end
         end
     end

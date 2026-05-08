@@ -137,6 +137,9 @@ local function processArchivedSessions()
             -- 0 时长 session 跳过
         elseif dur < (ns.db and ns.db.tracking and ns.db.tracking.minCombatTime or 2) then
             -- 时长不足跳过
+        elseif s.name and s.name:match("%+%s*%d+") then
+            -- ★ 名字含 "+数字"(暴雪 M+ 完成后自动追加的全程汇总,如"魔导师平台 +6")
+            --   这条数据已经在 overall 里,会被 MergeAndCleanInstance 用一次,不能再单独建段
         else
             local isBoss = false
             if s.name and (s.name:sub(1, 3) == "(!)" or string.find(s.name, "(!)", 1, true)) then
