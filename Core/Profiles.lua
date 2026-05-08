@@ -1,6 +1,12 @@
 --[[
     Light Damage - Profiles.lua
     配置管理 + 历史存档读写
+
+    ★ 改造说明 (虚拟段架构):
+    - SaveSessionHistory 持久化 _localID
+    - LoadSessionHistory 给老存档补 _localID (迁移)
+    - hiddenLocalIDs 通过 ns.db 自动持久化 (本身就是 SavedVariables 字段)
+    - hiddenSessionIDs 不持久化 (sessionID 是 runtime 概念,客户端重启即失效)
 ]]
 
 local addonName, ns = ...
@@ -11,7 +17,7 @@ local L = ns.L
 -- ============================================================
 function ns:SwitchProfile(name)
     if not LightDamageGlobal.profiles[name] then return end
-    
+
     local oldLang = ns.db.display and ns.db.display.language or "auto"
 
     LightDamageDB.activeProfile = name
@@ -30,15 +36,15 @@ function ns:SwitchProfile(name)
         ns.UI:Layout()
     end
     if ns.Config then
-        if ns.Config.panel then 
-            ns.Config:RefreshUI() 
+        if ns.Config.panel then
+            ns.Config:RefreshUI()
             local cScale = ns.db.window and ns.db.window.configScale or 1.0
             ns.Config.panel:SetScale(cScale)
             if ns.Config._pvSwitcher then ns.Config._pvSwitcher:SetScale(cScale) end
         end
         if ns.Config.RefreshTitle then ns.Config:RefreshTitle() end
     end
-    
+
     local displayName = (name == "默认") and L["默认"] or name
     print(L["|cff00ccff[Light Damage]|r 已应用 "] .. displayName .. L["的配置"])
 
@@ -84,10 +90,9 @@ function ns:SaveSessionHistory()
     if not ns.Segments then return end
     local maxSeg = ns.db and ns.db.tracking and ns.db.tracking.maxSegments or 30
 
-    -- 预览模式下取出真实数据
     local historyToSave = ns.Segments.history
     local overallToSave = ns.Segments.overall
-    
+
     if ns.Config and ns.Config._previewActive and ns.Config._pvSave then
         historyToSave = ns.Config._pvSave.history or {}
         overallToSave = ns.Config._pvSave.overall
@@ -119,6 +124,8 @@ function ns:SaveSessionHistory()
             _builtByMythicPlus = seg._builtByMythicPlus,
             _sessionID       = seg._sessionID,
             _sessionIdx      = seg._sessionIdx,
+            _localID         = seg._localID,    -- ★ 持久化 localID
+            _dataLoaded      = seg._dataLoaded,
             players          = {},
             deathLog         = {},
             enemyDamageTakenList = seg.enemyDamageTakenList or {},
@@ -205,8 +212,7 @@ function ns:SaveSessionHistory()
     else
         ns.db.savedOverall = nil
     end
-        
-    -- 保存底层基准线进度
+
     if ns.CombatTracker then
         ns.db.savedBaseline = ns.CombatTracker._baselineSessionCount or 0
         ns.db.savedLastProcessed = ns.CombatTracker._lastProcessedCount or 0
@@ -221,12 +227,14 @@ function ns:LoadSessionHistory()
     if not ns.db.savedHistory or #ns.db.savedHistory == 0 then return end
     ns.Segments.history = {}
     for _, seg in ipairs(ns.db.savedHistory) do
-        seg._dataLoaded = true
+        seg._dataLoaded = (seg._dataLoaded == nil) and true or seg._dataLoaded
+        -- ★ 老存档迁移:没 _localID 就分配一个
+        if not seg._localID then
+            seg._localID = ns.Segments:GenLocalID("legacy")
+        end
         table.insert(ns.Segments.history, seg)
     end
-    if #ns.Segments.history > 0 then
-        ns.Segments.viewIndex = 1
-    end
+    -- ★ 不再设置 viewIndex = 1 (新架构由 PLAYER_ENTERING_WORLD 后的 0.5s 回调统一定位)
 
     -- 恢复 overall
     local saved = ns.db.savedOverall
@@ -259,7 +267,6 @@ function ns:LoadSessionHistory()
         }
     end
 
-    -- 恢复底层基准线进度
     if ns.CombatTracker then
         ns.CombatTracker._baselineSessionCount = ns.db.savedBaseline or 0
         ns.CombatTracker._lastProcessedCount = ns.db.savedLastProcessed or 0

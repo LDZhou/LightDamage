@@ -1,6 +1,10 @@
 --[[
     LD Combat Stats - MythicPlus.lua
     大秘境 / 副本生命周期管理
+
+    ★ 改造说明 (虚拟段架构):
+    - viewIndex = nil 改为 ViewCurrent()
+    - cleanOutdoorHistory 保留:这是裁剪 history (已归档段) 的工具函数,虚拟段不在这里处理
 ]]
 
 local addonName, ns = ...
@@ -19,7 +23,7 @@ MP._baseline      = 0
 MP._timerHandle   = nil
 MP._completedAndStillInside  = false
 
-local AUTO_CLEAN_AGE = 600  -- 10分钟
+local AUTO_CLEAN_AGE = 600
 
 -- ============================================================
 -- 内部工具
@@ -28,7 +32,6 @@ local function getMapInfo()
     local id = C_ChallengeMode and C_ChallengeMode.GetActiveChallengeMapID
                and C_ChallengeMode.GetActiveChallengeMapID()
     if not id then return nil, nil, 0 end
-    -- ★ 新增：获取大秘境限时时间 (timeLimit, 单位秒)
     local name, _, timeLimit = C_ChallengeMode.GetMapUIInfo(id)
     return id, name, timeLimit or 0
 end
@@ -49,13 +52,11 @@ local function cleanOutdoorHistory()
         if seg.archived
            or seg.type == "mythicplus"
            or seg.type == "boss"
-           or seg._isMerged  -- ★ 修复：全程合并段永久保留，不受10分钟限制
-           or seg._isBoss    -- ★ 修复：processArchivedSessions 产生的 Boss 段（type="history"+_isBoss=true）永久保留
-           or seg._instanceTag 
+           or seg._isMerged
+           or seg._isBoss
+           or seg._instanceTag
         then
             table.insert(cleaned, seg)
-        -- elseif seg.endTime and (now - seg.endTime) < AUTO_CLEAN_AGE then
-        --     table.insert(cleaned, seg)
         end
     end
     segs.history = cleaned
@@ -64,8 +65,6 @@ end
 local function enterInstance(id, name, level, timeLimit)
     cleanOutdoorHistory()
 
-    -- ★ meter 已由 CT:RegisterEvents 的4s timer 或 MP:OnStart 重置为0
-    --   baseline 直接设为0，与重置后的暴雪meter完全对齐
     if ns.CombatTracker then
         ns.CombatTracker._baselineSessionCount = 0
         ns.CombatTracker._lastProcessedCount   = 0
@@ -75,7 +74,7 @@ local function enterInstance(id, name, level, timeLimit)
     if ns.Segments then
         local label = level and level > 0 and string.format("%s +%d", name, level) or name
         ns.Segments.overall  = ns.Segments:NewSegment("overall", label)
-        ns.Segments.viewIndex = nil
+        ns.Segments:ViewCurrent()                          -- ★ 改 key
     end
 
     MP._active        = true
@@ -91,7 +90,6 @@ local function enterInstance(id, name, level, timeLimit)
     if ns.UI and ns.UI:IsVisible() then ns.UI:Layout() end
 end
 
--- 离开副本的清理工作（通用）
 local function leaveInstance()
     MP:StopTimer()
     MP._active        = false
@@ -102,18 +100,13 @@ local function leaveInstance()
     MP._startTime     = nil
     MP._elapsedOnStop = nil
 
-    -- ★ 删除这个1.5s的ResetBaselineToCurrentCount调用
-    -- 它会在secret释放前抢先重置_lastProcessedCount
-    -- mergeAndCleanInstance（4s后）已经会正确调用Reset
     C_Timer.After(1.5, function()
-        -- 只保留overall重置和UI刷新，不重置baseline
-        -- if ns.Segments then ns.Segments.overall = ns.Segments:NewSegment("overall", L["总计"]) end
         if ns.UI and ns.UI:IsVisible() then C_Timer.After(0, function() ns.UI:Layout() end) end
     end)
 end
 
 -- ============================================================
--- Init（Core:OnInitialize 调用）
+-- Init(Core:OnInitialize 调用)
 -- ============================================================
 function MP:Init()
     C_Timer.After(2, function()
@@ -124,14 +117,11 @@ function MP:Init()
         enterInstance(id, name or GetZoneText() or L["大秘境"], level, timeLimit)
         print(string.format(L["|cff4cb8e8[Light Damage]|r 检测到大秘境: %s +%d (reload)"], name, level))
 
-        --   CT._currentMythicLevel停留在0，需手动同步，确保出副本时层数正确
         if ns.CombatTracker then
             ns.CombatTracker._currentMythicLevel   = level
             ns.CombatTracker._currentMythicMapName = name
         end
 
-        -- ★ 修复：用重试 ticker 持续尝试读服务器计时，直到成功为止
-        --         解决 reload 后计时器未就绪导致的 4-5 秒误差
         local retryCount = 0
         local retryTicker
         retryTicker = C_Timer.NewTicker(0.5, function()
@@ -142,14 +132,12 @@ function MP:Init()
                 local ok, _, elapsedTime, timerType = pcall(GetWorldElapsedTime, timerID)
                 if ok and timerType == LE_WORLD_ELAPSED_TIMER_TYPE_CHALLENGE_MODE
                    and elapsedTime and elapsedTime > 0 then
-                    -- 成功读到服务器计时，修正 startTime
                     MP._startTime = GetTime() - elapsedTime
                     retryTicker:Cancel()
                     return
                 end
             end
 
-            -- 最多重试 20 次（10秒），超时放弃
             if retryCount >= 20 then
                 retryTicker:Cancel()
             end
@@ -158,10 +146,10 @@ function MP:Init()
 end
 
 -- ============================================================
--- OnStart（CHALLENGE_MODE_START）
+-- OnStart(CHALLENGE_MODE_START)
+-- ★ 改造:插钥匙前先归档(secret 等待),再 ResetMeter
 -- ============================================================
 function MP:OnStart()
-    -- ★ 清除预热段的副本关联
     if ns.state.isInInstance and ns.Segments then
         local preTag = ns.CombatTracker and ns.CombatTracker._currentInstanceTag
         if preTag then
@@ -177,22 +165,27 @@ function MP:OnStart()
         end
     end
 
-    -- ★ 插钥匙时立即重置暴雪meter
-    --   玩家插钥匙前至少经过了走路时间，预热session的Secret Value早已解密归档完毕
-    --   重置后 baseline=0，Overall API 从此只统计本次M+数据
-    if ns.CombatTracker then
-        ns.CombatTracker:ResetMeterForNewRun()
+    -- ★ 新流程:先归档当前所有未归档 sessions (虚拟段),再清 meter
+    if ns.CombatTracker and ns.CombatTracker.WaitAndProcessArchived then
+        ns.CombatTracker:WaitAndProcessArchived()
     end
 
-    local id, name, timeLimit = getMapInfo()
-    local level = getKeystoneLevel()
-    name  = name  or GetZoneText() or L["大秘境"]
-    level = level or 0
-    enterInstance(id, name, level, timeLimit)
+    -- 0.5s 缓冲后再清 meter,确保归档完成
+    C_Timer.After(0.5, function()
+        if ns.CombatTracker then
+            ns.CombatTracker:ResetMeterForNewRun()
+        end
+
+        local id, name, timeLimit = getMapInfo()
+        local level = getKeystoneLevel()
+        name  = name  or GetZoneText() or L["大秘境"]
+        level = level or 0
+        enterInstance(id, name, level, timeLimit)
+    end)
 end
 
 -- ============================================================
--- OnCompleted（CHALLENGE_MODE_COMPLETED）
+-- OnCompleted(CHALLENGE_MODE_COMPLETED)
 -- ============================================================
 function MP:OnCompleted(time, onTime)
     MP:StopTimer()
@@ -208,7 +201,6 @@ function MP:OnCompleted(time, onTime)
     print(string.format(L["|cff4cb8e8[Light Damage]|r M+ 完成: %s (计时: %s)"],
         runName, ns:FormatTime((time or 0) / 1000)))
 
-    -- 完成后的清理
     leaveInstance()
 
     if ns.UI and ns.UI:IsVisible() then
@@ -217,7 +209,7 @@ function MP:OnCompleted(time, onTime)
 end
 
 -- ============================================================
--- OnReset（CHALLENGE_MODE_RESET）
+-- OnReset(CHALLENGE_MODE_RESET)
 -- ============================================================
 function MP:OnReset()
     MP._completedAndStillInside = false
@@ -238,7 +230,7 @@ function MP:OnReset()
 end
 
 -- ============================================================
--- OnEnterDungeon（UpdateInstanceStatus 检测到进本）
+-- OnEnterDungeon(UpdateInstanceStatus 检测到进本)
 -- ============================================================
 function MP:OnEnterDungeon()
     if MP._active then return end
@@ -252,7 +244,7 @@ function MP:OnEnterDungeon()
 end
 
 -- ============================================================
--- OnLeaveInstance（离开副本时触发，普通副本结束）
+-- OnLeaveInstance(离开副本时触发,普通副本结束)
 -- ============================================================
 function MP:OnLeaveInstance()
     if not MP._active then return end
@@ -273,7 +265,7 @@ function MP:OnLeaveInstance()
 end
 
 -- ============================================================
--- 合并本局所有归档 session 为一个总览段 (照搬 Overall 完美逻辑)
+-- 合并本局所有归档 session 为一个总览段
 -- ============================================================
 function MP:BuildMythicSegment(name, success)
     MP._pendingMythicSeg = {
@@ -313,12 +305,9 @@ function MP:IsActive()
     return MP._active
 end
 
-
-
 function MP:GetElapsed()
     if MP._elapsedOnStop then return MP._elapsedOnStop / 1000 end
 
-    -- 不创建中间 table，直接用 select 遍历 vararg
     local n = select("#", GetWorldElapsedTimers())
     for i = 1, n do
         local timerID = select(i, GetWorldElapsedTimers())
@@ -331,7 +320,6 @@ function MP:GetElapsed()
     end
 end
 
--- 复用 table，避免每秒 3 次的新分配
 local _headerInfoCache = {}
 function MP:GetHeaderInfo()
     if not MP._active then return nil end

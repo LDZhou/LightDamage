@@ -1,13 +1,15 @@
 --[[
     Light Damage - UIPinned.lua
     固定自己排名系统
+
+    ★ 改造说明:
+    - CheckPinnedSelfForAPI / FillPinnedFromAPI 增加 sessionID 透传
 ]]
 local addonName, ns = ...
 local L = ns.L
 local UI = ns.UI
 local INTERP = Enum and Enum.StatusBarInterpolation and Enum.StatusBarInterpolation.ExponentialEaseOut
 
--- module-level helper：用于 pcall 调用而不创建闭包
 local function _safeSetBarValue(fs, total, ps, showPS, isCount, suffix)
     if isCount then
         fs:SetFormattedText("%s" .. suffix, ns.AbbrevNumber(total))
@@ -90,7 +92,8 @@ function UI:FillPinnedFromData(pinnedBar, listObj, d, rank, dur, mode, maxV, pos
     pinnedBar.frame:Show()
 end
 
-function UI:FillPinnedFromAPI(pinnedBar, listObj, src, rank, mode, maxAmt, sType, position)
+-- ★ 增加 sessionID 透传
+function UI:FillPinnedFromAPI(pinnedBar, listObj, src, rank, mode, maxAmt, sType, position, sessionID)
     self:PositionPinnedBar(pinnedBar, listObj, position)
     local bh, gap, alpha = self:GetBarConfig(); local texPath = ns.db.display.barTexture or "Interface\\Buttons\\WHITE8X8"
     local textMode = ns.db.display.textColorMode or "class"
@@ -98,12 +101,10 @@ function UI:FillPinnedFromAPI(pinnedBar, listObj, src, rank, mode, maxAmt, sType
     local cls = src.classFilename or "WARRIOR"; local cc = ns:GetClassColor(cls) or {0.5, 0.5, 0.5}
     pinnedBar.statusbar:SetStatusBarTexture(texPath); pinnedBar.statusbar:SetStatusBarColor(cc[1], cc[2], cc[3], alpha)
 
-    -- statusbar:用 helper + pcall(无闭包)
     pcall(_safeSetStatusBar, pinnedBar.statusbar, maxAmt or 1, src.totalAmount)
 
     pinnedBar.rank:SetText(ns.db.display.showRank and (rank .. ".") or "")
 
-    -- name:secret value 时跳过
     local nameRaw = src.name
     local nameStr = ""
     local isSecret = issecretvalue and issecretvalue(nameRaw)
@@ -122,12 +123,12 @@ function UI:FillPinnedFromAPI(pinnedBar, listObj, src, rank, mode, maxAmt, sType
         else nr, ng, nb = cc[1], cc[2], cc[3] end; pinnedBar.name:SetTextColor(nr, ng, nb)
     end
 
-    -- value:用 helper + pcall(无闭包)
     pcall(_safeSetBarValue, pinnedBar.value, src.totalAmount, src.amountPerSecond,
           ns.db.display.showPerSecond, UI.COUNT_MODES[mode], L["次"])
     if not pinnedBar._apiData then pinnedBar._apiData = {} end
     pinnedBar._apiData.isAPI = true; pinnedBar._apiData.sourceGUID = src.sourceGUID; pinnedBar._apiData.sourceCreatureID = src.sourceCreatureID
     pinnedBar._apiData.isLocalPlayer = true; pinnedBar._apiData.totalAmount = src.totalAmount; pinnedBar._apiData.amountPerSecond = src.amountPerSecond; pinnedBar._apiData.sessionType = sType
+    pinnedBar._apiData.sessionID = sessionID
     pinnedBar._apiData.specIconID = src.specIconID
     pinnedBar._data = pinnedBar._apiData; pinnedBar._mode = mode; pinnedBar._isDeath = false; pinnedBar._guid = src.sourceGUID; pinnedBar._nameStr = src.name; pinnedBar._classStr = cls
     if pinnedBar.specIcon then
@@ -186,11 +187,12 @@ function UI:CheckPinnedSelfForBars(listKey, listObj, data, dur, mode, count)
     self:FillPinnedFromData(pinnedBar, listObj, selfData, selfIdx, dur, mode, maxV, position)
 end
 
-function UI:CheckPinnedSelfForAPI(listKey, listObj, sources, mode, maxAmt, sType)
+-- ★ 增加 sessionID 参数,透传给 FillPinnedFromAPI
+function UI:CheckPinnedSelfForAPI(listKey, listObj, sources, mode, maxAmt, sType, sessionID)
     if not self._pinnedSelf then return end; local pinnedBar = self._pinnedSelf[listKey]; if not pinnedBar then return end
     local count = math.min(#sources, UI.MAX_BARS)
     if not self._pinnedSelfCache then self._pinnedSelfCache = {} end
-    self._pinnedSelfCache[listKey] = { type = "api", sources = sources, mode = mode, maxAmt = maxAmt, sType = sType }
+    self._pinnedSelfCache[listKey] = { type = "api", sources = sources, mode = mode, maxAmt = maxAmt, sType = sType, sessionID = sessionID }
     self:RestoreSfForPinned(listKey, listObj, count)
     if not ns.db.display.alwaysShowSelf or mode == "deaths" then pinnedBar.frame:Hide(); return end
     local selfIdx, selfSrc = nil, nil
@@ -199,5 +201,5 @@ function UI:CheckPinnedSelfForAPI(listKey, listObj, sources, mode, maxAmt, sType
     local position = self:GetSelfViewportPosition(listObj, selfIdx)
     if position == "visible" then pinnedBar.frame:Hide(); return end
     self:ShrinkSfForPinned(listKey, listObj, count, position)
-    self:FillPinnedFromAPI(pinnedBar, listObj, selfSrc, selfIdx, mode, maxAmt, sType, position)
+    self:FillPinnedFromAPI(pinnedBar, listObj, selfSrc, selfIdx, mode, maxAmt, sType, position, sessionID)
 end

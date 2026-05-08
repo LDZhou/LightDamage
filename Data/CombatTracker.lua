@@ -1,9 +1,15 @@
 --[[
     Light Damage - CombatTracker.lua
-    战斗追踪核心：事件注册、状态同步、归档处理
-    
+    战斗追踪核心:事件注册、状态同步、归档处理
+
     LoadSegmentData / RebuildOverall → DataLoader.lua
     SmartTrimHistory / MergeAndCleanInstance → InstanceManager.lua
+
+    ★ 改造说明 (虚拟段架构):
+    - 撤销 DAMAGE_METER_COMBAT_SESSION_UPDATED 监听 → 平时不再后台归档
+    - processArchivedSessions 内部去掉 10 秒兜底 timer → 由触发事件驱动
+    - 归档段创建时分配 _localID,并迁移黑名单 (虚拟段 hidden → archived hidden)
+    - viewIndex 改为 key 存储,所有数字判断改用 IsViewing*/View* helper
 ]]
 
 local addonName, ns = ...
@@ -110,7 +116,8 @@ end
 -- ============================================================
 -- 脱战后: 解析归档 session → history
 -- 通过对比 sessionID set,有就跳过,没有就插入。
--- 任何理由(secret 没解、事件没触发、异常被吞)漏掉的段,下次扫到都会补。
+-- ★ 改造:不再启动 10 秒兜底 timer。
+-- ★ 新增:每个归档段分配 _localID,并迁移黑名单。
 -- ============================================================
 local function processArchivedSessions()
     local segs = ns.Segments
@@ -119,7 +126,6 @@ local function processArchivedSessions()
     local sessionCount = sessions and #sessions or 0
     if sessionCount == 0 then return end
 
-    -- 单调推进:从上次水位线之后的 session 开始扫,不需要去重表也不需要黑名单
     local addedAny = false
     for i = (CT._lastProcessedCount or 0) + 1, sessionCount do
         local s = sessions[i]
@@ -128,11 +134,10 @@ local function processArchivedSessions()
         local dur = s.durationSeconds or 0
 
         if dur <= 0 then
-            -- 0 时长 session(尚未稳定),跳过,下次扫描再处理
+            -- 0 时长 session 跳过
         elseif dur < (ns.db and ns.db.tracking and ns.db.tracking.minCombatTime or 2) then
-            -- 时长不足,跳过
+            -- 时长不足跳过
         else
-            -- API 有但 history 没有 → 新增
             local isBoss = false
             if s.name and (s.name:sub(1, 3) == "(!)" or string.find(s.name, "(!)", 1, true)) then
                 isBoss = true
@@ -154,9 +159,10 @@ local function processArchivedSessions()
             seg._instanceDisplayName = CT._currentInstanceName or nil
             seg._sessionIdx = i
             seg._sessionID = sid
-            seg._dataLoaded = false  -- 懒加载
+            seg._dataLoaded = false
+            seg._localID = segs:GenLocalID("arch")   -- ★ 分配本地 ID
 
-            -- 死亡日志(新增段才构建,避免覆盖用户已查看的)
+            -- 死亡日志构建(原样保留)
             local ok2, deathSession = pcall(C_DamageMeter.GetCombatSessionFromID,
                 sid, Enum.DamageMeterType.Deaths)
             if ok2 and deathSession and deathSession.combatSources then
@@ -221,26 +227,17 @@ local function processArchivedSessions()
                 end
             end
 
+            -- ★ 黑名单迁移:虚拟段被隐藏过 → 归档段同步隐藏
+            segs:MigrateHideOnArchive(seg)
+
             table.insert(segs.history, 1, seg)
             addedAny = true
 
-            -- 0 数据段:启动 10 秒兜底扫描
-            if not seg._dataLoaded then
-                local segRef = seg
-                C_Timer.After(10, function()
-                    if not segRef._dataLoaded
-                       and segRef._sessionID
-                       and (segRef.totalDamage or 0) == 0 then
-                        CT:LoadSegmentData(segRef)
-                        if ns.Analysis then ns.Analysis:InvalidateCache() end
-                        if ns.UI and ns.UI:IsVisible() then ns.UI:Refresh() end
-                    end
-                end)
-            end
+            -- ★ 立即加载数据(归档完毕,虚拟段→已归档段的数据固化)
+            CT:LoadSegmentData(seg)
         end
     end
 
-    -- 收尾
     if addedAny then
         if ns.SaveSessionHistory then ns:SaveSessionHistory() end
     end
@@ -253,13 +250,13 @@ end
 
 -- ============================================================
 -- 等 secret 释放后再解析
+-- ★ 改造:这是触发事件路径上的关键步骤。归档完成前不会调用 ResetAllCombatSessions。
 -- ============================================================
 local waitTicker, waitAttempts = nil, 0
 
 local function waitAndProcessArchived(fastPath)
     if waitTicker then return end
 
-    -- fastPath 节流:300ms 内最多 1 次,防止事件风暴
     if fastPath then
         local now = GetTime()
         if CT._lastFastPathTime and (now - CT._lastFastPathTime) < 0.3 then return end
@@ -282,7 +279,6 @@ local function waitAndProcessArchived(fastPath)
     end
 
     local function doAfterProcess()
-        -- 即使 processArchivedSessions 内部崩,也要保证后续清理逻辑跑
         pcall(processArchivedSessions)
         if CT._pendingMergeArgs then
             local args = CT._pendingMergeArgs
@@ -291,28 +287,17 @@ local function waitAndProcessArchived(fastPath)
         end
         if ns.Segments then ns.Segments._locked = false end
         if ns.UI then C_Timer.After(0, function() ns.UI:Layout() end) end
-
-        -- 1 秒后再扫一次
-        C_Timer.After(1, function()
-            if ns.state.inCombat then return end
-            pcall(processArchivedSessions)
-            if ns.Analysis then ns.Analysis:InvalidateCache() end
-            if ns.UI and ns.UI:IsVisible() then ns.UI:Layout() end
-        end)
     end
 
-    -- 立即可处理:直接执行
     if not anyUnprocessedStillSecret() then
         doAfterProcess()
         return
     end
 
-    -- 有 secret 在解密,等待
     waitTicker = C_Timer.NewTicker(0.3, function()
         waitAttempts = waitAttempts + 1
         if InCombatLockdown() then return end
         if waitAttempts >= 10 then
-            -- 超时也归档,反正下次会再扫(幂等保证)
             if waitTicker then waitTicker:Cancel(); waitTicker = nil end
             doAfterProcess()
             return
@@ -356,7 +341,7 @@ local function syncCombatState()
         if ns.state.inCombat then
             if CT._currentEncounterID then return end
             ns:LeaveCombat()
-            C_Timer.After(0.3, waitAndProcessArchived)
+            -- ★ 战斗结束不再触发 processArchivedSessions(虚拟段架构下平时不归档)
         end
     end
 end
@@ -373,25 +358,49 @@ function CT:ClearLoadedSessionIDs()
         end
     end
 end
+
 function CT:ResetMeterForNewRun()
     self:ClearLoadedSessionIDs()
-    if C_DamageMeter.ResetAllCombatSessions then CT._internalReset = true; C_DamageMeter.ResetAllCombatSessions() end
-    CT._baselineSessionCount = 0; CT._lastProcessedCount = 0; CT._initialBaselineSet = true; CT._bossSessionIndices = {}
+    if C_DamageMeter.ResetAllCombatSessions then
+        CT._internalReset = true
+        C_DamageMeter.ResetAllCombatSessions()
+    end
+    -- ★ ResetAllCombatSessions 后,sessionID 全部失效,清掉 sessionID 黑名单
+    if ns.Segments then ns.Segments:ClearHiddenSessionIDs() end
+    CT._baselineSessionCount = 0
+    CT._lastProcessedCount = 0
+    CT._initialBaselineSet = true
+    CT._bossSessionIndices = {}
     if ns.MythicPlus then ns.MythicPlus:ResetBaseline() end
 end
+
 function CT:MarkReset()
     self:ClearLoadedSessionIDs()
-    if C_DamageMeter.ResetAllCombatSessions then C_DamageMeter.ResetAllCombatSessions() end
-    CT._baselineSessionCount = 0; CT._lastProcessedCount = 0; CT._initialBaselineSet = true
+    if C_DamageMeter.ResetAllCombatSessions then
+        C_DamageMeter.ResetAllCombatSessions()
+    end
+    if ns.Segments then ns.Segments:ClearHiddenSessionIDs() end
+    CT._baselineSessionCount = 0
+    CT._lastProcessedCount = 0
+    CT._initialBaselineSet = true
 end
+
 function CT:SetBaseline()
     local sessions = C_DamageMeter.GetAvailableCombatSessions()
-    CT._baselineSessionCount = sessions and #sessions or 0; CT._lastProcessedCount = CT._baselineSessionCount; CT._initialBaselineSet = true
+    CT._baselineSessionCount = sessions and #sessions or 0
+    CT._lastProcessedCount = CT._baselineSessionCount
+    CT._initialBaselineSet = true
 end
+
 function CT:ResetBaselineToCurrentCount()
-    local sessions = C_DamageMeter.GetAvailableCombatSessions(); local count = sessions and #sessions or 0
-    CT._baselineSessionCount = count; CT._lastProcessedCount = count; CT._initialBaselineSet = true; CT._bossSessionIndices = {}
+    local sessions = C_DamageMeter.GetAvailableCombatSessions()
+    local count = sessions and #sessions or 0
+    CT._baselineSessionCount = count
+    CT._lastProcessedCount = count
+    CT._initialBaselineSet = true
+    CT._bossSessionIndices = {}
 end
+
 function CT:PullCurrentData()
     if ns.Config and ns.Config._pvRefreshBlocked then return end
     syncCombatState()
@@ -400,6 +409,7 @@ end
 
 -- ============================================================
 -- 事件注册
+-- ★ 改造:撤销 DAMAGE_METER_COMBAT_SESSION_UPDATED 监听
 -- ============================================================
 function CT:RegisterEvents()
     if CT._eventsRegistered then return end
@@ -411,7 +421,7 @@ function CT:RegisterEvents()
     f:RegisterEvent("PLAYER_ENTERING_WORLD")
     f:RegisterEvent("CHALLENGE_MODE_START"); f:RegisterEvent("CHALLENGE_MODE_COMPLETED"); f:RegisterEvent("CHALLENGE_MODE_RESET")
     f:RegisterEvent("PLAYER_LEAVING_WORLD")
-    f:RegisterEvent("DAMAGE_METER_COMBAT_SESSION_UPDATED")
+    -- ★ 撤销: f:RegisterEvent("DAMAGE_METER_COMBAT_SESSION_UPDATED")
 
     f:SetScript("OnEvent", function(_, event, ...)
         if event == "PLAYER_LEAVING_WORLD" then
@@ -419,12 +429,6 @@ function CT:RegisterEvents()
                 local officialDur = C_DamageMeter.GetSessionDurationSeconds(Enum.DamageMeterSessionType.Overall)
                 if officialDur and officialDur > 0 then CT._overallDurationSnapshot = officialDur end
             end
-            return
-        end
-        if event == "DAMAGE_METER_COMBAT_SESSION_UPDATED" then
-            if ns.state.inCombat or isGroupInCombat() then return end
-            C_Timer.After(0, function() waitAndProcessArchived(true) end)
-            CT:RescanZeroDataSegments()
             return
         end
         if event == "ENCOUNTER_START" then
@@ -504,24 +508,44 @@ function CT:RegisterEvents()
                                 ns.Segments._preReloadOverallData = nil
                                 if ns.Segments.history then for _, s in ipairs(ns.Segments.history) do if s._sessionID and not s._dataLoaded and (s._isBoss or s._isMerged) then CT:LoadSegmentData(s) end end end
                             end
-                            CT:ResetMeterForNewRun()
-                            if ns.Segments then
-                                local displayName = CT._currentInstanceName or rawName or L["副本"]
-                                ns.Segments.overall = ns.Segments:NewSegment("overall", string.format(L["%s [全程]"], displayName))
-                            end
+                            -- ★ 进新副本:先 secret 等待+归档,再 ResetMeter
+                            waitAndProcessArchived()
+                            C_Timer.After(0.5, function()
+                                if ns.state.isInInstance and not ns.state.inCombat then
+                                    CT:ResetMeterForNewRun()
+                                    if ns.Segments then
+                                        local displayName = CT._currentInstanceName or rawName or L["副本"]
+                                        ns.Segments.overall = ns.Segments:NewSegment("overall", string.format(L["%s [全程]"], displayName))
+                                    end
+                                end
+                            end)
                         end
                     end)
                 end
             end
             CT._wasInInstance = inInstance; CT._bossSessionIndices = CT._bossSessionIndices or {}
             C_Timer.After(0.5, function()
-                if not ns.state.inCombat and ns.Segments and #(ns.Segments.history or {}) > 0 and (ns.Segments.viewIndex == nil or ns.Segments.viewIndex == 0) then
-                    ns.Segments.viewIndex = 1
-                    if ns.UI and ns.UI:IsVisible() then C_Timer.After(0, function() ns.UI:Layout() end) end
+                -- ★ 进世界后,如果用户没主动选段,自动定位到合并列表的最新段
+                if not ns.state.inCombat and ns.Segments then
+                    local segs = ns.Segments
+                    if segs:IsViewingCurrent() or segs:IsViewingOverall() then
+                        local merged = segs:GetMergedSegmentList()
+                        if merged[1] then
+                            if merged[1]._isVirtual then
+                                segs:ViewVirtual(merged[1]._sessionID)
+                            elseif merged[1]._localID then
+                                segs:ViewArchived(merged[1]._localID)
+                            end
+                            if ns.UI and ns.UI:IsVisible() then C_Timer.After(0, function() ns.UI:Layout() end) end
+                        end
+                    end
                 end
             end)
         elseif event == "PLAYER_REGEN_DISABLED" then
-            if ns.Segments and ns.Segments.viewIndex and ns.Segments.viewIndex ~= 0 then ns.Segments.viewIndex = nil end
+            -- ★ 进战斗时,若用户停在 archived/virtual 段,切回 current
+            if ns.Segments and (ns.Segments:IsViewingArchived() or ns.Segments:IsViewingVirtual()) then
+                ns.Segments:ViewCurrent()
+            end
             local isTransitioningOut = (CT._wasInInstance and not ns.state.isInInstance)
             local isExiting = (CT._exitingInstanceTag ~= nil) or (CT._pendingMergeArgs ~= nil) or isTransitioningOut
             if not ns.state.isInInstance and not CT._initialBaselineSet and CT._baselineSessionCount == 0 and CT._lastProcessedCount == 0 and not isExiting then
@@ -542,7 +566,6 @@ function CT:RegisterEvents()
         end
     end)
 
-    -- 初始化副本状态
     do
         local rawName, _, _, _, _, _, _, instanceID = GetInstanceInfo()
         CT._wasInInstance = ns.state.isInInstance
@@ -556,28 +579,12 @@ function CT:RegisterEvents()
 end
 
 -- ============================================================
--- 事件驱动重读:扫 history,把 0 数据段填上真实数据
+-- ★ 撤销 RescanZeroDataSegments(原本由 DAMAGE_METER_COMBAT_SESSION_UPDATED 触发)
+--    保留空函数兜底,避免外部调用报错。
 -- ============================================================
 function CT:RescanZeroDataSegments()
-    local segs = ns.Segments
-    if not segs or not segs.history then return end
-    local refreshed = false
-    for _, seg in ipairs(segs.history) do
-        if seg._sessionID
-           and not seg._isMerged
-           and not seg._preKeystone
-           and (not seg._dataLoaded or (seg.totalDamage or 0) == 0) then
-            self:LoadSegmentData(seg)
-            if seg._dataLoaded then refreshed = true end
-        end
-    end
-    if refreshed then
-        if ns.Analysis then ns.Analysis:InvalidateCache() end
-        if ns.UI and ns.UI:IsVisible() then ns.UI:Refresh() end
-        if ns.SaveSessionHistory then ns:SaveSessionHistory() end
-    end
+    -- 虚拟段架构下不再使用此函数
 end
-
 
 function CT:ScanArchivedSessions()
     if self._scanInProgress then return end
@@ -585,6 +592,15 @@ function CT:ScanArchivedSessions()
     self._scanInProgress = true
     pcall(processArchivedSessions)
     self._scanInProgress = false
+end
+
+-- ★ 暴露给 InstanceManager / MythicPlus 在合并前可调用
+function CT:ProcessArchivedNow()
+    pcall(processArchivedSessions)
+end
+
+function CT:WaitAndProcessArchived(fastPath)
+    waitAndProcessArchived(fastPath)
 end
 
 -- ============================================================
@@ -600,7 +616,7 @@ function CT:DebugSessions()
     end
     local segs = ns.Segments; print(string.format(L["  history: %d 条"], segs and #segs.history or 0))
     for i, seg in ipairs(segs and segs.history or {}) do
-        print(string.format("    [%d] %s  dmg=%d  heal=%d  dur=%.1f", i, seg.name or "?", seg.totalDamage, seg.totalHealing, seg.duration or 0))
+        print(string.format("    [%d] %s  dmg=%d  heal=%d  dur=%.1f  localID=%s", i, seg.name or "?", seg.totalDamage, seg.totalHealing, seg.duration or 0, tostring(seg._localID)))
     end
 end
 

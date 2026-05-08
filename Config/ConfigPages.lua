@@ -212,7 +212,7 @@ function Config:BuildLookPage()
 
     y = y - 12; y = self:H(inner, L["图标风格"], y)
     y = self:Dropdown(inner, L["专精图标"], y,
-        { {l=L["默认"], v="default"}, {l="Apex", v="apex"}, {l="Cartoon", v="cartoon"}, {l="ToxiUI", v="toxiui"} },
+        { {l=L["默认"], v="default"}, {l="Apex", v="apex"}, {l="Cartoon", v="cartoon"}, {l="ToxiUI", v="toxiui"} , {l="LightDamage", v="lightdamage"}},
         function() return ns.db.display.iconPack or "default" end,
         function(v) ns.db.display.iconPack = v; self:RefreshUI() end)
 

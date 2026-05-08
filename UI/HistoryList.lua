@@ -1,6 +1,11 @@
 --[[
     LD Combat Stats - HistoryList.lua
     历史段落选择器
+
+    ★ 改造说明 (虚拟段架构):
+    - SetupItem 用 entry.key / entry.localID / entry.sessionID 判断高亮
+    - delBtn 不再 table.remove,改为 Segments:HideSession(entry) 黑名单
+    - clearBtn 一键清野外:批量黑名单 + (野外时) ResetAllCombatSessions + 清 sessionID 黑名单
 ]]
 
 local addonName, ns = ...
@@ -11,7 +16,7 @@ ns.HistoryList = HL
 
 local LIST_W   = 220
 local ITEM_H   = 20
-local MAX_SHOW = 12   -- 历史记录超过12条时显示滚动条
+local MAX_SHOW = 12
 
 local T = {
     bg       = {0.04, 0.04, 0.07, 0.97},
@@ -23,9 +28,6 @@ local T = {
     sep      = {0.25, 0.25, 0.30, 0.60},
 }
 
--- ============================================================
--- 创建
--- ============================================================
 function HL:EnsureCreated()
     if self.frame then return end
     self:Build()
@@ -50,32 +52,30 @@ function HL:Build()
     clickOut:SetScript("OnMouseDown", function() self:Hide() end)
     self._clickOut = clickOut
 
-    -- 滚动框架 (用于历史段落)
     local sf = CreateFrame("ScrollFrame", nil, f)
     sf:SetPoint("TOPLEFT", 1, -1)
     local child = CreateFrame("Frame", nil, sf)
     child:SetWidth(LIST_W - 18)
     sf:SetScrollChild(child)
 
-    -- 极简风格滚动条
     local sb = CreateFrame("Slider", nil, sf)
     sb:SetPoint("TOPLEFT", sf, "TOPRIGHT", 0, 0)
     sb:SetPoint("BOTTOMLEFT", sf, "BOTTOMRIGHT", 0, 0)
     sb:SetMinMaxValues(0, 0); sb:SetValueStep(1); sb:SetValue(0)
     sb:SetWidth(4); sb:SetOrientation("VERTICAL")
-    
+
     local sbTrack = sb:CreateTexture(nil, "BACKGROUND")
     sbTrack:SetAllPoints()
     sbTrack:SetColorTexture(0.05, 0.05, 0.06, 1)
-    
+
     sb:SetThumbTexture("Interface\\Buttons\\WHITE8X8")
     local sbThumb = sb:GetThumbTexture()
     sbThumb:SetVertexColor(0.3, 0.3, 0.35, 1)
     sbThumb:SetSize(4, 30)
-    
+
     sb:SetScript("OnEnter", function() sbThumb:SetVertexColor(0.4, 0.4, 0.45, 1) end)
     sb:SetScript("OnLeave", function() sbThumb:SetVertexColor(0.3, 0.3, 0.35, 1) end)
-    
+
     sf:SetScript("OnMouseWheel", function(_, delta)
         local cur = sb:GetValue()
         local maxVal = select(2, sb:GetMinMaxValues())
@@ -83,12 +83,11 @@ function HL:Build()
     end)
     sb:SetScript("OnValueChanged", function(_, value) sf:SetVerticalScroll(value) end)
 
-    -- 分割线与常驻容器
     local sep = f:CreateTexture(nil, "ARTWORK")
     sep:SetHeight(1); sep:SetColorTexture(unpack(T.sep))
     local pinned = CreateFrame("Frame", nil, f)
 
-    -- ★ 新增：清空野外记录按钮
+    -- 一键清空野外按钮
     local clrBtn = CreateFrame("Button", nil, f)
     clrBtn:SetHeight(18)
     local cbBg = clrBtn:CreateTexture(nil, "BACKGROUND")
@@ -100,51 +99,55 @@ function HL:Build()
     cbTxt:SetPoint("CENTER")
     cbTxt:SetText(L["[一键清空野外战斗]"])
     cbTxt:SetTextColor(1, 0.4, 0.4)
-    
+
     clrBtn:SetScript("OnClick", function()
-        if ns.Segments then
-            local cleaned = {}
-            for _, seg in ipairs(ns.Segments.history) do
-                -- 判断是否保留:是大秘境、Boss战、副本融合段、或者带副本Tag的战斗
-                local keep = false
-                if seg.type == "mythicplus" or seg.type == "boss" then keep = true end
-                if seg._isBoss or seg._isMerged or seg._instanceTag then keep = true end
+        if not ns.Segments then self:Hide(); return end
+        local segs = ns.Segments
 
-                if keep then
-                    table.insert(cleaned, seg)
-                end
+        -- 1. 已归档段:对"野外段"加 localID 黑名单(等价于隐藏/删除),保留副本相关
+        ns.db.hiddenLocalIDs = ns.db.hiddenLocalIDs or {}
+        for _, seg in ipairs(segs.history) do
+            local keep = false
+            if seg.type == "mythicplus" or seg.type == "boss" then keep = true end
+            if seg._isBoss or seg._isMerged or seg._instanceTag then keep = true end
+            if (not keep) and seg._localID then
+                ns.db.hiddenLocalIDs[seg._localID] = true
             end
-            ns.Segments.history = cleaned
-            
-            -- 如果删除了当前正在查看的视图，切回总计
-            local viewIdx = ns.Segments.viewIndex
-            if viewIdx and viewIdx > 0 and not ns.Segments.history[viewIdx] then
-                ns.Segments.viewIndex = #ns.Segments.history > 0 and 1 or 0
-            end
-            
-            -- 如果当前在野外，连带清空当前的 overall 和重置 API Baseline
-            if not ns.state.isInInstance then
-                if C_DamageMeter.ResetAllCombatSessions then
-                    ns.CombatTracker:ClearLoadedSessionIDs()
-                    ns.CombatTracker._internalReset = true
-                    C_DamageMeter.ResetAllCombatSessions()
-                end
-                if ns.CombatTracker then 
-                    ns.CombatTracker._baselineSessionCount = 0
-                    ns.CombatTracker._lastProcessedCount = 0
-                end
-                ns.Segments.overall = ns.Segments:NewSegment("overall", L["总计"])
-            end
-
-            -- ★ 一键清空后不再显示空白页面，而是跳转到最新的段落
-            if #ns.Segments.history > 0 then
-                ns.Segments.viewIndex = 1
-            else
-                ns.Segments.viewIndex = nil -- 跳转到当前实时
-            end
-
-            if ns.UI then ns.UI:Refresh() end
         end
+
+        -- 2. 野外时:虚拟段全部失效,直接 ResetMeter 一并清掉
+        --    (虚拟段没有"是否副本"的概念,野外清空意味着这一刻所有 API session 都该清)
+        if not ns.state.isInInstance then
+            if ns.CombatTracker then
+                ns.CombatTracker:ResetMeterForNewRun()
+            end
+            -- ResetMeter 已清空 hiddenSessionIDs;重建 overall
+            segs.overall = segs:NewSegment("overall", L["总计"])
+        else
+            -- 副本中:不能动 meter (保留副本累计数据),改为隐藏当前所有虚拟段
+            ns.db.hiddenSessionIDs = ns.db.hiddenSessionIDs or {}
+            for _, vseg in ipairs(segs:BuildVirtualSegments()) do
+                if vseg._sessionID then
+                    ns.db.hiddenSessionIDs[vseg._sessionID] = true
+                end
+            end
+        end
+
+        -- 3. 视图修正:跳到合并列表第一项,没有则跳 current
+        local merged = segs:GetMergedSegmentList()
+        if merged[1] then
+            if merged[1]._isVirtual then
+                segs:ViewVirtual(merged[1]._sessionID)
+            elseif merged[1]._localID then
+                segs:ViewArchived(merged[1]._localID)
+            end
+        else
+            segs:ViewCurrent()
+        end
+
+        if ns.SaveSessionHistory then ns:SaveSessionHistory() end
+        if ns.Analysis then ns.Analysis:InvalidateCache() end
+        if ns.UI then ns.UI:Refresh() end
         self:Hide()
         print(L["|cff00ccff[Light Damage]|r 已清空所有野外历史记录，只保留副本与首领战数据。"])
     end)
@@ -164,7 +167,6 @@ function HL:Show(anchorFrame)
     self:Rebuild()
     self.frame:ClearAllPoints()
     if anchorFrame then
-        -- 向上弹出：将列表的底部对齐到锚点(标题栏)的顶部
         self.frame:SetPoint("BOTTOMLEFT", anchorFrame, "TOPLEFT", 0, 2)
     else
         self.frame:SetPoint("CENTER", UIParent, "CENTER")
@@ -178,33 +180,30 @@ function HL:Hide()
     self._open = false
 end
 
--- ============================================================
--- 重建列表内容
--- ============================================================
 function HL:Rebuild()
     local segs = ns.Segments
     if not segs then self.frame:Hide(); return end
     local list = segs:GetHistoryList()
     if not list or #list == 0 then self.frame:Hide(); return end
 
-    -- 分离当前 与 历史段落
+    -- 分离常驻项 (current) 和历史区项 (archived/virtual)
     local histData = {}; local pinnedData = {}
     for _, data in ipairs(list) do
         if data.key == "current" then
             table.insert(pinnedData, data)
-        elseif data.key == "history" then
+        elseif data.key == "archived" or data.key == "virtual" then
             table.insert(histData, data)
         end
+        -- overall 不显示在弹出列表里(原行为一致)
     end
 
-    local curKey, curIdx = segs:GetViewKey()
-    local isLocked = ns.Segments._locked
+    local curKey, curID = segs:GetViewKey()   -- ★ key-based
+    local isLocked = segs._locked
 
-    -- 渲染历史记录
     for i, data in ipairs(histData) do
         local item = self._histItems[i]
         if not item then item = self:MakeItem(self.scrollChild); self._histItems[i] = item end
-        self:SetupItem(item, data, curKey, curIdx, isLocked)
+        self:SetupItem(item, data, curKey, curID, isLocked)
         item.frame:ClearAllPoints()
         item.frame:SetPoint("TOPLEFT", self.scrollChild, "TOPLEFT", 0, -(i-1)*ITEM_H)
         item.frame:SetPoint("TOPRIGHT", self.scrollChild, "TOPRIGHT", 0, -(i-1)*ITEM_H)
@@ -212,11 +211,10 @@ function HL:Rebuild()
     end
     for i = #histData + 1, #self._histItems do self._histItems[i].frame:Hide() end
 
-    -- 渲染常驻项
     for i, data in ipairs(pinnedData) do
         local item = self._pinnedItems[i]
         if not item then item = self:MakeItem(self.pinnedContainer); self._pinnedItems[i] = item end
-        self:SetupItem(item, data, curKey, curIdx, isLocked)
+        self:SetupItem(item, data, curKey, curID, isLocked)
         item.frame:ClearAllPoints()
         item.frame:SetPoint("TOPLEFT", self.pinnedContainer, "TOPLEFT", 1, -(i-1)*ITEM_H)
         item.frame:SetPoint("TOPRIGHT", self.pinnedContainer, "TOPRIGHT", -1, -(i-1)*ITEM_H)
@@ -224,7 +222,6 @@ function HL:Rebuild()
     end
     for i = #pinnedData + 1, #self._pinnedItems do self._pinnedItems[i].frame:Hide() end
 
-    -- 高度与滚动逻辑计算
     local showHistCount = math.min(#histData, MAX_SHOW)
     local histHeight = showHistCount * ITEM_H
     local pinnedHeight = #pinnedData * ITEM_H
@@ -234,7 +231,7 @@ function HL:Rebuild()
         self.scrollFrame:SetHeight(histHeight)
         self.scrollBar:SetMinMaxValues(0, (#histData - MAX_SHOW) * ITEM_H)
         self.scrollBar:Show()
-        self.scrollFrame:SetPoint("TOPRIGHT", -5, -1) -- 缩窄边距，给 4 像素宽的极简滚动条让路
+        self.scrollFrame:SetPoint("TOPRIGHT", -5, -1)
     else
         self.scrollFrame:SetHeight(histHeight)
         self.scrollBar:SetMinMaxValues(0, 0)
@@ -242,11 +239,10 @@ function HL:Rebuild()
         self.scrollFrame:SetPoint("TOPRIGHT", -1, -1)
     end
 
-    -- 排版分割线与底部常驻项
     self.sep:ClearAllPoints()
     self.sep:SetPoint("TOPLEFT", self.frame, "TOPLEFT", 4, -(histHeight + 2))
     self.sep:SetPoint("TOPRIGHT", self.frame, "TOPRIGHT", -4, -(histHeight + 2))
-    
+
     if #histData > 0 and #pinnedData > 0 then
         self.sep:Show()
         self.pinnedContainer:SetPoint("TOPLEFT", self.sep, "BOTTOMLEFT", -4, -2)
@@ -258,16 +254,13 @@ function HL:Rebuild()
     end
     self.pinnedContainer:SetHeight(pinnedHeight)
 
-    -- 排版最底部的“清空野外战斗”按钮
     self.clearBtn:ClearAllPoints()
     self.clearBtn:SetPoint("TOPLEFT", self.pinnedContainer, "BOTTOMLEFT", 1, -2)
     self.clearBtn:SetPoint("TOPRIGHT", self.pinnedContainer, "BOTTOMRIGHT", -1, -2)
 
-    -- 计算整体大框架的高度 (历史区 + 常驻区 + 按钮区18px + 各个间距)
     local totalFrameHeight = histHeight + pinnedHeight + 18 + (#histData > 0 and #pinnedData > 0 and 5 or 2) + 2
     self.frame:SetHeight(totalFrameHeight)
-    
-    -- ★ 历史列表默认看最下方最新的段落
+
     if #histData > MAX_SHOW then
         local maxVal = (#histData - MAX_SHOW) * ITEM_H
         self.scrollBar:SetValue(maxVal)
@@ -275,13 +268,24 @@ function HL:Rebuild()
     end
 end
 
-function HL:SetupItem(item, data, curKey, curIdx, isLocked)
+function HL:SetupItem(item, data, curKey, curID, isLocked)
     item.data = data; item.text:SetText(data.label)
-    local isHistory = data.key == "history"
-    local isActive = (data.key == curKey) and (data.key == "overall" or data.key == "current" or data.index == curIdx)
+    local isHistEntry = (data.key == "archived" or data.key == "virtual")
 
-    -- 战斗中允许查看但禁止删除（防止数据竞态）
-    if isHistory and not isLocked then
+    -- ★ 高亮判定:key 一致 + ID 一致(overall/current 没有 ID,key 一致即可)
+    local isActive = false
+    if data.key == curKey then
+        if data.key == "overall" or data.key == "current" then
+            isActive = true
+        elseif data.key == "archived" and data.localID == curID then
+            isActive = true
+        elseif data.key == "virtual" and data.sessionID == curID then
+            isActive = true
+        end
+    end
+
+    -- 战斗中允许查看,但禁止隐藏(防止竞态)
+    if isHistEntry and not isLocked then
         item.delBtn:Show()
     else
         item.delBtn:Hide()
@@ -303,7 +307,6 @@ function HL:MakeItem(parent)
     item.activeBg = activeBg
     local hl = f:CreateTexture(nil, "HIGHLIGHT"); hl:SetAllPoints(); hl:SetColorTexture(unpack(T.hover))
 
-    -- ★ 新增：最右侧的独立删除按钮
     local delBtn = CreateFrame("Button", nil, f)
     delBtn:SetSize(16, 16)
     delBtn:SetPoint("RIGHT", -4, 0)
@@ -312,56 +315,42 @@ function HL:MakeItem(parent)
     delTxt:SetPoint("CENTER")
     delTxt:SetText("X")
     delTxt:SetTextColor(0.6, 0.2, 0.2)
-    -- 悬停高亮为亮红色
     delBtn:SetScript("OnEnter", function() delTxt:SetTextColor(1, 0.2, 0.2) end)
     delBtn:SetScript("OnLeave", function() delTxt:SetTextColor(0.6, 0.2, 0.2) end)
     item.delBtn = delBtn
 
-    -- 标题文字（右侧锚点避开删除按钮）
     local txt = f:CreateFontString(nil, "OVERLAY"); txt:SetFont(STANDARD_TEXT_FONT, 10, "OUTLINE")
     txt:SetPoint("LEFT", 8, 0)
-    txt:SetPoint("RIGHT", delBtn, "LEFT", -4, 0) -- ★ 留出删除按钮的空间
+    txt:SetPoint("RIGHT", delBtn, "LEFT", -4, 0)
     txt:SetJustifyH("LEFT"); txt:SetWordWrap(false)
     item.text = txt
 
-    -- ★ 核心:删除按钮的点击逻辑(无二次确认)
+    -- ★ 删除按钮:不再 table.remove,改为 HideSession 加黑名单
     delBtn:SetScript("OnClick", function()
         local data = item.data
         if not data or not ns.Segments then return end
-        if ns.Segments._locked then return end -- 战斗中严格禁止删除历史记录
+        if ns.Segments._locked then return end
 
-        if data.key == "history" and data.index then
-            -- 1. 修正 viewIndex 偏移(核心保护机制,防止底层渲染空指针)
-            if ns.Segments.viewIndex == data.index then
-                -- 如果删的是当前正在看的，退回第一个或总计
-                ns.Segments.viewIndex = #ns.Segments.history > 1 and 1 or 0
-            elseif ns.Segments.viewIndex and ns.Segments.viewIndex > data.index then
-                -- 如果删的是当前观看记录前方的记录，索引 -1 以维持观看当前条目
-                ns.Segments.viewIndex = ns.Segments.viewIndex - 1
-            end
+        ns.Segments:HideSession(data)
 
-            -- 2. 物理删除
-            table.remove(ns.Segments.history, data.index)
-
-            -- 清理数据分析缓存，强制 UI 读取扣除后的最新总伤害
-            if ns.Analysis then ns.Analysis:InvalidateCache() end
-
-            -- 3. 数据固化及 UI 刷新
-            if ns.SaveSessionHistory then ns:SaveSessionHistory() end
-            if ns.UI then ns.UI:Refresh() end
-            
-            -- 4. 重新构建当前列表（更新所有余下条目的 data.index）
-            self:Rebuild()
-        end
+        if ns.SaveSessionHistory then ns:SaveSessionHistory() end
+        if ns.UI then ns.UI:Refresh() end
+        self:Rebuild()
     end)
 
-    
     f:SetScript("OnClick", function()
         local data = item.data; if not data then return end
-        if ns.Segments then ns.Segments:SetViewByKey(data.key, data.index) end
+        if ns.Segments then
+            if data.key == "current" then ns.Segments:ViewCurrent()
+            elseif data.key == "overall" then ns.Segments:ViewOverall()
+            elseif data.key == "archived" then ns.Segments:ViewArchived(data.localID)
+            elseif data.key == "virtual" then ns.Segments:ViewVirtual(data.sessionID) end
+            if ns.Analysis then ns.Analysis:InvalidateCache() end
+            if ns.UI then ns.UI:Refresh() end
+        end
         self:Hide()
     end)
-    
+
     item.frame = f
     return item
 end

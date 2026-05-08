@@ -1,7 +1,12 @@
 --[[
     Light Damage - InstanceManager.lua
-    副本生命周期：SmartTrimHistory + MergeAndCleanInstance
+    副本生命周期:SmartTrimHistory + MergeAndCleanInstance
     方法挂载到 ns.CombatTracker (CT) 上
+
+    ★ 改造说明 (虚拟段架构):
+    - 合并段创建时分配 _localID
+    - viewIndex 改用 ViewArchived helper
+    - SmartTrimHistory 后调 GCHiddenLocalIDs 清理孤儿黑名单
 ]]
 
 local addonName, ns = ...
@@ -26,22 +31,28 @@ local function shouldCleanTrash(scene)
     if scene == "raid"    then return ns.db.mythicPlus.cleanTrashRaid end
     return ns.db.mythicPlus.cleanTrashDungeon
 end
+
 -- ============================================================
 -- 智能裁剪历史记录
+-- ★ 改造:裁剪后清理孤儿黑名单
 -- ============================================================
 function ns.CombatTracker:SmartTrimHistory()
     local segs = ns.Segments
     if not segs or not segs.history then return end
     local maxSeg = ns.db and ns.db.tracking and ns.db.tracking.maxSegments or 30
 
-    -- 只要超出上限就从最老的数据（末尾）开刀
     while #segs.history > maxSeg do
         table.remove(segs.history, #segs.history)
+    end
+
+    -- ★ 清理孤儿 localID 黑名单
+    if segs.GCHiddenLocalIDs then
+        segs:GCHiddenLocalIDs()
     end
 end
 
 -- ============================================================
--- 退出副本时：合并该副本所有 seg → 一条汇总
+-- 退出副本时:合并该副本所有 seg → 一条汇总
 -- ============================================================
 function ns.CombatTracker:MergeAndCleanInstance(instanceTag, mythicLevel, mythicMapName, instanceName)
     local CT = ns.CombatTracker
@@ -69,7 +80,7 @@ function ns.CombatTracker:MergeAndCleanInstance(instanceTag, mythicLevel, mythic
     elseif instSegs[1].seg._instanceDisplayName and instSegs[1].seg._instanceDisplayName ~= "" then zoneName = instSegs[1].seg._instanceDisplayName
     else zoneName = instanceTag:match("^([^|]+)") or L["副本"] end
 
-    -- 公共逻辑：克隆 Overall 到合并段
+    -- 公共逻辑:克隆 Overall 到合并段
     local function cloneOverallToMerged(merged)
         local ovr = segs.overall
         if not ovr then return end
@@ -86,7 +97,7 @@ function ns.CombatTracker:MergeAndCleanInstance(instanceTag, mythicLevel, mythic
         end
     end
 
-    -- ================= 分支1：M+ 正常通关 =================
+    -- ================= 分支1:M+ 正常通关 =================
     if mythicLevel > 0 then
         local pending = ns.MythicPlus and ns.MythicPlus._pendingMythicSeg
         if pending then
@@ -98,6 +109,8 @@ function ns.CombatTracker:MergeAndCleanInstance(instanceTag, mythicLevel, mythic
             merged._mythicLevel = pending.level; merged._mapName = pending.mapName
             merged.mythicLevel = pending.level; merged.mapName = pending.mapName
             merged.mapID = pending.mapID; merged._keystoneTime = (pending.elapsed or 0) / 1000
+            merged._localID = segs:GenLocalID("mp")        -- ★ 分配本地 ID
+            merged._dataLoaded = true                      -- ★ 合并段数据已就位
 
             cloneOverallToMerged(merged)
 
@@ -114,7 +127,10 @@ function ns.CombatTracker:MergeAndCleanInstance(instanceTag, mythicLevel, mythic
                 for _, idx in ipairs(indicesToRemove) do table.remove(segs.history, idx) end
             end
 
-            if doGenOverall and (merged.totalDamage > 0 or merged.totalHealing > 0) then table.insert(segs.history, 1, merged); segs.viewIndex = 1 end
+            if doGenOverall and (merged.totalDamage > 0 or merged.totalHealing > 0) then
+                table.insert(segs.history, 1, merged)
+                segs:ViewArchived(merged._localID)         -- ★ key-based view
+            end
             CT:SmartTrimHistory()
             CT:ResetBaselineToCurrentCount()
             if ns.Segments then
@@ -130,7 +146,7 @@ function ns.CombatTracker:MergeAndCleanInstance(instanceTag, mythicLevel, mythic
         end
     end
 
-    -- ================= 分支2：非M+ 或 M+中途放弃 =================
+    -- ================= 分支2:非M+ 或 M+中途放弃 =================
     local mergedName
     if mythicLevel > 0 then mergedName = string.format(L["|cff4cb8e8+%d|r %s |cffaaaaaa[全程]|r"], mythicLevel, zoneName)
     else mergedName = string.format(L["%s [全程]"], zoneName) end
@@ -138,6 +154,8 @@ function ns.CombatTracker:MergeAndCleanInstance(instanceTag, mythicLevel, mythic
     local merged = segs:NewSegment("history", mergedName)
     merged.isActive = false; merged._instanceTag = nil; merged._isBoss = false; merged._isMerged = true
     if mythicLevel > 0 then merged._mythicLevel = mythicLevel; merged._mapName = zoneName end
+    merged._localID = segs:GenLocalID("merged")            -- ★ 分配本地 ID
+    merged._dataLoaded = true
 
     if not isRaid then
         cloneOverallToMerged(merged)
@@ -215,7 +233,10 @@ function ns.CombatTracker:MergeAndCleanInstance(instanceTag, mythicLevel, mythic
         for _, idx in ipairs(indicesToRemove) do table.remove(segs.history, idx) end
     end
 
-    if doGenOverall and (merged.totalDamage > 0 or merged.totalHealing > 0) then table.insert(segs.history, 1, merged); segs.viewIndex = 1 end
+    if doGenOverall and (merged.totalDamage > 0 or merged.totalHealing > 0) then
+        table.insert(segs.history, 1, merged)
+        segs:ViewArchived(merged._localID)             -- ★ key-based view
+    end
     CT:SmartTrimHistory()
     CT:ResetBaselineToCurrentCount()
 
@@ -230,6 +251,7 @@ function ns.CombatTracker:MergeAndCleanInstance(instanceTag, mythicLevel, mythic
                 end
                 CT:ClearLoadedSessionIDs()
                 CT._internalReset = true; C_DamageMeter.ResetAllCombatSessions()
+                if ns.Segments.ClearHiddenSessionIDs then ns.Segments:ClearHiddenSessionIDs() end  -- ★
             end
             CT._baselineSessionCount = 0; CT._lastProcessedCount = 0; CT._initialBaselineSet = false
             ns.Segments.overall = ns.Segments:NewSegment("overall", L["总计"])

@@ -1,6 +1,9 @@
 --[[
     Light Damage - UICore.lua
-    主界面：框架创建、标题栏、基础结构
+    主界面:框架创建、标题栏、基础结构
+
+    ★ 改造说明:
+    - hookScroll 里 args.sessionID 透传给 CheckPinnedSelfForAPI
 ]]
 
 local addonName, ns = ...
@@ -17,7 +20,6 @@ local SECTH_H = 18
 local TAB_H   = 20
 local MAX_BARS = 40
 
--- 导出常量供其他 UI 文件使用
 UI.BAR_H = BAR_H; UI.BAR_GAP = BAR_GAP; UI.TITLE_H = TITLE_H
 UI.SUMM_H = SUMM_H; UI.SECTH_H = SECTH_H; UI.TAB_H = TAB_H; UI.MAX_BARS = MAX_BARS
 
@@ -46,9 +48,6 @@ UI.COUNT_MODES = COUNT_MODES
 local TEX = "Interface\\AddOns\\" .. addonName .. "\\Textures\\"
 UI.TEX = TEX
 
--- ============================================================
--- 工具函数
--- ============================================================
 function UI:FillBg(f, c)
     local t = f:CreateTexture(nil,"BACKGROUND"); t:SetAllPoints()
     t:SetColorTexture(unpack(c)); return t
@@ -139,9 +138,6 @@ function UI:ApplyFont(fs, font, size, outline, shadow)
     else fs:SetShadowOffset(0,0) end
 end
 
--- ============================================================
--- 尺寸安全钳制（防止 frame 高度为 0）
--- ============================================================
 function UI:ClampSize(w, h)
     if type(w) ~= "number" or w ~= w or w <= 0 then w = ns.defaults.window.width end
     if type(h) ~= "number" or h ~= h or h <= 0 then h = ns.defaults.window.height end
@@ -170,7 +166,6 @@ function UI:ApplyAllFonts()
     if self.splitTab then self:ApplyFont(self.splitTab.text, font, fSz - 1, fOut, fShad) end
 end
 
--- sessionType 和 dmType 都是数字,用嵌套 table 避免字符串拼接产生临时字符串
 function UI:GetCachedSession(sessionType, dmType)
     local cache = self._sessionCache
     local sub = cache[sessionType]
@@ -189,9 +184,6 @@ end
 
 function UI:EnsureCreated() if self.frame then return end; self:Build() end
 
--- ============================================================
--- Build 主框架
--- ============================================================
 function UI:Build()
     local db = ns.db.window
     BAR_H = ns.db.display.barHeight or 18
@@ -225,7 +217,6 @@ function UI:Build()
     self._lastFontHash = nil
     self._sessionCache = {}
 
-    -- 渐隐系统初始化
     self._faded = false; self._fadeAnimating = false; self._wasMouseOver = false
     local fadeHoverFrame = CreateFrame("Frame")
     fadeHoverFrame._timer = 0
@@ -329,7 +320,6 @@ function UI:MakeSectHead(parent)
     local line = h:CreateTexture(nil,"ARTWORK"); line:SetHeight(1)
     line:SetPoint("BOTTOMLEFT",0,0); line:SetPoint("BOTTOMRIGHT",0,0); line:SetColorTexture(0.3,0.3,0.35,0.4)
 
-    -- 承伤子视图切换：友方(绿) + 敌方(红) 双按钮
     local dtFriendly = CreateFrame("Button", nil, h)
     dtFriendly:SetSize(32, SECTH_H - 4); dtFriendly:SetPoint("LEFT", h, "LEFT", 60, 0)
     local dtFriendlyText = self:FS(dtFriendly, 8, "OUTLINE"); dtFriendlyText:SetPoint("CENTER")
@@ -390,6 +380,7 @@ function UI:BuildBody()
         ovrSec = self:MakePinnedSelfBar(self.ovrContainer,  self.ovrSecList.sf, "ovrSec"),
     }
 
+    -- ★ hookScroll 透传 sessionID
     local function hookScroll(listObj, listKey)
         local origOnWheel = listObj.sf:GetScript("OnMouseWheel")
         listObj.sf:SetScript("OnMouseWheel", function(frame, delta)
@@ -397,7 +388,7 @@ function UI:BuildBody()
             if self._pinnedSelfCache and self._pinnedSelfCache[listKey] then
                 local args = self._pinnedSelfCache[listKey]
                 if args.type == "bars" then self:CheckPinnedSelfForBars(listKey, listObj, args.data, args.dur, args.mode, args.count)
-                elseif args.type == "api" then self:CheckPinnedSelfForAPI(listKey, listObj, args.sources, args.mode, args.maxAmt, args.sType) end
+                elseif args.type == "api" then self:CheckPinnedSelfForAPI(listKey, listObj, args.sources, args.mode, args.maxAmt, args.sType, args.sessionID) end
             end
         end)
     end
@@ -415,7 +406,7 @@ function UI:BuildResize()
         if not self._resizing then return end; self._resizing = false; self.frame:StopMovingOrSizing()
         if self._collapsed then return end
         local w, h = self:ClampSize(self.frame:GetWidth(), self.frame:GetHeight())
-        self.frame:SetSize(w, h)  -- 确保 frame 本身也被修正
+        self.frame:SetSize(w, h)
         ns.db.window.width = w; ns.db.window.height = h
         if ns.db.window.rememberSceneSize then
             local cat = ns.state.instanceCategory or "outdoor"

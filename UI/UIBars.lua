@@ -1,6 +1,11 @@
 --[[
     Light Damage - UIBars.lua
-    数据条：MakeBar, FillBars, FillBarsFromAPI, FillDeathBars, MakeValueStr
+    数据条:MakeBar, FillBars, FillBarsFromAPI, FillDeathBars, MakeValueStr
+
+    ★ 改造说明:
+    - FillBarsFromAPI 新增第 5 个可选参数 sessionID
+      如果传了,从 GetCombatSessionFromID(sid, dmType) 读 (用于虚拟段)
+      如果没传,沿用旧行为 GetCombatSessionFromType(sType, dmType)
 ]]
 local addonName, ns = ...
 local L = ns.L
@@ -10,7 +15,6 @@ local COUNT_MODES = UI.COUNT_MODES
 local MODE_TO_DM = UI.MODE_TO_DM
 local INTERP = Enum and Enum.StatusBarInterpolation and Enum.StatusBarInterpolation.ExponentialEaseOut
 
--- module-level helper：用于 pcall 调用而不创建闭包
 local function _safeSetBarValue(fs, total, ps, showPS, isCount, suffix)
     if isCount then
         fs:SetFormattedText("%s" .. suffix, ns.AbbrevNumber(total))
@@ -71,7 +75,7 @@ function UI:MakeBar(parent, section, index)
                 if ns.DetailView then
                     if bar._data and bar._data.isAPI then
                         local cleanGUID = bar._data.isLocalPlayer and UnitGUID("player") or nil
-                        if cleanGUID then ns.DetailView:ShowSpellBreakdownFromAPI(cleanGUID, nil, bar._nameStr, bar._classStr, bar._mode, bar._data.sessionType)
+                        if cleanGUID then ns.DetailView:ShowSpellBreakdownFromAPI(cleanGUID, nil, bar._nameStr, bar._classStr, bar._mode, bar._data.sessionType, bar._data.sessionID)
                         else ns.DetailView:ShowCombatLocked(bar._nameStr) end
                     else
                         local isOvr = bar.section and bar.section:sub(1, 3) == "ovr"
@@ -136,8 +140,6 @@ function UI:FillBars(bars, listObj, data, dur, mode)
                 bar.name:SetTextColor(nr, ng, nb)
             end
             if bar.specIcon then
-                -- 本地玩家自己用 GetSpecialization 拿实时 specID (切专精后立即生效)
-                -- 队友的 specID 通常拿不到 (不再 inspect), 靠 d.specIconID 走自动路径
                 local specID = d and d.specID
                 if d.guid == ns.state.playerGUID then
                     local specIdx = GetSpecialization()
@@ -158,11 +160,22 @@ function UI:FillBars(bars, listObj, data, dur, mode)
     if listKey then self:CheckPinnedSelfForBars(listKey, listObj, data, dur, mode, count) end
 end
 
-function UI:FillBarsFromAPI(bars, listObj, mode, sessionType)
+-- ★ 改造:新增第 5 个可选参数 sessionID
+--   传了 → 从 GetCombatSessionFromID(sid, dmType) 读 (虚拟段路径)
+--   没传 → 走 GetCombatSessionFromType(sType, dmType) (实时 current/overall 路径)
+function UI:FillBarsFromAPI(bars, listObj, mode, sessionType, sessionID)
     local dmType = MODE_TO_DM[mode]
     if not dmType then self:UpdateScrollState(listObj, 0); for _, bar in ipairs(bars) do bar.frame:Hide() end; return end
-    local sType = sessionType or Enum.DamageMeterSessionType.Current
-    local session = self:GetCachedSession(sType, dmType)
+
+    local session
+    if sessionID then
+        local ok, s = pcall(C_DamageMeter.GetCombatSessionFromID, sessionID, dmType)
+        if ok then session = s end
+    else
+        local sType = sessionType or Enum.DamageMeterSessionType.Current
+        session = self:GetCachedSession(sType, dmType)
+    end
+
     if not session or not session.combatSources then self:UpdateScrollState(listObj, 0); for _, bar in ipairs(bars) do bar.frame:Hide() end; return end
     local sources, maxAmt = session.combatSources, session.maxAmount
     local count = math.min(#sources, MAX_BARS); self:UpdateScrollState(listObj, count)
@@ -183,18 +196,15 @@ function UI:FillBarsFromAPI(bars, listObj, mode, sessionType)
             local tex = bar.statusbar:GetStatusBarTexture(); if tex then tex:SetVertexColor(cc[1], cc[2], cc[3], alpha) end
             bar.fill:SetVertexColor(cc[1], cc[2], cc[3], alpha)
 
-            -- statusbar:用 helper + pcall(无闭包)
             pcall(_safeSetStatusBar, bar.statusbar, maxAmt or 1, src.totalAmount)
 
             bar.rank:SetText(ns.db.display.showRank and (i .. ".") or "")
 
-            -- name:secret value 时跳过,避免崩溃
             local nameRaw = src.name
             local nameStr = ""
             local isSecret = issecretvalue and issecretvalue(nameRaw)
 
             if isSecret then
-                -- 【核心关键】：加密字符串可以直接给暴雪UI渲染，但绝对不能作任何 ~= 或 == 的比较！
                 nameStr = nameRaw
             elseif nameRaw then
                 local ok, str = pcall(tostring, nameRaw)
@@ -209,30 +219,30 @@ function UI:FillBarsFromAPI(bars, listObj, mode, sessionType)
                 bar.name:SetTextColor(nr, ng, nb)
             end
 
-            -- value:用 helper + pcall(无闭包)
             pcall(_safeSetBarValue, bar.value, src.totalAmount, src.amountPerSecond,
                   ns.db.display.showPerSecond, COUNT_MODES[mode], L["次"])
-                  
+
             if not bar._apiData then bar._apiData = {} end
             bar._apiData.isAPI = true; bar._apiData.sourceGUID = src.sourceGUID; bar._apiData.sourceCreatureID = src.sourceCreatureID
-            bar._apiData.isLocalPlayer = src.isLocalPlayer; bar._apiData.totalAmount = src.totalAmount; bar._apiData.amountPerSecond = src.amountPerSecond; bar._apiData.sessionType = sType
+            bar._apiData.isLocalPlayer = src.isLocalPlayer; bar._apiData.totalAmount = src.totalAmount; bar._apiData.amountPerSecond = src.amountPerSecond
+            bar._apiData.sessionType = sessionType
+            bar._apiData.sessionID = sessionID  -- ★ 透传给 detail view
             bar._data = bar._apiData; bar._mode = mode; bar._isDeath = false
             local guid = src.sourceGUID; bar._guid = guid; bar._classStr = cls
-            local isSecret = issecretvalue and issecretvalue(guid)
+            local isSecretGuid = issecretvalue and issecretvalue(guid)
             local specID, ilvl, score = nil, 0, 0
             if src.isLocalPlayer then
                 local specIdx = GetSpecialization(); if specIdx then specID = GetSpecializationInfo(specIdx) end
                 local _, equipped = GetAverageItemLevel(); ilvl = math.floor(equipped or 0)
                 local cache = ns.PlayerInfoCache and ns.PlayerInfoCache[ns.state.playerGUID] or {}; score = cache.score or 0
-            elseif not isSecret then
+            elseif not isSecretGuid then
                 local cache = ns.PlayerInfoCache and ns.PlayerInfoCache[guid] or {}
                 specID = cache.specID; ilvl = cache.ilvl or 0; score = cache.score or 0
             end
             bar._apiData.specID = specID; bar._apiData.ilvl = ilvl; bar._apiData.score = score
             bar._apiData.specIconID = src.specIconID
-            
+
             if bar.specIcon then
-                -- API 已直接给了 specIconID, 让 GetSpecIcon 自己挑路径
                 local icon = ns:GetSpecIcon(specID, cls, src.specIconID)
                 if bar._mode == "enemyDamageTaken" then icon = "Interface\\TargetingFrame\\UI-TargetingFrame-Skull" end
                 if ns.db.display.showSpecIcon and icon then bar.specIcon:SetTexture(icon); bar.specIcon:Show() else bar.specIcon:Hide() end
@@ -243,7 +253,7 @@ function UI:FillBarsFromAPI(bars, listObj, mode, sessionType)
     local listKey = nil
     if listObj == self.priList then listKey = "pri" elseif listObj == self.secList then listKey = "sec"
     elseif listObj == self.ovrPriList then listKey = "ovrPri" elseif listObj == self.ovrSecList then listKey = "ovrSec" end
-    if listKey then self:CheckPinnedSelfForAPI(listKey, listObj, sources, mode, maxAmt, sType) end
+    if listKey then self:CheckPinnedSelfForAPI(listKey, listObj, sources, mode, maxAmt, sessionType, sessionID) end
 end
 
 function UI:FillDeathBars(seg, bars, listObj)

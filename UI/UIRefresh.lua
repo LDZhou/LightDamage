@@ -1,6 +1,10 @@
 --[[
     Light Damage - UIRefresh.lua
-    刷新逻辑：Refresh, RefreshTitle, RefreshHead, ShowTooltip, FillOvrBars
+    刷新逻辑:Refresh, RefreshTitle, RefreshHead, ShowTooltip, FillOvrBars
+
+    ★ 改造说明 (虚拟段架构):
+    - 增加 isViewingVirtual 分支:数据从 GetCombatSessionFromID(sid, dmType) 现读
+    - 旧 viewIndex == 0 / viewIndex truthy 判断 → 用 IsViewingOverall/IsViewing* 替换
 ]]
 local addonName, ns = ...
 local L = ns.L
@@ -11,14 +15,14 @@ local MODE_TO_DM = UI.MODE_TO_DM
 
 function UI:Refresh()
     if not self.frame or not self.frame:IsShown() then return end
-    -- 嵌套结构的 cache,wipe 子表
     if self._sessionCache then
         for _, sub in pairs(self._sessionCache) do wipe(sub) end
     else
         self._sessionCache = {}
     end
 
-    local seg  = ns.Segments and ns.Segments:GetViewSegment()
+    local segs = ns.Segments
+    local seg  = segs and segs:GetViewSegment()
     local dur  = ns.Analysis  and ns.Analysis:GetSegmentDuration(seg) or 0
     local sp   = ns.db.split; local mode = ns.db.display.mode
     local useOvr = self:IsOverallColumnActive()
@@ -29,32 +33,29 @@ function UI:Refresh()
         return m
     end
 
-    -- RefreshTitle 节流:0.5s 内最多 1 次。M+ 倒计时本来就是秒级精度,不影响功能。
+    -- RefreshTitle 节流
     local now = GetTime()
     if not self._lastTitleRefresh or (now - self._lastTitleRefresh) > 0.5 then
         self._lastTitleRefresh = now
         self:RefreshTitle()
     end
 
-    -- Summary 栏
+    -- Summary 栏 ★ 总计永远直读暴雪 API Overall(战斗中/脱战统一)
     if self.summaryBar:IsShown() then
         local ovrTitleWord = L["总计"]
-        local ovrSeg = ns.Segments and ns.Segments.overall
+        local ovrSeg = segs and segs.overall
         if ovrSeg and ovrSeg._isMerged then ovrTitleWord = L["全程"] end
+        local durSafe = C_DamageMeter.GetSessionDurationSeconds(Enum.DamageMeterSessionType.Overall) or 0
+        local dmDmg = self:GetCachedSession(Enum.DamageMeterSessionType.Overall, Enum.DamageMeterType.DamageDone)
+        local dmHeal = self:GetCachedSession(Enum.DamageMeterSessionType.Overall, Enum.DamageMeterType.HealingDone)
+        -- ★ totalAmount 是 secret value,不能比较;直接 pcall(AbbreviateNumbers) 让暴雪函数内部处理
+        local dmgStr, healStr = "0", "0"
+        if dmDmg then local ok3, s = pcall(AbbreviateNumbers, dmDmg.totalAmount); if ok3 and s then dmgStr = s end end
+        if dmHeal then local ok4, s = pcall(AbbreviateNumbers, dmHeal.totalAmount); if ok4 and s then healStr = s end end
         if ns.state.inCombat then
-            local durSafe = C_DamageMeter.GetSessionDurationSeconds(Enum.DamageMeterSessionType.Overall) or 0
-            local dmDmg = self:GetCachedSession(Enum.DamageMeterSessionType.Overall, Enum.DamageMeterType.DamageDone)
-            local dmHeal = self:GetCachedSession(Enum.DamageMeterSessionType.Overall, Enum.DamageMeterType.HealingDone)
-            local dmgStr, healStr = "0", "0"
-            if dmDmg then local ok3, s = pcall(AbbreviateNumbers, dmDmg.totalAmount); if ok3 and s then dmgStr = s end end
-            if dmHeal then local ok4, s = pcall(AbbreviateNumbers, dmHeal.totalAmount); if ok4 and s then healStr = s end end
             self.summText:SetFormattedText(L["全程 %s  |  Damage |cffffd100%s|r  Heal |cff66ff66%s|r"], ns:FormatTime(durSafe), dmgStr, healStr)
         else
-            local ovrDmg = ovrSeg and ovrSeg.totalDamage or 0; local ovrHeal = ovrSeg and ovrSeg.totalHealing or 0
-            local ovrDur = C_DamageMeter.GetSessionDurationSeconds(Enum.DamageMeterSessionType.Overall) or (ovrSeg and ovrSeg.duration or 0)
-            if ovrDmg > 0 or ovrHeal > 0 then
-                self.summText:SetText(string.format(L["%s %s  |  Damage |cffffd100%s|r  Heal |cff66ff66%s|r"], ovrTitleWord, ns:FormatTime(ovrDur), ns:FormatNumber(ovrDmg), ns:FormatNumber(ovrHeal)))
-            else self.summText:SetText(string.format(L["%s 0:00  |  Damage 0  Heal 0"], ovrTitleWord)) end
+            self.summText:SetText(string.format(L["%s %s  |  Damage |cffffd100%s|r  Heal |cff66ff66%s|r"], ovrTitleWord, ns:FormatTime(durSafe), dmgStr, healStr))
         end
     end
 
@@ -70,21 +71,40 @@ function UI:Refresh()
 
     -- 数据路径
     local isDeathMode = (mode == "deaths"); local forceDataMode = isDeathMode
-    local isOverall = ns.Segments and ns.Segments.viewIndex == 0
-    local showingCurrent = ns.state.inCombat and ns.Segments and not isOverall and not (ns.Segments.viewIndex and ns.Segments.history[ns.Segments.viewIndex])
-    local showingOverallInCombat = ns.state.inCombat and isOverall
 
-    if showingCurrent and not forceDataMode then
+    -- ★ 改造:用 key helper 替代 viewIndex 数字判断
+    local isOverall = segs and segs:IsViewingOverall()
+    local isVirtual = segs and segs:IsViewingVirtual()
+    local isArchived = segs and segs:IsViewingArchived()
+    local isCurrent = segs and segs:IsViewingCurrent()
+
+    -- ★ 看 current 但脱战:取 API 列表里最后一个 session 的 sessionID
+    local currentFallbackSID = nil
+    if isCurrent and not ns.state.inCombat then
+        local ok, list = pcall(C_DamageMeter.GetAvailableCombatSessions)
+        if ok and list and #list > 0 then
+            local last = list[#list]
+            currentFallbackSID = last and last.sessionID or nil
+        end
+    end
+
+    -- 走 API 路径的判定
+    local routeOverallAPI = isOverall and not forceDataMode
+    local routeCurrentLive = isCurrent and ns.state.inCombat and not forceDataMode
+    local routeCurrentFallback = isCurrent and (not ns.state.inCombat) and currentFallbackSID and not forceDataMode
+    local routeVirtual = isVirtual and not forceDataMode and seg and seg._sessionID
+
+    if routeCurrentLive then
         local sType = Enum.DamageMeterSessionType.Current
         if isSplitView then
             self:RefreshHead(self.priHead, sp.primaryMode, nil, 0, sType); self:RefreshHead(self.secHead, sp.secondaryMode, nil, 0, sType)
-            self:FillBarsFromAPI(self.priBars, self.priList, effMode(sp.primaryMode), sType); self:FillBarsFromAPI(self.secBars, self.secList, effMode(sp.secondaryMode), sType)            
+            self:FillBarsFromAPI(self.priBars, self.priList, effMode(sp.primaryMode), sType); self:FillBarsFromAPI(self.secBars, self.secList, effMode(sp.secondaryMode), sType)
             if useOvr then self:FillOvrBars(isSplitView, sp, mode) end
         else
             self:RefreshHead(self.priHead, mode, nil, 0, sType); self:FillBarsFromAPI(self.priBars, self.priList, effMode(mode), sType)
             if useOvr then self:FillOvrBars(isSplitView, sp, mode) end
         end
-    elseif showingOverallInCombat and not forceDataMode then
+    elseif routeOverallAPI then
         local sType = Enum.DamageMeterSessionType.Overall
         if isSplitView then
             self:RefreshHead(self.priHead, sp.primaryMode, nil, 0, sType); self:RefreshHead(self.secHead, sp.secondaryMode, nil, 0, sType)
@@ -94,32 +114,51 @@ function UI:Refresh()
             self:RefreshHead(self.priHead, mode, nil, 0, sType); self:FillBarsFromAPI(self.priBars, self.priList, effMode(mode), sType)
             if useOvr then self:FillOvrBars(isSplitView, sp, mode) end
         end
+    elseif routeCurrentFallback then
+        -- ★ 脱战看 current:读 API 最后一个 session(刚结束那场)
+        local sid = currentFallbackSID
+        if isSplitView then
+            self:RefreshHead(self.priHead, sp.primaryMode, nil, 0, nil, sid); self:RefreshHead(self.secHead, sp.secondaryMode, nil, 0, nil, sid)
+            self:FillBarsFromAPI(self.priBars, self.priList, effMode(sp.primaryMode), nil, sid)
+            self:FillBarsFromAPI(self.secBars, self.secList, effMode(sp.secondaryMode), nil, sid)
+            if useOvr then self:FillOvrBars(isSplitView, sp, mode) end
+        else
+            self:RefreshHead(self.priHead, mode, nil, 0, nil, sid)
+            self:FillBarsFromAPI(self.priBars, self.priList, effMode(mode), nil, sid)
+            if useOvr then self:FillOvrBars(isSplitView, sp, mode) end
+        end
+    elseif routeVirtual then
+        -- ★ 虚拟段:从 GetCombatSessionFromID 现读
+        local sid = seg._sessionID
+        if isSplitView then
+            self:RefreshHead(self.priHead, sp.primaryMode, nil, 0, nil, sid); self:RefreshHead(self.secHead, sp.secondaryMode, nil, 0, nil, sid)
+            self:FillBarsFromAPI(self.priBars, self.priList, effMode(sp.primaryMode), nil, sid)
+            self:FillBarsFromAPI(self.secBars, self.secList, effMode(sp.secondaryMode), nil, sid)
+            if useOvr then self:FillOvrBars(isSplitView, sp, mode) end
+        else
+            self:RefreshHead(self.priHead, mode, nil, 0, nil, sid)
+            self:FillBarsFromAPI(self.priBars, self.priList, effMode(mode), nil, sid)
+            if useOvr then self:FillOvrBars(isSplitView, sp, mode) end
+        end
     else
+        -- 归档段 / 无数据 fallback
         if isSplitView then
             local priD = ns.Analysis and ns.Analysis:GetSorted(seg, sp.primaryMode) or {}
             local secD = ns.Analysis and ns.Analysis:GetSorted(seg, sp.secondaryMode) or {}
             self:RefreshHead(self.priHead, sp.primaryMode, seg, dur); self:RefreshHead(self.secHead, sp.secondaryMode, seg, dur)
             self:FillBars(self.priBars, self.priList, priD, dur, sp.primaryMode); self:FillBars(self.secBars, self.secList, secD, dur, sp.secondaryMode)
-            if useOvr then
-                local ovrSeg = ns.Segments and ns.Segments:GetOverallSegment(); local ovrDur = ovrSeg and ovrSeg.duration or 0
-                self:FillBars(self.ovrPriBars, self.ovrPriList, ns.Analysis and ns.Analysis:GetSorted(ovrSeg, sp.primaryMode) or {}, ovrDur, sp.primaryMode)
-                self:FillBars(self.ovrSecBars, self.ovrSecList, ns.Analysis and ns.Analysis:GetSorted(ovrSeg, sp.secondaryMode) or {}, ovrDur, sp.secondaryMode)
-            end
+            if useOvr then self:FillOvrBars(isSplitView, sp, mode) end
         else
             self:RefreshHead(self.priHead, mode, seg, dur)
             if isDeathMode then self:FillDeathBars(seg) else self:FillBars(self.priBars, self.priList, ns.Analysis and ns.Analysis:GetSorted(seg, mode) or {}, dur, mode) end
-            if useOvr then
-                local ovrSeg = ns.Segments and ns.Segments:GetOverallSegment()
-                if isDeathMode then self:FillDeathBars(ovrSeg, self.ovrPriBars, self.ovrPriList)
-                else self:FillBars(self.ovrPriBars, self.ovrPriList, ns.Analysis and ns.Analysis:GetSorted(ovrSeg, mode) or {}, (ovrSeg and ovrSeg.duration or 0), mode) end
-            end
+            if useOvr then self:FillOvrBars(isSplitView, sp, mode) end
         end
     end
 
-    -- 刷新总计栏标题（友方/敌方切换时同步）
+    -- 总计栏标题
     if useOvr and self.ovrContainer and self.ovrContainer:IsShown() then
         local ovrTitleWord = L["总计"]
-        if ns.Segments and ns.Segments.overall and ns.Segments.overall._isMerged then ovrTitleWord = L["全程"] end
+        if segs and segs.overall and segs.overall._isMerged then ovrTitleWord = L["全程"] end
         if isSplitView then
             local priLabel = L[ns.MODE_NAMES[sp.primaryMode] or ""]
             local secLabel = L[ns.MODE_NAMES[sp.secondaryMode] or ""]
@@ -140,31 +179,28 @@ function UI:FillOvrBars(isSplitView, sp, mode)
         if m == "damageTaken" and ns.state.damageTakenView == "enemy" then return "enemyDamageTaken" end
         return m
     end
-    if ns.state.inCombat then
-        local ovr = ns.Segments and ns.Segments.overall; local hasPriorData = ovr and (ovr.totalDamage > 0 or ovr.totalHealing > 0)
-        local sType = hasPriorData and Enum.DamageMeterSessionType.Overall or Enum.DamageMeterSessionType.Current
-        if isSplitView then self:FillBarsFromAPI(self.ovrPriBars, self.ovrPriList, effMode(sp.primaryMode), sType); self:FillBarsFromAPI(self.ovrSecBars, self.ovrSecList, effMode(sp.secondaryMode), sType)
-        else self:FillBarsFromAPI(self.ovrPriBars, self.ovrPriList, effMode(mode), sType) end
+    -- ★ 总计永远直读暴雪 API Overall;ResetAllCombatSessions 会清零,语义即"本副本/本次重置以来"
+    local sType = Enum.DamageMeterSessionType.Overall
+    if isSplitView then
+        self:FillBarsFromAPI(self.ovrPriBars, self.ovrPriList, effMode(sp.primaryMode), sType)
+        self:FillBarsFromAPI(self.ovrSecBars, self.ovrSecList, effMode(sp.secondaryMode), sType)
     else
-        local ovrSeg = ns.Segments and ns.Segments:GetOverallSegment(); local ovrDur = ns.Analysis and ns.Analysis:GetSegmentDuration(ovrSeg) or 0
-        if isSplitView then
-            self:FillBars(self.ovrPriBars, self.ovrPriList, ns.Analysis and ns.Analysis:GetSorted(ovrSeg, sp.primaryMode) or {}, ovrDur, sp.primaryMode)
-            self:FillBars(self.ovrSecBars, self.ovrSecList, ns.Analysis and ns.Analysis:GetSorted(ovrSeg, sp.secondaryMode) or {}, ovrDur, sp.secondaryMode)
-        else self:FillBars(self.ovrPriBars, self.ovrPriList, ns.Analysis and ns.Analysis:GetSorted(ovrSeg, mode) or {}, ovrDur, mode) end
+        self:FillBarsFromAPI(self.ovrPriBars, self.ovrPriList, effMode(mode), sType)
     end
 end
 
 function UI:RefreshTitle()
     if not self.frame or not self.frame:IsShown() then return end; if not self.titleText then return end
-    local segL = ns.Segments and ns.Segments:GetViewLabel() or L["无数据"]
+    local segs = ns.Segments
+    local segL = segs and segs:GetViewLabel() or L["无数据"]
     local dot = ""
     local dur = 0
     if ns.state.inCombat and ns.state.combatStartTime and ns.state.combatStartTime > 0 then
-        local isViewingOverall = ns.Segments and ns.Segments.viewIndex == 0
+        local isViewingOverall = segs and segs:IsViewingOverall()
         if isViewingOverall then dur = C_DamageMeter.GetSessionDurationSeconds(Enum.DamageMeterSessionType.Overall) or 0
         else dur = C_DamageMeter.GetSessionDurationSeconds(Enum.DamageMeterSessionType.Current) or 0 end
     else
-        local seg = ns.Segments and ns.Segments:GetViewSegment()
+        local seg = segs and segs:GetViewSegment()
         if seg and seg._keystoneTime and seg._keystoneTime > 0 then dur = seg._keystoneTime else dur = seg and (seg.duration or 0) or 0 end
     end
     local tStr = dur > 0 and ("|cffaaaaaa" .. ns:FormatTime(dur) .. "|r") or ""
@@ -180,11 +216,11 @@ function UI:RefreshTitle()
     self.titleText:SetText(dot .. segL)
 end
 
-function UI:RefreshHead(h, mode, seg, dur, apiSessionType)
+-- ★ 增加 sessionID 参数
+function UI:RefreshHead(h, mode, seg, dur, apiSessionType, apiSessionID)
     if not h:IsShown() then return end
     local mn = L[ns.MODE_NAMES[mode] or mode]
 
-    -- 承伤模式下显示友方/敌方双按钮
     if h.dtFriendly then
         if mode == "damageTaken" then
             local isEnemy = (ns.state.damageTakenView == "enemy")
@@ -206,10 +242,8 @@ function UI:RefreshHead(h, mode, seg, dur, apiSessionType)
     local ac = mode=="damage" and T.dmgC or mode=="healing" and T.healC or mode=="damageTaken" and T.takenC or T.accent
     h.label:SetText(string.format("|cff%02x%02x%02x%s|r", ac[1]*255, ac[2]*255, ac[3]*255, mn))
 
-    -- 承伤模式：固定按钮位置，防止跳动
     if mode == "damageTaken" and h.dtFriendly then
         if not h._dtMaxLabelW then
-            -- 首次计算：测量两种文字的最大宽度并缓存
             local savedText = h.label:GetText()
             h.label:SetWidth(0)
             local fmt = "|cff%02x%02x%02x%s|r"
@@ -220,7 +254,6 @@ function UI:RefreshHead(h, mode, seg, dur, apiSessionType)
             h._dtMaxLabelW = math.max(w1, w2) + 2
             h.label:SetText(savedText)
         end
-        -- 按钮锚定到 header LEFT + 固定偏移，不跟随 label 宽度
         h.dtFriendly:ClearAllPoints()
         h.dtFriendly:SetPoint("LEFT", h, "LEFT", 6 + h._dtMaxLabelW + 4, 0)
         h.dtEnemy:ClearAllPoints()
@@ -237,6 +270,18 @@ function UI:RefreshHead(h, mode, seg, dur, apiSessionType)
         end
         local valStr = COUNT_MODES[mode] and (ns:FormatNumber(total)..L["次"]) or ns:FormatNumber(total)
         h.info:SetText(string.format(L["团队总%s: %s"], mn, valStr))
+    elseif apiSessionID then
+        -- ★ 虚拟段:从 GetCombatSessionFromID 读 totalAmount
+        local effM = mode
+        if mode == "damageTaken" and ns.state.damageTakenView == "enemy" then effM = "enemyDamageTaken" end
+        local dmType = MODE_TO_DM[effM]
+        if dmType then
+            local ok, session = pcall(C_DamageMeter.GetCombatSessionFromID, apiSessionID, dmType)
+            if ok and session and session.totalAmount then
+                if COUNT_MODES[mode] then h.info:SetFormattedText(L["团队总%s: %s次"], mn, AbbreviateNumbers(session.totalAmount))
+                else h.info:SetFormattedText(L["团队总%s: %s"], mn, AbbreviateNumbers(session.totalAmount)) end
+            else h.info:SetText("") end
+        else h.info:SetText("") end
     elseif apiSessionType then
         local effM = mode
         if mode == "damageTaken" and ns.state.damageTakenView == "enemy" then effM = "enemyDamageTaken" end
@@ -252,7 +297,7 @@ function UI:RefreshHead(h, mode, seg, dur, apiSessionType)
 end
 
 -- ============================================================
--- Tooltip
+-- Tooltip (原样保留)
 -- ============================================================
 function UI:AnchorTooltipToWindow(bar)
     local f = self.frame; if not f then GameTooltip:SetOwner(bar.frame, "ANCHOR_LEFT"); return end
@@ -281,7 +326,6 @@ function UI:ShowTooltip(bar, section)
         local _, name = GetSpecializationInfoByID(specID)
         if name then specName = name end
     end
-    -- 兜底:用 specIconID 反查 (队友未 inspect 时也能拿到名字)
     if specName == "" and d and d.specIconID and d.specIconID > 0 and ns.ICON_TO_SPECID then
         local sid = ns.ICON_TO_SPECID[d.specIconID]
         if sid then
@@ -289,7 +333,7 @@ function UI:ShowTooltip(bar, section)
             if name then specName = name end
         end
     end
-    
+
     local function AddPlayerInfoLines()
         if specName ~= "" or (ilvl and ilvl > 0) or (score and score > 0) then
             GameTooltip:AddLine(" ")
