@@ -103,37 +103,32 @@ function HL:Build()
     clrBtn:SetScript("OnClick", function()
         if not ns.Segments then self:Hide(); return end
         local segs = ns.Segments
+        self:Hide()
 
-        -- 1. 已归档段:对"野外段"加 localID 黑名单(等价于隐藏/删除),保留副本相关
+        -- 1. 清掉所有标记为野外的归档段
         ns.db.hiddenLocalIDs = ns.db.hiddenLocalIDs or {}
+        local cleared = 0
         for _, seg in ipairs(segs.history) do
-            local keep = false
-            if seg.type == "mythicplus" or seg.type == "boss" then keep = true end
-            if seg._isBoss or seg._isMerged or seg._instanceTag then keep = true end
-            if (not keep) and seg._localID then
+            if seg._wasOutdoor
+               and not seg._isBoss
+               and not seg._isMerged
+               and seg._localID
+            then
                 ns.db.hiddenLocalIDs[seg._localID] = true
+                cleared = cleared + 1
             end
         end
 
-        -- 2. 野外时:虚拟段全部失效,直接 ResetMeter 一并清掉
-        --    (虚拟段没有"是否副本"的概念,野外清空意味着这一刻所有 API session 都该清)
+        -- 2. 当前在野外:暴雪 API 的 sessions 全是野外产生的,直接 reset 干掉所有虚拟段
+        --    当前在副本:不动 meter,副本里跑的 sessions 都要保留
         if not ns.state.isInInstance then
             if ns.CombatTracker then
                 ns.CombatTracker:ResetMeterForNewRun()
             end
-            -- ResetMeter 已清空 hiddenSessionIDs;重建 overall
             segs.overall = segs:NewSegment("overall", L["总计"])
-        else
-            -- 副本中:不能动 meter (保留副本累计数据),改为隐藏当前所有虚拟段
-            ns.db.hiddenSessionIDs = ns.db.hiddenSessionIDs or {}
-            for _, vseg in ipairs(segs:BuildVirtualSegments()) do
-                if vseg._sessionID then
-                    ns.db.hiddenSessionIDs[vseg._sessionID] = true
-                end
-            end
         end
 
-        -- 3. 视图修正:跳到合并列表第一项,没有则跳 current
+        -- 3. 视图修正：清完后总是跳到合并列表第一条
         local merged = segs:GetMergedSegmentList()
         if merged[1] then
             if merged[1]._isVirtual then
@@ -148,7 +143,7 @@ function HL:Build()
         if ns.SaveSessionHistory then ns:SaveSessionHistory() end
         if ns.Analysis then ns.Analysis:InvalidateCache() end
         if ns.UI then ns.UI:Refresh() end
-        self:Hide()
+
         print(L["|cff00ccff[Light Damage]|r 已清空所有野外历史记录，只保留副本与首领战数据。"])
     end)
     self.clearBtn = clrBtn

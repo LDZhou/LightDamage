@@ -125,6 +125,7 @@ function ns:SaveSessionHistory()
             _sessionID       = seg._sessionID,
             _sessionIdx      = seg._sessionIdx,
             _localID         = seg._localID,    -- ★ 持久化 localID
+            _wasOutdoor      = seg._wasOutdoor,
             _dataLoaded      = seg._dataLoaded,
             players          = {},
             deathLog         = {},

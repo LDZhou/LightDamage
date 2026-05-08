@@ -161,6 +161,7 @@ local function processArchivedSessions()
             seg._sessionID = sid
             seg._dataLoaded = false
             seg._localID = segs:GenLocalID("arch")   -- ★ 分配本地 ID
+            seg._wasOutdoor = (instanceTag == nil)
 
             -- 死亡日志构建(原样保留)
             local ok2, deathSession = pcall(C_DamageMeter.GetCombatSessionFromID,

@@ -323,7 +323,6 @@ function Config:BuildPerfPage()
     y = self:Slider(inner, L["脱战刷新间隔 (秒)"], y, 0.5, 5.0, 0.5, function() return ns.db.smartRefresh.idleInterval end, function(v) ns.db.smartRefresh.idleInterval=v end)
     y = y - 12
     y = self:H(inner, L["数据追踪"], y)
-    y = self:Slider(inner, L["历史记录保存上限"], y, 5, 100, 1, function() return ns.db.tracking.maxSegments or 20 end, function(v) ns.db.tracking.maxSegments=v; ns.Segments:SetViewSegment(ns.Segments.viewIndex) end)
-    y = self:Desc(inner, y, L["(当超过上限时，将自动删除小怪记录，优先保留Boss战和副本全程记录)"])
+    y = self:Slider(inner, L["历史记录显示上限"], y, 5, 100, 1, function() return ns.db.tracking.maxSegments or 20 end, function(v) ns.db.tracking.maxSegments=v; ns.Segments:SetViewSegment(ns.Segments.viewIndex) end)
     inner:SetHeight(math.abs(y) + 20)
 end

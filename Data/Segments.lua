@@ -256,6 +256,10 @@ function Segments:OnCombatEnd()
     self._locked = false
     self.current.isActive = false
     self.current.endTime  = GetTime()
+    -- ★ 写一下 duration，脱战后标题栏 RefreshTitle 才有时间显示
+    if self.current.startTime and self.current.startTime > 0 then
+        self.current.duration = self.current.endTime - self.current.startTime
+    end
     -- ★ 不再清空 self.current:脱战后底部"当前"行继续显示这场刚结束的战斗。
     --   下一场战斗 OnCombatStart 时会被覆盖。
     if ns.DeathTracker then ns.DeathTracker:ClearBuffers() end
@@ -375,27 +379,18 @@ end
 function Segments:GetMergedSegmentList()
     local merged = {}
 
-    -- 1. 已归档段(过滤 _localID 黑名单)
+    -- 虚拟段（最新的在前，因为是按 sessionID 倒序拼的）
+    local virtuals = self:BuildVirtualSegments()
+    for i = #virtuals, 1, -1 do
+        table.insert(merged, virtuals[i])
+    end
+
+    -- 已归档段（history 数组本身就是新→旧）
     for _, seg in ipairs(self.history) do
         if not isLocalIDHidden(seg._localID) then
             table.insert(merged, seg)
         end
     end
-
-    -- 2. 虚拟段
-    for _, seg in ipairs(self:BuildVirtualSegments()) do
-        table.insert(merged, seg)
-    end
-
-    -- 时间倒序:endTime 大的在前;startTime 兜底
-    table.sort(merged, function(a, b)
-        local ae = a.endTime or a.startTime or 0
-        local be = b.endTime or b.startTime or 0
-        if ae == be then
-            return (a.startTime or 0) > (b.startTime or 0)
-        end
-        return ae > be
-    end)
 
     return merged
 end
