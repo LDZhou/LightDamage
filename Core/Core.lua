@@ -587,10 +587,25 @@ function ns:HandleSlashCommand(msg)
         end
 
     elseif msg:match("^lang") then
-        local langInput = msg:match("lang%s+(%w+)"):lower()
+        local langInput = msg:match("^lang%s+(%w+)$")
+        if not langInput then
+            print("|cff00ccff[Light Damage]|r lang: enUS / zhCN / zhTW")
+            return
+        end
+
+        langInput = langInput:lower()
         local targetLang = "zhCN"
-        if langInput == "enus" then targetLang = "enUS"
-        elseif langInput == "zhtw" then targetLang = "zhTW" end
+        if langInput == "enus" then
+            targetLang = "enUS"
+        elseif langInput == "zhtw" then
+            targetLang = "zhTW"
+        elseif langInput == "zhcn" then
+            targetLang = "zhCN"
+        else
+            print("|cff00ccff[Light Damage]|r lang: enUS / zhCN / zhTW")
+            return
+        end
+
         if ns.SwitchLanguage then
             ns:SwitchLanguage(targetLang)
             if ns.Config and ns.Config.RefreshUI then ns.Config:RefreshUI() end

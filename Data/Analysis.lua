@@ -148,13 +148,25 @@ function Analysis:GetSpellBreakdown(segment, guid, mode)
     local totalValue = 0
 
     local sourceTable = pd.spells
-    if mode == "interrupts" then sourceTable = pd.interruptSpells or {}
-    elseif mode == "dispels" then sourceTable = pd.dispelSpells or {} end
+    if mode == "damageTaken" then
+        sourceTable = pd.damageTakenSpells or {}
+    elseif mode == "interrupts" then
+        sourceTable = pd.interruptSpells or {}
+    elseif mode == "dispels" then
+        sourceTable = pd.dispelSpells or {}
+    end
 
     for spellID, sd in pairs(sourceTable) do
         local value = 0
-        if mode == "damage"  then value = sd.damage
-        elseif mode == "healing" then value = sd.healing end
+        if mode == "damage" then
+            value = sd.damage or 0
+        elseif mode == "healing" then
+            value = sd.healing or 0
+        elseif mode == "damageTaken" then
+            value = sd.damage or 0
+        elseif mode == "interrupts" or mode == "dispels" then
+            value = sd.hits or sd.damage or 0
+        end
 
         if value > 0 then
             table.insert(result, {
@@ -179,8 +191,13 @@ function Analysis:GetSpellBreakdown(segment, guid, mode)
         for petGUID, pet in pairs(pd.pets) do
             for spellID, sd in pairs(pet.spells or {}) do
                 local value = 0
-                if mode == "damage"  then value = sd.damage
-                elseif mode == "healing" then value = sd.healing end
+                if mode == "damage" then
+                    value = sd.damage or 0
+                elseif mode == "healing" then
+                    value = sd.healing or 0
+                elseif mode == "damageTaken" then
+                    value = sd.damage or 0
+                end
 
                 if value > 0 then
                     table.insert(result, {

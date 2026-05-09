@@ -80,6 +80,59 @@ function ns.CombatTracker:MergeAndCleanInstance(instanceTag, mythicLevel, mythic
     elseif instSegs[1].seg._instanceDisplayName and instSegs[1].seg._instanceDisplayName ~= "" then zoneName = instSegs[1].seg._instanceDisplayName
     else zoneName = instanceTag:match("^([^|]+)") or L["副本"] end
 
+    local function normalizeSessionName(name)
+        if not name or name == "" then return "" end
+        name = tostring(name)
+        name = name:gsub("|c%x%x%x%x%x%x%x%x", "")
+        name = name:gsub("|r", "")
+        name = name:gsub("%s+", "")
+        return name:lower()
+    end
+
+    local function findBlizzardOverallSessionID()
+        -- ★ 只有启用“自动生成全程段”时，才隐藏暴雪官方汇总段
+        if not doGenOverall then return nil end
+
+        if not C_DamageMeter or not C_DamageMeter.GetAvailableCombatSessions then
+            return nil
+        end
+
+        local wantedName = normalizeSessionName(zoneName)
+        if wantedName == "" then return nil end
+
+        local ok, sessions = pcall(C_DamageMeter.GetAvailableCombatSessions)
+        if not ok or not sessions then return nil end
+
+        local foundSID = nil
+
+        for _, s in ipairs(sessions) do
+            local rawName = s and s.name
+            if rawName and s.sessionID then
+                local compact = normalizeSessionName(rawName)
+
+                -- ★ 只检测当前副本名，不检测层数
+                if compact:find(wantedName, 1, true) then
+                    foundSID = s.sessionID
+                end
+            end
+        end
+
+        return foundSID
+    end
+
+    local function hideBlizzardOverallSession(sessionID)
+        if not doGenOverall then return end
+        if not sessionID or not ns.db then return end
+        ns.db.hiddenSessionIDs = ns.db.hiddenSessionIDs or {}
+        ns.db.hiddenSessionIDs[sessionID] = true
+
+        if ns.HistoryList and ns.HistoryList.Refresh then
+            ns.HistoryList:Refresh()
+        end
+    end
+
+    local blizzardOverallSID = findBlizzardOverallSessionID()
+
     local function cloneOverallToMerged(merged)
         -- ★ 直接从暴雪 Overall session 拉数据,避开手动累加导致的"全程汇总 session 被重复计入"问题
         local function getAmount(val)
@@ -89,9 +142,25 @@ function ns.CombatTracker:MergeAndCleanInstance(instanceTag, mythicLevel, mythic
         end
 
         local sType = Enum.DamageMeterSessionType.Overall
-        local function fetchTotal(dmType)
+
+        local function getSession(dmType)
             local ok, sess = pcall(C_DamageMeter.GetCombatSessionFromType, sType, dmType)
-            if ok and sess and sess.totalAmount then return getAmount(sess.totalAmount) end
+            if ok and sess then return sess end
+            return nil
+        end
+
+        local function getSourceData(dmType, guid, creatureID)
+            local ok, srcData = pcall(
+                C_DamageMeter.GetCombatSessionSourceFromType,
+                sType, dmType, guid, creatureID
+            )
+            if ok and srcData then return srcData end
+            return nil
+        end
+
+        local function fetchTotal(dmType)
+            local sess = getSession(dmType)
+            if sess and sess.totalAmount then return getAmount(sess.totalAmount) end
             return 0
         end
 
@@ -101,8 +170,8 @@ function ns.CombatTracker:MergeAndCleanInstance(instanceTag, mythicLevel, mythic
 
         local apiDur = C_DamageMeter.GetSessionDurationSeconds(Enum.DamageMeterSessionType.Overall) or 0
         merged.duration = (CT._overallDurationSnapshot and CT._overallDurationSnapshot > 0)
-                          and CT._overallDurationSnapshot
-                          or (apiDur > 0 and apiDur or 0)
+                        and CT._overallDurationSnapshot
+                        or (apiDur > 0 and apiDur or 0)
 
         -- 玩家数据：从暴雪 Overall session 的 combatSources 重建
         merged.players = {}
@@ -111,34 +180,210 @@ function ns.CombatTracker:MergeAndCleanInstance(instanceTag, mythicLevel, mythic
             [Enum.DamageMeterType.HealingDone] = "healing",
             [Enum.DamageMeterType.DamageTaken] = "damageTaken",
         }) do
-            local ok, sess = pcall(C_DamageMeter.GetCombatSessionFromType, sType, dmType)
-            if ok and sess and sess.combatSources then
+            local spellField = field == "damageTaken" and "damageTakenSpells" or "spells"
+            local sess = getSession(dmType)
+
+            if sess and sess.combatSources then
                 for _, src in ipairs(sess.combatSources) do
                     local guid = src.sourceGUID
                     local total = getAmount(src.totalAmount)
+
                     if guid and total > 0 then
                         local hasValidClass = src.classFilename and src.classFilename ~= ""
                         local creatureID = src.sourceCreatureID
                         local isPet = (creatureID ~= nil and creatureID > 0) and not hasValidClass
+
                         if not isPet then
                             local pd = merged.players[guid]
                             if not pd then
                                 pd = segs:NewPlayerData(guid, src.name, src.classFilename or "WARRIOR")
                                 merged.players[guid] = pd
                             end
+
                             pd.class = src.classFilename or pd.class
-                            if src.specIconID and src.specIconID > 0 then pd.specIconID = src.specIconID end
+                            if src.specIconID and src.specIconID > 0 then
+                                pd.specIconID = src.specIconID
+                            end
+
                             pd[field] = (pd[field] or 0) + total
+
+                            -- ★ 补齐技能细分：伤害 / 治疗 / 友方承伤
+                            local srcData = getSourceData(dmType, guid, creatureID)
+                            if srcData and srcData.combatSpells then
+                                for _, sp in ipairs(srcData.combatSpells) do
+                                    local spellID = getAmount(sp.spellID)
+                                    local amt = getAmount(sp.totalAmount)
+
+                                    if spellID > 0 and amt > 0 then
+                                        if not pd[spellField][spellID] then
+                                            local spellName =
+                                                (C_Spell and C_Spell.GetSpellName and C_Spell.GetSpellName(spellID))
+                                                or ("spell:" .. spellID)
+                                            pd[spellField][spellID] = segs:NewSpellData(spellID, spellName, nil)
+                                        end
+
+                                        local sd = pd[spellField][spellID]
+                                        if dmType == Enum.DamageMeterType.HealingDone then
+                                            sd.healing = (sd.healing or 0) + amt
+                                        else
+                                            sd.damage = (sd.damage or 0) + amt
+                                        end
+
+                                        sd.hits = (sd.hits or 0) + 1
+                                        if sp.isAvoidable then sd.isAvoidable = true end
+                                    end
+                                end
+                            end
                         end
                     end
                 end
             end
         end
 
+        -- ★ 补齐打断 / 驱散：总数 + 技能细分
+        for dmType, field in pairs({
+            [Enum.DamageMeterType.Interrupts] = "interrupts",
+            [Enum.DamageMeterType.Dispels]    = "dispels",
+        }) do
+            local spellField = field == "interrupts" and "interruptSpells" or "dispelSpells"
+            local sess = getSession(dmType)
+
+            if sess and sess.combatSources then
+                for _, src in ipairs(sess.combatSources) do
+                    local guid = src.sourceGUID
+                    local creatureID = src.sourceCreatureID
+                    local total = getAmount(src.totalAmount)
+
+                    if guid and total > 0 then
+                        local hasValidClass = src.classFilename and src.classFilename ~= ""
+                        local isPet = (creatureID ~= nil and creatureID > 0) and not hasValidClass
+
+                        if not isPet then
+                            local pd = merged.players[guid]
+                            if not pd then
+                                pd = segs:NewPlayerData(guid, src.name, src.classFilename or "WARRIOR")
+                                merged.players[guid] = pd
+                            end
+
+                            pd.class = src.classFilename or pd.class
+                            if src.specIconID and src.specIconID > 0 then
+                                pd.specIconID = src.specIconID
+                            end
+
+                            pd[field] = (pd[field] or 0) + total
+
+                            local srcData = getSourceData(dmType, guid, creatureID)
+                            if srcData and srcData.combatSpells then
+                                for _, sp in ipairs(srcData.combatSpells) do
+                                    local spellID = getAmount(sp.spellID)
+
+                                    if spellID > 0 then
+                                        local amt = getAmount(sp.totalAmount)
+                                        if amt == 0 then amt = getAmount(sp.casts) end
+                                        if amt == 0 then amt = 1 end
+
+                                        if amt > 0 then
+                                            if not pd[spellField][spellID] then
+                                                local spellName =
+                                                    (C_Spell and C_Spell.GetSpellName and C_Spell.GetSpellName(spellID))
+                                                    or ("spell:" .. spellID)
+                                                pd[spellField][spellID] = segs:NewSpellData(spellID, spellName, nil)
+                                            end
+
+                                            local sd = pd[spellField][spellID]
+                                            sd.hits = (sd.hits or 0) + amt
+                                            sd.damage = (sd.damage or 0) + amt
+                                        end
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+
+        local function rebuildEnemyDamageTakenList()
+            merged.enemyDamageTakenList = {}
+
+            local sess = getSession(Enum.DamageMeterType.EnemyDamageTaken)
+            if not sess or not sess.combatSources then return end
+
+            for _, enemy in ipairs(sess.combatSources) do
+                local creatureID = enemy.sourceCreatureID
+                local enemyName = "?"
+                local hasName = false
+
+                if type(enemy.name) == "string" then
+                    enemyName = enemy.name
+                    hasName = true
+                end
+
+                if creatureID or hasName then
+                    local total = getAmount(enemy.totalAmount)
+                    if total > 0 then
+                        local perSec = getAmount(enemy.amountPerSecond)
+                        local entry = {
+                            creatureID = creatureID,
+                            name = enemyName,
+                            total = total,
+                            perSec = perSec,
+                            sources = {},
+                        }
+
+                        local srcData = getSourceData(Enum.DamageMeterType.EnemyDamageTaken, nil, creatureID)
+                        if srcData and srcData.combatSpells then
+                            pcall(function()
+                                for _, sp in ipairs(srcData.combatSpells) do
+                                    local details = sp.combatSpellDetails
+                                    if details then
+                                        local playerName = details.unitName
+                                        local playerClass = details.unitClassFilename
+                                        if not playerClass or playerClass == "" then playerClass = "NPC" end
+
+                                        local amt = getAmount(details.amount)
+                                        if amt == 0 then amt = getAmount(sp.totalAmount) end
+
+                                        if playerName and type(playerName) == "string" and amt > 0
+                                        and not (issecretvalue and issecretvalue(playerName)) then
+                                            local found = false
+                                            for _, s in ipairs(entry.sources) do
+                                                if s.name == playerName then
+                                                    s.amount = s.amount + amt
+                                                    found = true
+                                                    break
+                                                end
+                                            end
+                                            if not found then
+                                                table.insert(entry.sources, {
+                                                    name = playerName,
+                                                    class = playerClass,
+                                                    amount = amt,
+                                                })
+                                            end
+                                        end
+                                    end
+                                end
+                            end)
+                        end
+
+                        table.sort(entry.sources, function(a, b) return a.amount > b.amount end)
+                        table.insert(merged.enemyDamageTakenList, entry)
+                    end
+                end
+            end
+
+            table.sort(merged.enemyDamageTakenList, function(a, b) return a.total > b.total end)
+        end
+
         -- deathLog 和 enemyDamageTakenList 仍从 segs.overall 拷贝（这两个手动维护的）
         local ovr = segs.overall
         merged.deathLog              = CopyTable((ovr and ovr.deathLog) or {})
-        merged.enemyDamageTakenList  = CopyTable((ovr and ovr.enemyDamageTakenList) or {})
+
+        rebuildEnemyDamageTakenList()
+        if #merged.enemyDamageTakenList == 0 then
+            merged.enemyDamageTakenList = CopyTable((ovr and ovr.enemyDamageTakenList) or {})
+        end
 
         table.sort(merged.deathLog, function(a, b)
             if a.isSelf ~= b.isSelf then return a.isSelf end
@@ -170,6 +415,8 @@ function ns.CombatTracker:MergeAndCleanInstance(instanceTag, mythicLevel, mythic
 
             cloneOverallToMerged(merged)
 
+            
+
             local indicesToRemove, bossCount = {}, 0
             if doCleanTrash then
                 for _, entry in ipairs(instSegs) do
@@ -186,6 +433,7 @@ function ns.CombatTracker:MergeAndCleanInstance(instanceTag, mythicLevel, mythic
             if doGenOverall and (merged.totalDamage > 0 or merged.totalHealing > 0) then
                 table.insert(segs.history, 1, merged)
                 segs:ViewArchived(merged._localID)         -- ★ key-based view
+                hideBlizzardOverallSession(blizzardOverallSID)
             end
             CT:SmartTrimHistory()
             CT:ResetBaselineToCurrentCount()
@@ -292,6 +540,7 @@ function ns.CombatTracker:MergeAndCleanInstance(instanceTag, mythicLevel, mythic
     if doGenOverall and (merged.totalDamage > 0 or merged.totalHealing > 0) then
         table.insert(segs.history, 1, merged)
         segs:ViewArchived(merged._localID)             -- ★ key-based view
+        hideBlizzardOverallSession(blizzardOverallSID)
     end
     CT:SmartTrimHistory()
     CT:ResetBaselineToCurrentCount()
