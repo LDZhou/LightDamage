@@ -1,6 +1,11 @@
 --[[
-    LD Combat Stats - DeathTracker.lua
-    死亡追踪器
+    Light Damage - DeathTracker.lua
+    API-first 死亡追踪器
+
+    fix3:
+    - totalAmount 战斗中可能是 secret，不能用 totalAmount > 0 阻断显示
+    - sourceGUID 战斗中可能是 secret，不能和玩家 GUID 比较
+    - name 是 ConditionalSecret，不能 SafeString 成“未知”，要原样交给 UI:SetText
 ]]
 
 local addonName, ns = ...
@@ -9,304 +14,213 @@ local L = ns.L
 local DT = {}
 ns.DeathTracker = DT
 
-local playerBuffers = {}
-local BUFFER_SIZE   = 20
+local function IsSecretValue(v)
+    if type(issecretvalue) ~= "function" then return false end
+    local ok, ret = pcall(issecretvalue, v)
+    return ok and ret and true or false
+end
 
--- ============================================================
--- 获取死亡记录用的专精图标
--- 优先自己当前专精，其次 PlayerInfoCache 里的 specID
--- ============================================================
-local function GetDeathSpecIconID(guid)
-    if not guid then return nil end
+local function SafeNum(v, default)
+    if IsSecretValue(v) then return default or 0 end
+    return type(v) == "number" and v or (default or 0)
+end
 
-    -- 自己：直接取当前专精图标，最稳
-    if guid == ns.state.playerGUID then
+local function SafeString(v, default)
+    default = default or "?"
+    if v == nil then return default end
+    if IsSecretValue(v) then return default end
+    local ok, s = pcall(tostring, v)
+    if ok and s and s ~= "" then return s end
+    return default
+end
+
+-- UI 可显示名：如果是 secret string，必须原样保留，不能 tostring / match / gsub。
+local function DisplayNameValue(v, default)
+    default = default or "?"
+    if v == nil then return default end
+    if IsSecretValue(v) then return v end
+
+    local ok, s = pcall(ns.ShortName, ns, v)
+    if ok and s and s ~= "" then return s end
+
+    local ok2, s2 = pcall(tostring, v)
+    if ok2 and s2 and s2 ~= "" then return s2 end
+
+    return default
+end
+
+local function GetDeathCount(src)
+    if not src then return 1 end
+    local v = src.totalAmount
+    if IsSecretValue(v) then return 1 end
+    if type(v) == "number" and v > 0 then return v end
+    return 1
+end
+
+local function GetDeathSpecIconID(guid, src)
+    if src and src.specIconID and src.specIconID > 0 then
+        return src.specIconID
+    end
+
+    if guid and not IsSecretValue(guid) and guid == ns.state.playerGUID then
         local specIdx = GetSpecialization()
         if specIdx then
             local _, _, _, icon = GetSpecializationInfo(specIdx)
-            if icon and icon > 0 then
-                return icon
-            end
+            if icon and icon > 0 then return icon end
         end
     end
 
-    -- 队友：尝试从已有玩家信息缓存拿 specID 再转图标
-    local cache = ns.PlayerInfoCache and ns.PlayerInfoCache[guid]
-    if cache and cache.specID then
-        local _, _, _, icon = GetSpecializationInfoByID(cache.specID)
-        if icon and icon > 0 then
-            return icon
+    if guid and not IsSecretValue(guid) then
+        local cache = ns.PlayerInfoCache and ns.PlayerInfoCache[guid]
+        if cache and cache.specID then
+            local _, _, _, icon = GetSpecializationInfoByID(cache.specID)
+            if icon and icon > 0 then return icon end
         end
     end
 
     return nil
 end
 
--- ============================================================
--- 初始化
--- ============================================================
 function DT:Init()
-    BUFFER_SIZE   = ns.db.tracking.deathLogSize or 20
-    playerBuffers = {}
+    self._apiDeathCache = {}
 end
 
 function DT:ClearBuffers()
-    playerBuffers = {}
-end
--- ============================================================
--- 环形缓冲区操作
--- ============================================================
-local function GetBuffer(guid)
-    if not playerBuffers[guid] then
-        playerBuffers[guid] = {
-            events   = {},
-            writeIdx = 0,
-            count    = 0,
-            lastHP   = 0,
-            maxHP    = 0,
-            name     = nil,
-            class    = nil,
-        }
-    end
-    return playerBuffers[guid]
+    self._apiDeathCache = {}
 end
 
-local function PushEvent(buf, ev)
-    buf.writeIdx = (buf.writeIdx % BUFFER_SIZE) + 1
-    buf.events[buf.writeIdx] = ev
-    if buf.count < BUFFER_SIZE then buf.count = buf.count + 1 end
-end
+-- 兼容旧外部调用：CLEU 死亡链路已废弃。
+function DT:RecordIncomingDamage() end
+function DT:RecordIncomingHeal() end
+function DT:OnUnitDied() end
 
-local function ReadBuffer(buf)
+function DT:ParseRecapEvents(recapEvents, maxHP)
     local result = {}
-    local total  = buf.count
-    if total == 0 then return result end
-    local startSlot = total < BUFFER_SIZE and 1 or (buf.writeIdx % BUFFER_SIZE) + 1
-    for i = 0, total - 1 do
-        local slot = ((startSlot - 1 + i) % BUFFER_SIZE) + 1
-        local ev   = buf.events[slot]
-        if ev then table.insert(result, ev) end
+    maxHP = maxHP or 1
+
+    local reversed = {}
+    for i = #recapEvents, 1, -1 do
+        table.insert(reversed, recapEvents[i])
     end
+
+    for _, ev in ipairs(reversed) do
+        local spellID   = SafeNum(ev.spellId, 0)
+        local spellName = SafeString(ev.spellName, "")
+        local evType    = SafeString(ev.event, "")
+        local isHeal    = (evType == "SPELL_HEAL" or evType == "SPELL_PERIODIC_HEAL")
+        local amount    = SafeNum(ev.amount, 0)
+        local overkill  = SafeNum(ev.overkill, 0)
+        if overkill < 0 then overkill = 0 end
+
+        if spellName == "" then
+            if isHeal then spellName = L["治疗"]
+            elseif evType == "SWING_DAMAGE" then spellName = L["近战"]
+            else spellName = L["未知"] end
+        end
+
+        local hp    = SafeNum(ev.currentHP, 0)
+        local hpPct = maxHP > 0 and (hp / maxHP * 100) or 0
+
+        table.insert(result, {
+            time      = SafeNum(ev.timestamp, GetTime()),
+            spellID   = spellID,
+            spellName = spellName,
+            amount    = isHeal and -math.abs(amount) or math.abs(amount),
+            isHeal    = isHeal,
+            srcName   = SafeString(ev.sourceName, ""),
+            hp        = hp,
+            maxHP     = maxHP,
+            hpPercent = hpPct,
+            overkill  = overkill,
+            school    = SafeNum(ev.school, 1),
+        })
+    end
+
     return result
 end
 
--- ============================================================
--- 记录受到的伤害（CLEU）
--- 12.0 副本内 CLEU 受限，开放世界仍可用
--- ============================================================
-function DT:RecordIncomingDamage(destGUID, destName, destFlags,
-        amount, spellID, spellName, school, srcGUID, srcName)
-    if not destGUID then return end
-    if not ns:IsPlayerType(destFlags) then return end
+local function GetRecapEvents(recapID)
+    if not C_DeathRecap or not C_DeathRecap.GetRecapEvents then return nil end
+    if not recapID or recapID <= 0 then return nil end
 
-    local buf  = GetBuffer(destGUID)
-    buf.name   = ns:ShortName(destName)
-
-    local hp, maxHP = 0, 0
-    local unit = ns:FindUnitByGUID(destGUID)
-    if unit then
-        hp    = UnitHealth(unit)    or 0
-        maxHP = UnitHealthMax(unit) or 1
-    end
-    buf.lastHP = hp
-    buf.maxHP  = maxHP
-
-    if not buf.class then
-        local _, classEng = GetPlayerInfoByGUID(destGUID)
-        buf.class = classEng
-    end
-
-    PushEvent(buf, {
-        time      = GetTime(),
-        timestamp = time(),
-        srcName   = ns:ShortName(srcName) or "?",
-        srcGUID   = srcGUID,
-        spellID   = spellID  or 0,
-        spellName = ns:SafeStr(spellName) ~= "" and ns:SafeStr(spellName) or L["近战"],
-        school    = school   or 1,
-        amount    = ns:SafeNum(amount),
-        hp        = hp,
-        maxHP     = maxHP,
-        hpPercent = maxHP > 0 and (hp / maxHP * 100) or 0,
-        overkill  = 0,
-        isHeal    = false,
-    })
+    local ok, events = pcall(C_DeathRecap.GetRecapEvents, recapID)
+    if ok and events and #events > 0 then return events end
+    return nil
 end
 
--- ============================================================
--- 记录受到的治疗（CLEU）
--- ============================================================
-function DT:RecordIncomingHeal(destGUID, destName, destFlags,
-        amount, spellID, spellName, srcGUID, srcName)
-    if not destGUID then return end
-    if not ns:IsPlayerType(destFlags) then return end
-
-    local buf = GetBuffer(destGUID)
-    local hp, maxHP = 0, 0
-    local unit = ns:FindUnitByGUID(destGUID)
-    if unit then
-        hp    = UnitHealth(unit)    or 0
-        maxHP = UnitHealthMax(unit) or 1
-    end
-
-    PushEvent(buf, {
-        time      = GetTime(),
-        timestamp = time(),
-        srcName   = ns:ShortName(srcName) or "?",
-        spellID   = spellID or 0,
-        spellName = ns:SafeStr(spellName) ~= "" and ns:SafeStr(spellName) or L["治疗"],
-        amount    = -(ns:SafeNum(amount)),
-        hp        = hp,
-        maxHP     = maxHP,
-        hpPercent = maxHP > 0 and (hp / maxHP * 100) or 0,
-        isHeal    = true,
-    })
+local function GetRecapMaxHealth(recapID)
+    if not C_DeathRecap or not C_DeathRecap.GetRecapMaxHealth then return 1 end
+    local ok, hp = pcall(C_DeathRecap.GetRecapMaxHealth, recapID)
+    if ok and hp and hp > 0 then return hp end
+    return 1
 end
 
--- ============================================================
--- 玩家死亡（CLEU UNIT_DIED）
--- ============================================================
-function DT:OnUnitDied(guid, name, flags, cleuTimestamp)
-    local buf = GetBuffer(guid)
-    if buf.count == 0 then return end
+function DT:BuildDeathRecordFromRecapID(recapID, src)
+    if not recapID or recapID <= 0 then return nil end
 
-    local deathEvents = ReadBuffer(buf)
-    if #deathEvents == 0 then return end
+    local guid = src and src.sourceGUID
+    local isSelf = (src and src.isLocalPlayer) and true or false
 
-    local killingBlow
-    for i = #deathEvents, 1, -1 do
-        if not deathEvents[i].isHeal then
-            killingBlow = deathEvents[i]; break
-        end
-    end
-    if killingBlow then
-        killingBlow.overkill = math.max(0, killingBlow.amount - (killingBlow.hp or 0))
+    -- sourceGUID 可能是 secret，不能比较 guid == ns.state.playerGUID。
+    if isSelf then
+        guid = ns.state.playerGUID or UnitGUID("player")
+    elseif IsSecretValue(guid) then
+        guid = nil
     end
 
-    local class = buf.class
-    if not class then
-        if ns:IsNPCGUID(guid) then
+    local class = src and src.classFilename
+    if not class or class == "" then
+        if guid and not IsSecretValue(guid) and ns:IsNPCGUID(guid) then
             class = "NPC"
+        elseif guid and not IsSecretValue(guid) then
+            local ok, _, ce = pcall(GetPlayerInfoByGUID, guid)
+            class = (ok and ce) or "WARRIOR"
         else
-            local ok, _, classEng = pcall(GetPlayerInfoByGUID, guid)
-            class = (ok and classEng) or nil
+            class = "WARRIOR"
         end
     end
 
-    local totalDmg  = 0
-    local totalHeal = 0
-    for _, ev in ipairs(deathEvents) do
-        if ev.isHeal then
-            totalHeal = totalHeal + math.abs(ev.amount)
-        else
-            totalDmg = totalDmg + ev.amount
-        end
-    end
+    -- 关键：src.name 是 ConditionalSecret，secret 时原样保存给 UI，不要替换成“未知”。
+    local playerName = DisplayNameValue(src and src.name, isSelf and (UnitName("player") or L["我"]) or L["未知"])
 
-    local timeSpan = #deathEvents >= 2
-        and (deathEvents[#deathEvents].time - deathEvents[1].time)
-        or 0
-
-    local isSelf = (guid == ns.state.playerGUID)
-
-    local deathRecord = {
-        timestamp            = deathEvents[#deathEvents] and deathEvents[#deathEvents].time and math.floor(deathEvents[#deathEvents].time) or time(),
-        gameTime             = GetTime(),
-        playerName           = ns:ShortName(name),
-        playerGUID           = guid,
-        playerClass          = class,
-        isSelf               = isSelf,
-        killingAbility       = killingBlow and killingBlow.spellName or "Unknown",
-        killerName           = killingBlow and killingBlow.srcName   or "Unknown",
-        events               = deathEvents,
-        lastHP               = buf.lastHP,
-        maxHP                = buf.maxHP,
-        totalDamageTaken     = totalDmg,
-        totalHealingReceived = totalHeal,
-        timeSpan             = timeSpan,
-        _fromRecap           = false,
-        _specIconID          = GetDeathSpecIconID(guid),
-    }
-
-    local function addToSeg(seg)
-        if not seg then return end
-        if isSelf then
-            table.insert(seg.deathLog, 1, deathRecord)
-        else
-            local insertIdx = #seg.deathLog + 1
-            for i, dr in ipairs(seg.deathLog) do
-                if not dr.isSelf then insertIdx = i; break end
-            end
-            table.insert(seg.deathLog, insertIdx, deathRecord)
-        end
-        while #seg.deathLog > 50 do table.remove(seg.deathLog) end
-    end
-
-    if ns.Segments then
-        addToSeg(ns.Segments.current)
-        addToSeg(ns.Segments.overall)
-        -- ★ 修复竞态：processArchivedSessions 可能已先于此函数运行，
-        --   直接同步到最新历史段，确保不丢失
-        if ns.Segments.history and ns.Segments.history[1] then
-            addToSeg(ns.Segments.history[1])
-        end
-    end
-
-    playerBuffers[guid] = nil
-end
-
--- ============================================================
--- 自己的死亡（PLAYER_DEAD 事件）- 优先用 C_DeathRecap
--- ============================================================
-function DT:OnPlayerDead()
-    C_Timer.After(0.5, function()
-        self:RefreshSelfDeathFromRecap()
-    end)
-end
-
-function DT:RefreshSelfDeathFromRecap()
-    if not C_DeathRecap or not C_DeathRecap.HasRecapEvents then return end
-    if not C_DeathRecap.HasRecapEvents() then return end
-
-    local recapEvents = C_DeathRecap.GetRecapEvents()
-    if not recapEvents or #recapEvents == 0 then return end
-
-    local maxHP  = (C_DeathRecap.GetRecapMaxHealth and C_DeathRecap.GetRecapMaxHealth()) or 0
-    local events = self:ParseRecapEvents(recapEvents, maxHP)
+    local maxHP = GetRecapMaxHealth(recapID)
+    local recapEvents = GetRecapEvents(recapID)
+    local events = recapEvents and self:ParseRecapEvents(recapEvents, maxHP) or {}
 
     local killingAbility = "?"
-    local killerName     = ""
+    local killerName = ""
     for i = #events, 1, -1 do
         if not events[i].isHeal then
             killingAbility = events[i].spellName or "?"
-            killerName     = events[i].srcName   or ""
+            killerName = events[i].srcName or ""
             break
         end
     end
 
-    local totalDmg  = 0
-    local totalHeal = 0
-    local timeSpan  = 0
+    local totalDmg, totalHeal = 0, 0
     for _, ev in ipairs(events) do
-        if ev.isHeal then totalHeal = totalHeal + math.abs(ev.amount)
-        else totalDmg = totalDmg + math.abs(ev.amount) end
+        if ev.isHeal then totalHeal = totalHeal + math.abs(ev.amount or 0)
+        else totalDmg = totalDmg + math.abs(ev.amount or 0) end
     end
+
+    local timeSpan = 0
     if #events >= 2 then
-        timeSpan = events[#events].time - events[1].time
+        timeSpan = (events[#events].time or 0) - (events[1].time or 0)
     end
 
-    local pName   = UnitName("player") or L["我"]
-    local _, cls  = UnitClass("player")
-    local pGUID   = UnitGUID("player")
+    local ts = time()
+    if #events > 0 and events[#events].time then
+        ts = math.floor(events[#events].time)
+    end
 
-    local deathRecord = {
-        timestamp            = time(),
+    return {
+        timestamp            = ts,
         gameTime             = GetTime(),
-        playerName           = pName,
-        playerGUID           = pGUID,
-        playerClass          = cls,
-        isSelf               = true,
-        killingAbility       = killingAbility,
+        playerName           = playerName,
+        playerGUID           = guid,
+        playerClass          = class,
+        isSelf               = isSelf,
+        killingAbility       = (#events == 0) and L["等待死亡回放"] or killingAbility,
         killerName           = killerName,
         events               = events,
         lastHP               = 0,
@@ -315,96 +229,145 @@ function DT:RefreshSelfDeathFromRecap()
         totalHealingReceived = totalHeal,
         timeSpan             = timeSpan,
         _fromRecap           = true,
-        _specIconID          = GetDeathSpecIconID(pGUID),
+        _recapID             = recapID,
+        _specIconID          = GetDeathSpecIconID(guid, src),
+        _deathCount          = GetDeathCount(src),
+        _deathTimeSeconds    = SafeNum(src and src.deathTimeSeconds, 0),
+        _apiGenerated        = true,
+        _incomplete          = (#events == 0),
     }
-
-    local function updateSeg(seg)
-        if not seg then return end
-        for i = #seg.deathLog, 1, -1 do
-            if seg.deathLog[i].playerGUID == pGUID
-                and (GetTime() - seg.deathLog[i].gameTime) < 5 then
-                table.remove(seg.deathLog, i)
-                break
-            end
-        end
-        table.insert(seg.deathLog, 1, deathRecord)
-        while #seg.deathLog > 50 do table.remove(seg.deathLog) end
-    end
-
-    if ns.Segments then
-        updateSeg(ns.Segments.current)
-        updateSeg(ns.Segments.overall)
-        -- ★ 修复竞态：同步到最新历史段
-        if ns.Segments.history and ns.Segments.history[1] then
-            updateSeg(ns.Segments.history[1])
-        end
-    end
 end
 
--- ============================================================
--- 解析 C_DeathRecap 事件为统一格式
---
--- 实际字段（/ldcs recap dump 确认）：
---   spellId (number, 小写d！), spellName (string),
---   sourceName (string), currentHP (number),
---   timestamp (number, unix float), event (string CLEU类型),
---   amount (number), overkill (number, -1=无超杀),
---   school (number)
--- ============================================================
-function DT:ParseRecapEvents(recapEvents, maxHP)
+local function GetDeathSession(sessionType, sessionID)
+    if not C_DamageMeter then return nil end
+    local dmType = Enum.DamageMeterType.Deaths
+
+    if sessionID then
+        local ok, session = pcall(C_DamageMeter.GetCombatSessionFromID, sessionID, dmType)
+        if ok then return session end
+    else
+        local st = sessionType or Enum.DamageMeterSessionType.Current
+        local ok, session = pcall(C_DamageMeter.GetCombatSessionFromType, st, dmType)
+        if ok then return session end
+    end
+
+    return nil
+end
+
+local function InsertOrdered(list, record)
+    if record then table.insert(list, record) end
+end
+
+function DT:GetDeathLogFromAPI(sessionType, sessionID, fallbackSegment)
+    local session = GetDeathSession(sessionType, sessionID)
     local result = {}
-    maxHP = maxHP or 1
 
-    -- recapEvents 是新→旧（index 1 = 致命一击），翻转为旧→新
-    local reversed = {}
-    for i = #recapEvents, 1, -1 do
-        table.insert(reversed, recapEvents[i])
-    end
+    if session and session.combatSources then
+        local seenRecap = {}
+        for _, src in ipairs(session.combatSources) do
+            local recapID = SafeNum(src.deathRecapID, 0)
+            local deaths  = GetDeathCount(src)
 
-    for _, ev in ipairs(reversed) do
-        local spellID   = ev.spellId or 0          -- ★ 小写 d
-        local spellName = ev.spellName or ""
-        local evType    = ev.event or ""
-        local isHeal    = (evType == "SPELL_HEAL" or evType == "SPELL_PERIODIC_HEAL")
-        local amount    = ev.amount or 0
-        -- overkill: -1 表示无超杀，>= 0 才是真正超杀量
-        local overkill  = (ev.overkill and ev.overkill >= 0) and ev.overkill or 0
+            -- deathRecapID 是 NeverSecret，只要有 recapID 就生成死亡记录。
+            if recapID > 0 and not seenRecap[recapID] then
+                seenRecap[recapID] = true
+                local record = self:BuildDeathRecordFromRecapID(recapID, src)
+                if record then
+                    record._deathCount = deaths
+                    InsertOrdered(result, record)
+                end
+            elseif recapID <= 0 then
+                local guid = src.sourceGUID
+                local isSelf = src.isLocalPlayer and true or false
 
-        -- 补全技能名（SWING_DAMAGE 没有 spellName）
-        if spellName == "" then
-            if isHeal then spellName = L["治疗"]
-            elseif evType == "SWING_DAMAGE" then spellName = L["近战"]
-            else spellName = L["未知"] end
+                if isSelf then
+                    guid = ns.state.playerGUID or UnitGUID("player")
+                elseif IsSecretValue(guid) then
+                    guid = nil
+                end
+
+                InsertOrdered(result, {
+                    timestamp            = time(),
+                    gameTime             = GetTime(),
+                    playerName           = DisplayNameValue(src.name, isSelf and (UnitName("player") or L["我"]) or L["未知"]),
+                    playerGUID           = guid,
+                    playerClass          = src.classFilename or "WARRIOR",
+                    isSelf               = isSelf,
+                    killingAbility       = L["等待死亡回放"],
+                    killerName           = "",
+                    events               = {},
+                    lastHP               = 0,
+                    maxHP                = 1,
+                    totalDamageTaken     = 0,
+                    totalHealingReceived = 0,
+                    timeSpan             = 0,
+                    _fromRecap           = false,
+                    _recapID             = nil,
+                    _specIconID          = GetDeathSpecIconID(guid, src),
+                    _deathCount          = deaths,
+                    _deathTimeSeconds    = SafeNum(src.deathTimeSeconds, 0),
+                    _apiGenerated        = true,
+                    _incomplete          = true,
+                })
+            end
         end
-
-        -- currentHP 是该事件后的实时血量，直接使用（无需重建）
-        local hp    = ev.currentHP or 0
-        local hpPct = maxHP > 0 and (hp / maxHP * 100) or 0
-
-        table.insert(result, {
-            time      = ev.timestamp or GetTime(),   -- ★ 真实 unix 浮点时间戳
-            spellID   = spellID,
-            spellName = spellName,
-            amount    = isHeal and -math.abs(amount) or math.abs(amount),
-            isHeal    = isHeal,
-            srcName   = ev.sourceName or "",          -- ★ 击杀者名字直接可用
-            hp        = hp,
-            maxHP     = maxHP,
-            hpPercent = hpPct,
-            overkill  = overkill,
-        })
     end
+
+    if #result == 0 and fallbackSegment and fallbackSegment.deathLog then
+        return fallbackSegment.deathLog
+    end
+
+    table.sort(result, function(a, b)
+        if a.isSelf ~= b.isSelf then return a.isSelf end
+        local at = a._deathTimeSeconds or 0
+        local bt = b._deathTimeSeconds or 0
+        if at ~= bt then return at > bt end
+        return (a.timestamp or 0) > (b.timestamp or 0)
+    end)
 
     return result
 end
 
--- ============================================================
--- 获取死亡日志
--- ============================================================
-function DT:GetDeathLog(segment)
-    if not segment then
-        segment = ns.Segments and ns.Segments:GetViewSegment()
+local function InferAPIContext(segment)
+    local segs = ns.Segments
+    if not segs then return nil, nil end
+
+    if segment and segment._sessionID then
+        return nil, segment._sessionID
     end
+    if segment and segs.overall and segment == segs.overall then
+        return Enum.DamageMeterSessionType.Overall, nil
+    end
+    if segment and segs.current and segment == segs.current and ns.state.inCombat then
+        return Enum.DamageMeterSessionType.Current, nil
+    end
+
+    if not segment then
+        if segs.IsViewingOverall and segs:IsViewingOverall() then
+            return Enum.DamageMeterSessionType.Overall, nil
+        end
+        if segs.IsViewingCurrent and segs:IsViewingCurrent() and ns.state.inCombat then
+            return Enum.DamageMeterSessionType.Current, nil
+        end
+        local viewSeg = segs.GetViewSegment and segs:GetViewSegment()
+        if viewSeg and viewSeg._sessionID then
+            return nil, viewSeg._sessionID
+        end
+    end
+
+    return nil, nil
+end
+
+function DT:GetDeathLog(segment)
+    if not segment and ns.Segments then
+        segment = ns.Segments:GetViewSegment()
+    end
+
+    local sessionType, sessionID = InferAPIContext(segment)
+    if sessionType or sessionID then
+        return self:GetDeathLogFromAPI(sessionType, sessionID, segment)
+    end
+
     return segment and segment.deathLog or {}
 end
 
@@ -414,7 +377,7 @@ function DT:GetDeathDetail(segment, index)
 end
 
 function DT:GetSelfDeaths(segment)
-    local log    = self:GetDeathLog(segment)
+    local log = self:GetDeathLog(segment)
     local result = {}
     for _, dr in ipairs(log) do
         if dr.isSelf then table.insert(result, dr) end
@@ -423,10 +386,25 @@ function DT:GetSelfDeaths(segment)
 end
 
 function DT:GetOtherDeaths(segment)
-    local log    = self:GetDeathLog(segment)
+    local log = self:GetDeathLog(segment)
     local result = {}
     for _, dr in ipairs(log) do
         if not dr.isSelf then table.insert(result, dr) end
     end
     return result
+end
+
+function DT:OnPlayerDead()
+    C_Timer.After(0.2, function()
+        if ns.UI and ns.UI:IsVisible() then ns.UI:Refresh() end
+        if ns.DetailView and ns.DetailView:IsVisible() then ns.DetailView:Refresh() end
+    end)
+    C_Timer.After(1.0, function()
+        if ns.UI and ns.UI:IsVisible() then ns.UI:Refresh() end
+        if ns.DetailView and ns.DetailView:IsVisible() then ns.DetailView:Refresh() end
+    end)
+end
+
+function DT:RefreshSelfDeathFromRecap()
+    if ns.UI and ns.UI:IsVisible() then ns.UI:Refresh() end
 end
