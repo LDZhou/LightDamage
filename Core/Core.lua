@@ -269,7 +269,7 @@ function Core:OnInitialize()
             ns.Segments:Init()
             ns:LoadSessionHistory()
         else
-            print(L["|cffff3333[Light Damage] ERROR:|r Segments 模块未加载"])
+            print(L.MSG_LIGHT_DAMAGE_ERROR_SEGMENTS_NOT_LOADED)
             return
         end
 
@@ -386,8 +386,8 @@ function Core:OnEvent(event, ...)
                     ns.CombatTracker:ResetBaselineToCurrentCount()
                 end
                 if ns.Segments then
-                    local name = GetInstanceInfo() or L["副本"]
-                    ns.Segments.overall = ns.Segments:NewSegment("overall", string.format(L["%s [全程]"], name))
+                    local name = GetInstanceInfo() or L.INSTANCE
+                    ns.Segments.overall = ns.Segments:NewSegment("overall", string.format(L.OVERALL_SEGMENT_NAME_FORMAT, name))
                 end
             end
         end
@@ -561,18 +561,18 @@ function ns:HandleSlashCommand(msg)
         if ns.Config then ns.Config:Toggle() end
 
     elseif msg == "help" then
-        print(L["|cff00ccff[Light Damage]|r 命令:"])
-        print(L["  /ldcs show    - 显示/隐藏窗口"])
-        print(L["  /ldcs reset   - 重置所有数据"])
-        print(L["  /ldcs config  - 配置面板"])
-        print(L["  /ldcs lock    - 锁定/解锁窗口"])
+        print(L.MSG_LIGHT_DAMAGE_COMMANDS)
+        print(L.SLASH_HELP_SHOW)
+        print(L.SLASH_HELP_RESET)
+        print(L.SLASH_HELP_CONFIG)
+        print(L.SLASH_HELP_LOCK)
 
     elseif msg == "show" or msg == "toggle" then
         if ns.UI then ns.UI:Toggle() end
 
     elseif msg == "reset" then
         if ns.Segments then ns.Segments:ResetAll() end
-        print(L["|cff00ccff[Light Damage]|r 数据已重置"])
+        print(L.MSG_LIGHT_DAMAGE_DATA_RESET)
 
     elseif msg == "config" then
         if ns.Config then ns.Config:Toggle() end
@@ -581,9 +581,9 @@ function ns:HandleSlashCommand(msg)
         ns.db.window.locked = not ns.db.window.locked
         if ns.UI then ns.UI:UpdateLock() end
         if ns.db.window.locked then
-            print(L["|cff00ccff[Light Damage]|r 已锁定"])
+            print(L.MSG_LIGHT_DAMAGE_LOCKED)
         else
-            print("|cff00ccff[Light Damage]|r " .. L["已解锁"])
+            print("|cff00ccff[Light Damage]|r " .. L.CONFIG_UNLOCKED)
         end
 
     elseif msg:match("^lang") then
@@ -615,9 +615,9 @@ function ns:HandleSlashCommand(msg)
         if ns.CombatTracker then
             ns.CombatTracker:ResetBaselineToCurrentCount()
             if ns.Segments then
-                ns.Segments.overall = ns.Segments:NewSegment("overall", L["总计"])
+                ns.Segments.overall = ns.Segments:NewSegment("overall", L.OVERALL)
             end
-            print(L["|cff00ccff[Light Damage]|r Baseline 已手动重置"])
+            print(L.MSG_LIGHT_DAMAGE_BASELINE_MANUALLY_RESET)
         end
     elseif msg == "debug" then
         ns:PrintDebugInfo()
@@ -632,11 +632,11 @@ function ns:HandleSlashCommand(msg)
     elseif msg == "overheal" then
         local sessions = C_DamageMeter.GetAvailableCombatSessions()
         local s = sessions and sessions[#sessions]
-        if not s then print(L["无历史 session"]); return end
+        if not s then print(L.DEBUG_NO_HISTORY_SESSION); return end
         local ok, src = pcall(C_DamageMeter.GetCombatSessionSourceFromID,
             s.sessionID, Enum.DamageMeterType.HealingDone, UnitGUID("player"))
         if not ok or not src or not src.combatSpells then
-            print(L["无治疗数据"]); return
+            print(L.NO_HEALING_DATA); return
         end
         local totalOH = 0
         for _, sp in ipairs(src.combatSpells) do
@@ -645,7 +645,7 @@ function ns:HandleSlashCommand(msg)
                 name, sp.totalAmount, sp.overkillAmount or 0))
             totalOH = totalOH + (sp.overkillAmount or 0)
         end
-        print(string.format(L["总 overkillAmount 合计: %d"], totalOH))
+        print(string.format(L.DEBUG_TOTAL_OVERKILL_FORMAT, totalOH))
     end
 end
 
@@ -688,10 +688,10 @@ function ns:PrintDebugInfo()
 end
 
 function ns:DebugDeathRecapIDs()
-    print(L["=== [Light Damage] 死亡 RecapID 诊断 ==="])
+    print(L.DEBUG_LIGHT_DAMAGE_DEATH_RECAPID_DIAGNOSTICS)
     local sessions = C_DamageMeter.GetAvailableCombatSessions()
     local n = sessions and #sessions or 0
-    print(string.format(L["共 %d 个 session"], n))
+    print(string.format(L.DEBUG_TOTAL_SESSIONS_FORMAT, n))
 
     for i, s in ipairs(sessions or {}) do
         local ok, deathSess = pcall(C_DamageMeter.GetCombatSessionFromID,
@@ -707,18 +707,18 @@ function ns:DebugDeathRecapIDs()
             end
         end
     end
-    print(L["=== 结束 ==="])
+    print(L.DEBUG_END)
 end
 
 function ns:DebugRecapFields()
-    if not C_DeathRecap then print(L["[Light Damage] C_DeathRecap 不存在"]); return end
+    if not C_DeathRecap then print(L.DEBUG_LIGHT_DAMAGE_C_DEATHRECAP_MISSING); return end
     if not C_DeathRecap.HasRecapEvents or not C_DeathRecap.HasRecapEvents() then
-        print(L["[Light Damage] 没有死亡记录，先死一次"]); return
+        print(L.MSG_LIGHT_DAMAGE_NO_DEATHS_RECORDED_DIE_FIRST); return
     end
     local events = C_DeathRecap.GetRecapEvents and C_DeathRecap.GetRecapEvents()
-    if not events or #events == 0 then print(L["[Light Damage] 返回空"]); return end
+    if not events or #events == 0 then print(L.MSG_LIGHT_DAMAGE_RETURNED_EMPTY); return end
     local maxHP = C_DeathRecap.GetRecapMaxHealth and C_DeathRecap.GetRecapMaxHealth()
-    print(string.format(L["[Light Damage] maxHealth=%s 共%d条，打印前3条字段:"], tostring(maxHP), #events))
+    print(string.format(L.DEBUG_LIGHT_DAMAGE_MAXHEALTH_FORMAT_TOTAL_FORMAT_FIRST_3_FORMAT, tostring(maxHP), #events))
     for i = 1, math.min(3, #events) do
         local ev = events[i]
         print(string.format("  [%d]:", i))

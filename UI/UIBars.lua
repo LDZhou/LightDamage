@@ -145,7 +145,7 @@ function UI:MakeBar(parent, section, index)
 end
 
 function UI:MakeValueStr(value, dur, mode, perSec, percent)
-    if COUNT_MODES[mode] then return ns:FormatNumber(value) .. L["次"] end
+    if COUNT_MODES[mode] then return ns:FormatNumber(value) .. L.COUNT_SUFFIX end
     local baseStr
     if ns.db.display.showPerSecond then
         local ps = (perSec and perSec > 0) and perSec or (dur and dur > 0 and (value / dur) or nil)
@@ -276,7 +276,7 @@ function UI:FillBarsFromAPI(bars, listObj, mode, sessionType, sessionID)
             end
 
             pcall(_safeSetBarValue, bar.value, src.totalAmount, src.amountPerSecond,
-                  ns.db.display.showPerSecond, COUNT_MODES[mode], L["次"])
+                  ns.db.display.showPerSecond, COUNT_MODES[mode], L.COUNT_SUFFIX)
 
             if not bar._apiData then bar._apiData = {} end
             bar._apiData.isAPI = true; bar._apiData.sourceGUID = src.sourceGUID; bar._apiData.sourceCreatureID = src.sourceCreatureID
@@ -347,11 +347,11 @@ function UI:FillDeathBars(seg, bars, listObj, sessionType, sessionID)
 
     local items = {}
     if #selfDeaths > 0 then
-        table.insert(items, {isSeparator=true, label=L["|cffff8888[自己的死亡]|r"], count=#selfDeaths})
+        table.insert(items, {isSeparator=true, label=L.COLORED_OWN_DEATH, count=#selfDeaths})
         for _, d in ipairs(selfDeaths) do table.insert(items, {isSeparator=false, d=d}) end
     end
     if #otherDeaths > 0 then
-        table.insert(items, {isSeparator=true, label=L["|cffaaaaaa[队友死亡]|r"], count=#otherDeaths})
+        table.insert(items, {isSeparator=true, label=L.COLORED_ALLY_DEATH, count=#otherDeaths})
         for _, d in ipairs(otherDeaths) do table.insert(items, {isSeparator=false, d=d}) end
     end
 
@@ -371,7 +371,7 @@ function UI:FillDeathBars(seg, bars, listObj, sessionType, sessionID)
         bar._data = nil; bar._isDeath = false; bar._guid = nil
         bar.statusbar:Hide(); bar.fill:Show(); bar.fill:SetWidth(1); bar.fill:SetVertexColor(0,0,0,0)
         bar.rank:SetText("")
-        bar.name:SetText(L["|cff555555本段暂无死亡记录|r"])
+        bar.name:SetText(L.COLORED_NO_DEATHS_IN_SEGMENT)
         bar.name:SetTextColor(1,1,1)
         bar.value:SetText("")
         if bar.specIcon then bar.specIcon:Hide() end
@@ -410,7 +410,7 @@ function UI:FillDeathBars(seg, bars, listObj, sessionType, sessionID)
 
                 local killStr
                 if d._incomplete then
-                    killStr = "|cffaaaaaa" .. (d.killingAbility or L["等待死亡回放"]) .. "|r"
+                    killStr = "|cffaaaaaa" .. (d.killingAbility or L.DEATH_RECAP_PENDING) .. "|r"
                 else
                     killStr = "|cffff5555" .. (d.killingAbility or "?") .. "|r"
                     if d.killerName and d.killerName ~= "" and d.killerName ~= "?" then

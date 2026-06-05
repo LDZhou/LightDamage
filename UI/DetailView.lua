@@ -436,14 +436,14 @@ function DV:RenderSpellList(name, class, mode, spells, dur, titleSuffix, apiMaxA
     local rawModeName = ns.MODE_NAMES[mode] or mode
     local mn = L[rawModeName] or rawModeName
     local suffix = titleSuffix or ""
-    self.titleText:SetFormattedText(L["%s%s|r 的%s细分%s"], ch, ns:DisplayName(name), mn, suffix)
+    self.titleText:SetFormattedText(L.PLAYER_MODE_BREAKDOWN_TITLE_FORMAT, ch, ns:DisplayName(name), mn, suffix)
 
     local bh, gap, alpha, _, _, _, _, thickness, vOffset, texPath = self:GetBarConfig()
     local currentY = 0
 
     if #spells == 0 then
         local r = self:PlaceRow(1, 0, bh, nil, thickness, vOffset)
-        r.name:SetText(L["|cff555555暂无技能数据|r"])
+        r.name:SetText(L.COLORED_NO_SPELL_DATA)
         r.value:SetText("")
         self:UpdateScroll(bh + 5)
         return
@@ -487,7 +487,7 @@ function DV:RenderSpellList(name, class, mode, spells, dur, titleSuffix, apiMaxA
         if sp.secretAmt then
             valStr = AbbreviateNumbers(sp.secretAmt)
         elseif isCount then
-            valStr = string.format(L["|cffffff00%d次|r"], sp.value)
+            valStr = string.format(L.COLORED_COUNT_TIMES_FORMAT, sp.value)
         elseif dur and dur > 0 and ns.MODE_UNITS[mode] then
             -- ★ 顺序与主界面数据条一致：总量 (每秒)
             valStr = string.format("%s (%s)", ns:FormatNumber(sp.value), ns:FormatNumber(sp.value / dur))
@@ -521,14 +521,14 @@ function DV:RenderSpellList(name, class, mode, spells, dur, titleSuffix, apiMaxA
             
             -- Tooltip 内的安全渲染
             local amtStr = sp_c.secretAmt and AbbreviateNumbers(sp_c.secretAmt) or ns:FormatNumber(sp_c.value)
-            GameTooltip:AddDoubleLine(L["总量"], amtStr, 0.7, 0.7, 0.7, 1, 1, 1)
+            GameTooltip:AddDoubleLine(L.TOTAL, amtStr, 0.7, 0.7, 0.7, 1, 1, 1)
             
             if not sp_c.secretAmt and dur and dur > 0 and ns.MODE_UNITS[mode] then
-                GameTooltip:AddDoubleLine(L["每秒"], string.format("%.1f", sp_c.value / dur), 0.7, 0.7, 0.7, 1, 0.85, 0)
+                GameTooltip:AddDoubleLine(L.PER_SECONDS, string.format("%.1f", sp_c.value / dur), 0.7, 0.7, 0.7, 1, 0.85, 0)
             end
 
             if (sp_c.overhealing or 0) > 0 then
-                GameTooltip:AddDoubleLine(L["过量治疗"], ns:FormatNumber(sp_c.overhealing), 0.7, 0.7, 0.7, 0.8, 0.4, 0.4)
+                GameTooltip:AddDoubleLine(L.OVERHEAL, ns:FormatNumber(sp_c.overhealing), 0.7, 0.7, 0.7, 0.8, 0.4, 0.4)
             end
             GameTooltip:Show()
         end)
@@ -680,7 +680,7 @@ function DV:ShowCombatLocked(safeName)
     self:EnsureCreated()
     self.frame:Show()
     self:ClearRows()
-    self.titleText:SetFormattedText(L["%s 的技能细分"], ns:DisplayName(safeName) or L["未知"]) -- ★ 添加DisplayName
+    self.titleText:SetFormattedText(L.SPELL_BREAKDOWN_TITLE_FORMAT, ns:DisplayName(safeName) or L.UNKNOWN) -- ★ 添加DisplayName
     
     local bh, gap, _, _, _, _, _, thickness, vOffset = self:GetBarConfig()
     local r = self:PlaceRow(1, 0, bh * 2, nil, thickness * 2, vOffset)
@@ -737,7 +737,7 @@ function DV:GetSpellBreakdownExt(seg, guid, mode)
             return result
         else
             if (pd.damageTaken or 0) > 0 then
-                return {{ spellID=0, name=L["承伤合计"], school=1, value=pd.damageTaken,
+                return {{ spellID=0, name=L.TOTAL_DAMAGE_TAKEN, school=1, value=pd.damageTaken,
                     hits=0, percent=100 }}
             end
         end
@@ -757,7 +757,7 @@ function DV:GetSpellBreakdownExt(seg, guid, mode)
                     local sName = sd.name or ("spell:" .. spellID)
                     
                     if mode == "interrupts" and spellID == 32747 then
-                        sName = L["控制技能打断"]
+                        sName = L.CC_INTERRUPTS
                     end
                     
                     table.insert(result, {
@@ -779,7 +779,7 @@ function DV:GetSpellBreakdownExt(seg, guid, mode)
         else
             -- 兜底逻辑
             if (totalVal or 0) > 0 then
-                local fallbackName = (mode == "interrupts") and L["打断合计"] or L["驱散合计"]
+                local fallbackName = (mode == "interrupts") and L.TOTAL_INTERRUPTS or L.TOTAL_DISPELS
                 return {{ spellID=0, name=fallbackName, school=1, value=totalVal,
                     hits=0, percent=100 }}
             end
@@ -802,7 +802,7 @@ function DV:ShowDeathDetail(death)
 
     local ch      = ns:GetClassHex(death.playerClass)
     local selfTag = death.isSelf and " |cffff8888[自己]|r" or ""
-    self.titleText:SetText(ch .. ns:DisplayName(death.playerName or "?") .. "|r" .. selfTag .. L[" 的死亡详情"]) -- ★ 玩家名
+    self.titleText:SetText(ch .. ns:DisplayName(death.playerName or "?") .. "|r" .. selfTag .. L.DEATH_DETAILS_TITLE_SUFFIX) -- ★ 玩家名
 
     local events     = death.events or {}
     local evReversed = {}
@@ -827,9 +827,9 @@ function DV:ShowDeathDetail(death)
         death.killingAbility ~= "?" and GetSpellIcon(
             (evReversed[1] and not evReversed[1].isHeal) and evReversed[1].spellID or 0
         ) or nil,
-        L["|cffff3333[致命]: |r"] .. (death.killingAbility or "?")
+        L.COLORED_FATAL_PREFIX .. (death.killingAbility or "?")
     )
-    hr.value:SetText(L["|cffaaaaaa击杀者: |r"] .. (death.killerName ~= "" and ns:DisplayName(death.killerName) or L["未知"])) -- ★ 击杀者名
+    hr.value:SetText(L.COLORED_KILLER_PREFIX .. (death.killerName ~= "" and ns:DisplayName(death.killerName) or L.UNKNOWN)) -- ★ 击杀者名
 
     -- 分割线
     ri = ri + 1
@@ -837,14 +837,14 @@ function DV:ShowDeathDetail(death)
     currentY = currentY - (15 + gap)
     sep.fill:SetMinMaxValues(0, 1)
     sep.fill:SetValue(0)
-    sep.name:SetText(L["|cff4499cc— 死亡前事件（近 → 远）|r"])
-    sep.value:SetText(string.format(L["|cff666666%d条|r"], #evReversed))
+    sep.name:SetText(L.EVENTS_BEFORE_DEATH_RECENT_OLD)
+    sep.value:SetText(string.format(L.COLORED_ROW_COUNT_FORMAT, #evReversed))
 
     if #evReversed == 0 then
         ri = ri + 1
         local er = self:PlaceRow(ri, currentY, bh, nil, thickness, vOffset)
         currentY = currentY - (bh + gap)
-        er.name:SetText(L["|cff444444暂无事件数据（12.0副本内CLEU受限）|r"])
+        er.name:SetText(L.COLORED_NO_EVENT_DATA)
         er.value:SetText("")
     end
 
@@ -864,7 +864,7 @@ function DV:ShowDeathDetail(death)
             r.bg:SetColorTexture(unpack(ROW_BG[(ri % 2) + 1]))
             setNameWithIcon(r, GetSpellIcon(ev.spellID),
                 string.format("|cff44ee44+%s|r %s",
-                    ns:FormatNumber(math.abs(ev.amount)), ev.spellName or L["治疗"]))
+                    ns:FormatNumber(math.abs(ev.amount)), ev.spellName or L.HEALING))
         elseif isFatal then
             r.bg:SetColorTexture(0.20, 0.03, 0.03, 0.96)
             r.fill:SetStatusBarColor(0.80, 0.04, 0.04, alpha)
@@ -881,9 +881,9 @@ function DV:ShowDeathDetail(death)
         local td = deathTime - (ev.time or deathTime)
         local timeStr
         if td < 0.05 then
-            timeStr = L["|cffff3333死亡|r"]
+            timeStr = L.COLORED_DEATH
         else
-            timeStr = string.format(L["|cff888888%.1fs前|r"], td)
+            timeStr = string.format(L.COLORED_SECONDS_AGO_FORMAT, td)
         end
         local hpColor = ev.isHeal and "44ee44" or (hpPct < 0.15 and "ff4444" or "bbbbbb")
         r.value:SetText(string.format("|cff%s%.0f%%|r %s", hpColor, ev.hpPercent or 0, timeStr))
@@ -900,27 +900,27 @@ function DV:ShowDeathDetail(death)
             end
             GameTooltip:AddLine(" ")
             if ev_c.isHeal then
-                GameTooltip:AddDoubleLine(L["治疗量"],
+                GameTooltip:AddDoubleLine(L.HEALING_DONE,
                     ns:FormatNumber(math.abs(ev_c.amount)), 0.7, 0.7, 0.7, 0.3, 1, 0.3)
             else
-                GameTooltip:AddDoubleLine(L["伤害量"],
+                GameTooltip:AddDoubleLine(L.DAMAGE_DONE,
                     ns:FormatNumber(ev_c.amount), 0.7, 0.7, 0.7, 1, 0.3, 0.3)
                 if (ev_c.overkill or 0) > 0 then
-                    GameTooltip:AddDoubleLine(L["过量击杀"],
+                    GameTooltip:AddDoubleLine(L.OVERKILL,
                         ns:FormatNumber(ev_c.overkill), 0.7, 0.7, 0.7, 1, 0.5, 0)
                 end
             end
             if ev_c.srcName and ev_c.srcName ~= "" then
-                GameTooltip:AddDoubleLine(L["来源"], ns:DisplayName(ev_c.srcName), 0.7, 0.7, 0.7, 1, 1, 1) -- ★ 来源名
+                GameTooltip:AddDoubleLine(L.SOURCE, ns:DisplayName(ev_c.srcName), 0.7, 0.7, 0.7, 1, 1, 1) -- ★ 来源名
             end
-            GameTooltip:AddDoubleLine(L["剩余生命"],
+            GameTooltip:AddDoubleLine(L.HP_REMAINING,
                 string.format("%s / %s (%.0f%%)",
                     ns:FormatNumber(ev_c.hp or 0),
                     ns:FormatNumber(maxHP_c),
                     ev_c.hpPercent or 0),
                 0.7, 0.7, 0.7, 1, 1, 1)
             if td_c >= 0.05 then
-                GameTooltip:AddDoubleLine(L["距死亡"], string.format(L["%.1f 秒"], td_c), 0.7, 0.7, 0.7, 1, 1, 1)
+                GameTooltip:AddDoubleLine(L.TO_DEATH, string.format(L.SECONDS_FORMAT, td_c), 0.7, 0.7, 0.7, 1, 1, 1)
             end
             GameTooltip:Show()
         end)
@@ -936,10 +936,10 @@ function DV:ShowDeathDetail(death)
     tr.fill:SetValue(1)
     tr.fill:SetStatusBarColor(0.04, 0.04, 0.08, 0.90)
     tr.name:SetText(string.format(
-        L["受伤: |cffff9966%s|r"],
+        L.DAMAGE_TAKEN_LINE_FORMAT,
         ns:FormatNumber(death.totalDamageTaken or 0)))
     local spanStr = (death.timeSpan and death.timeSpan > 0)
-        and string.format(L["|cff888888跨度 %.1fs|r"], death.timeSpan) or ""
+        and string.format(L.COLORED_SPAN_SECONDS_FORMAT, death.timeSpan) or ""
     tr.value:SetText(spanStr)
 
     self:UpdateScroll(math.abs(currentY))
@@ -957,14 +957,14 @@ function DV:ShowEnemyDamageTakenDetail(enemyName, sources, totalDmg)
     self:ApplyTheme()
     self:ClearRows()
 
-    self.titleText:SetText(string.format(L["%s 的承伤来源"], ns:DisplayName(enemyName)))
+    self.titleText:SetText(string.format(L.DAMAGE_TAKEN_SOURCE_TITLE_FORMAT, ns:DisplayName(enemyName)))
 
     local bh, gap, alpha, _, _, _, _, thickness, vOffset, texPath = self:GetBarConfig()
     local currentY = 0
 
     if not sources or #sources == 0 then
         local r = self:PlaceRow(1, 0, bh, nil, thickness, vOffset)
-        r.name:SetText(L["|cff555555暂无承伤数据|r"]); r.value:SetText("")
+        r.name:SetText(L.COLORED_NO_DAMAGE_TAKEN_DATA); r.value:SetText("")
         self:UpdateScroll(bh + 5); return
     end
 

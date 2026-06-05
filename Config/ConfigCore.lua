@@ -15,11 +15,11 @@ local SIDEBAR_W = 110
 local CAT_H     = 34
 
 local categories = {
-    {id="layout", labelKey="布局",   icon="-"},
-    {id="data",   labelKey="数据",   icon="-"},
-    {id="look",   labelKey="外观",   icon="-"},
-    {id="perf",   labelKey="性能",   icon="-"},
-    {id="profiles", labelKey="配置管理", icon="-"},
+    {id="layout", labelKey="CATEGORY_LAYOUT",   icon="-"},
+    {id="data",   labelKey="CATEGORY_DATA",   icon="-"},
+    {id="look",   labelKey="CATEGORY_APPEARANCE",   icon="-"},
+    {id="perf",   labelKey="CATEGORY_PERFORMANCE",   icon="-"},
+    {id="profiles", labelKey="CATEGORY_PROFILES", icon="-"},
 }
 
 -- ============================================================
@@ -28,9 +28,9 @@ local categories = {
 function Config:GetSharedMediaTextures()
     local result = {}
     local builtins = {
-        {l=L["极简纯色 (Minimal Flat)"],    v="Interface\\Buttons\\WHITE8X8"},
-        {l=L["暴雪默认 (Blizz Default)"],   v="Interface\\TargetingFrame\\UI-StatusBar"},
-        {l=L["平滑渐变 (Smooth)"],           v="Interface\\RaidFrame\\Raid-Bar-Hp-Fill"},
+        {l=L.MINIMAL_FLAT,    v="Interface\\Buttons\\WHITE8X8"},
+        {l=L.BLIZZ_DEFAULT,   v="Interface\\TargetingFrame\\UI-StatusBar"},
+        {l=L.SMOOTH,           v="Interface\\RaidFrame\\Raid-Bar-Hp-Fill"},
     }
     local builtinPaths = {}
     for _, b in ipairs(builtins) do table.insert(result, b); builtinPaths[b.v] = true end
@@ -44,7 +44,7 @@ end
 
 function Config:GetSharedMediaFonts()
     local chatFont = select(1, ChatFontNormal:GetFont())
-    local result = { {l=L["系统默认"], v=STANDARD_TEXT_FONT}, {l=L["伤害数字"], v=DAMAGE_TEXT_FONT}, {l=L["聊天框字体"], v=chatFont}, {l=L["单位名称"], v=UNIT_NAME_FONT} }
+    local result = { {l=L.SYSTEM_DEFAULT, v=STANDARD_TEXT_FONT}, {l=L.DAMAGE_TEXT, v=DAMAGE_TEXT_FONT}, {l=L.CONFIG_CHAT_FONT, v=chatFont}, {l=L.UNIT_NAME, v=UNIT_NAME_FONT} }
     local builtinPaths = {}; for _, b in ipairs(result) do builtinPaths[b.v] = true end
     local LSM = LibStub and LibStub("LibSharedMedia-3.0", true)
     if LSM then
@@ -80,8 +80,8 @@ end
 function Config:RefreshTitle()
     if self.titleText then
         local pName = LightDamageDB and LightDamageDB.activeProfile or "默认"
-        local displayName = (pName == "默认") and L["默认"] or pName
-        self.titleText:SetText(string.format(L["|cff00ccffLight Damage|r 设置 - %s"], displayName))
+        local displayName = (pName == "默认") and L.DEFAULT or pName
+        self.titleText:SetText(string.format(L.MSG_LIGHT_DAMAGE_SETTINGS_FORMAT, displayName))
     end
 end
 
@@ -169,7 +169,7 @@ function Config:BuildPreviewBtn()
     local titleFrame = self._configTitle; if not titleFrame then return end
     local btn = CreateFrame("Button", nil, titleFrame); btn:SetSize(52, 22); btn:SetPoint("RIGHT", titleFrame, "RIGHT", -32, 0)
     self:FillBg(btn, 0.05, 0.20, 0.35, 1); self:CreateBorder(btn, 0.1, 0.45, 0.75, 1)
-    local bt = btn:CreateFontString(nil, "OVERLAY"); bt:SetFont(STANDARD_TEXT_FONT, 10, "OUTLINE"); bt:SetPoint("CENTER"); bt:SetText(L["预览"]); bt:SetTextColor(0.4, 0.85, 1)
+    local bt = btn:CreateFontString(nil, "OVERLAY"); bt:SetFont(STANDARD_TEXT_FONT, 10, "OUTLINE"); bt:SetPoint("CENTER"); bt:SetText(L.PREVIEW); bt:SetTextColor(0.4, 0.85, 1)
     btn:SetScript("OnClick", function() self:TogglePreview() end)
     btn:SetScript("OnEnter", function() bt:SetTextColor(1, 1, 1) end)
     btn:SetScript("OnLeave", function() bt:SetTextColor(0.4, 0.85, 1) end)

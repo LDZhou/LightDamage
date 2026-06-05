@@ -42,6 +42,15 @@ ns.SPEC_ICON_KEYS = {
     [1467]="Evoker_RisingFury", [1468]="Evoker_MerithrasBlessing", [1473]="Evoker_Duplicate",
 }
 
+-- 图标包专用覆盖: 个别素材包的文件名或图标归属与通用表不同
+ns.SPEC_ICON_PACK_OVERRIDES = {
+    apex = {
+        [72]="Warrior_RampagingBerserker2",
+        [259]="Rogue_Implacable",
+        [261]="Rogue_AncientArts",
+    },
+}
+
 -- 自定义图标包路径前缀
 local ICON_ROOT = "Interface\\AddOns\\LightDamage\\Textures\\icons\\"
 
@@ -97,7 +106,8 @@ function ns:GetSpecIcon(specID, class, specIconID)
         specID = ns.ICON_TO_SPECID[specIconID]
     end
     if specID then
-        local stem = ns.SPEC_ICON_KEYS[specID]
+        local packOverrides = ns.SPEC_ICON_PACK_OVERRIDES and ns.SPEC_ICON_PACK_OVERRIDES[pack]
+        local stem = (packOverrides and packOverrides[specID]) or ns.SPEC_ICON_KEYS[specID]
         if stem then
             return ICON_ROOT .. pack .. "\\" .. stem
         end
@@ -307,24 +317,24 @@ end
 
 -- 模式名称映射
 ns.MODE_NAMES = {
-    damage      = "伤害",
-    healing     = "治疗",
-    damageTaken = "承伤",
-    deaths      = "死亡",
-    interrupts  = "打断",
-    dispels     = "驱散",
-    enemyDamageTaken = "敌人承伤",
+    damage      = "DAMAGE",
+    healing     = "HEALING",
+    damageTaken = "DAMAGE_TAKEN",
+    deaths      = "DEATHS",
+    interrupts  = "INTERRUPTS",
+    dispels     = "DISPELS",
+    enemyDamageTaken = "ENEMY_DAMAGE_TAKEN",
 }
 
 ns.MODE_SHORT = {
-    damage          = "伤",
-    healing         = "治",
-    damageTaken     = "承",
-    enemyDamageTaken= "敌",
-    deaths          = "死",
-    interrupts      = "断",
-    dispels         = "驱",
-    enemyDamageTaken= "敌",
+    damage          = "DAMAGE_SHORT",
+    healing         = "HEALING_SHORT",
+    damageTaken     = "DAMAGE_TAKEN_SHORT",
+    enemyDamageTaken= "ENEMY_SHORT",
+    deaths          = "DEATHS_SHORT",
+    interrupts      = "INTERRUPTS_SHORT",
+    dispels         = "DISPELS_SHORT",
+    enemyDamageTaken= "ENEMY_SHORT",
 }
 
 ns.MODE_UNITS = {

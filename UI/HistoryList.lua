@@ -97,7 +97,7 @@ function HL:Build()
     local cbTxt = clrBtn:CreateFontString(nil, "OVERLAY")
     cbTxt:SetFont(STANDARD_TEXT_FONT, 10, "OUTLINE")
     cbTxt:SetPoint("CENTER")
-    cbTxt:SetText(L["[一键清空野外战斗]"])
+    cbTxt:SetText(L.CLEAR_OUTDOOR_COMBAT)
     cbTxt:SetTextColor(1, 0.4, 0.4)
 
     clrBtn:SetScript("OnClick", function()
@@ -125,7 +125,7 @@ function HL:Build()
             if ns.CombatTracker then
                 ns.CombatTracker:ResetMeterForNewRun()
             end
-            segs.overall = segs:NewSegment("overall", L["总计"])
+            segs.overall = segs:NewSegment("overall", L.OVERALL)
         end
 
         -- 3. 视图修正：清完后总是跳到合并列表第一条
@@ -144,7 +144,7 @@ function HL:Build()
         if ns.Analysis then ns.Analysis:InvalidateCache() end
         if ns.UI then ns.UI:Refresh() end
 
-        print(L["|cff00ccff[Light Damage]|r 已清空所有野外历史记录，只保留副本与首领战数据。"])
+        print(L.MSG_LIGHT_DAMAGE_CLEARED_OUTDOOR_HISTORY)
     end)
     self.clearBtn = clrBtn
 

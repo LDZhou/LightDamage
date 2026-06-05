@@ -76,9 +76,9 @@ local function buildDeathRecordFromRecapID(recapID, playerGUID, playerName, play
         local amount    = getAmount(ev.amount)
         local overkill  = getAmount(ev.overkill)
         if spellName == "" then
-            if isHeal then spellName = L["治疗"]
-            elseif evType == "SWING_DAMAGE" then spellName = L["近战"]
-            else spellName = L["未知"] end
+            if isHeal then spellName = L.HEALING
+            elseif evType == "SWING_DAMAGE" then spellName = L.MELEE
+            else spellName = L.UNKNOWN end
         end
         local srcName = ev.sourceName or ""
         local hp      = getAmount(ev.currentHP)
@@ -531,8 +531,8 @@ function CT:RegisterEvents()
                                 if ns.state.isInInstance and not ns.state.inCombat then
                                     CT:ResetMeterForNewRun()
                                     if ns.Segments then
-                                        local displayName = CT._currentInstanceName or rawName or L["副本"]
-                                        ns.Segments.overall = ns.Segments:NewSegment("overall", string.format(L["%s [全程]"], displayName))
+                                        local displayName = CT._currentInstanceName or rawName or L.INSTANCE
+                                        ns.Segments.overall = ns.Segments:NewSegment("overall", string.format(L.OVERALL_SEGMENT_NAME_FORMAT, displayName))
                                     end
                                 end
                             end)
@@ -624,14 +624,14 @@ end
 -- Debug
 -- ============================================================
 function CT:DebugSessions()
-    print(L["=== [Light Damage] Sessions 诊断 ==="])
+    print(L.DEBUG_LIGHT_DAMAGE_SESSIONS_DIAGNOSTICS)
     print(string.format("  baseline=%d  lastProcessed=%d  inCombat=%s  isInInstance=%s", CT._baselineSessionCount, CT._lastProcessedCount, tostring(ns.state.inCombat), tostring(ns.state.isInInstance)))
     local sessions = C_DamageMeter.GetAvailableCombatSessions(); local n = sessions and #sessions or 0
-    print(string.format(L["  GetAvailableCombatSessions: %d 条"], n))
+    print(string.format(L.DEBUG_GETAVAILABLECOMBATSESSIONS_FORMAT, n))
     for i, s in ipairs(sessions or {}) do
         print(string.format("    [%d] id=%-4d dur=%-6s secret=%-5s name=%s", i, s.sessionID, tostring(s.durationSeconds), tostring(isSessionStillSecret(s.sessionID)), tostring(s.name)))
     end
-    local segs = ns.Segments; print(string.format(L["  history: %d 条"], segs and #segs.history or 0))
+    local segs = ns.Segments; print(string.format(L.HISTORY_FORMAT, segs and #segs.history or 0))
     for i, seg in ipairs(segs and segs.history or {}) do
         print(string.format("    [%d] %s  dmg=%d  heal=%d  dur=%.1f  localID=%s", i, seg.name or "?", seg.totalDamage, seg.totalHealing, seg.duration or 0, tostring(seg._localID)))
     end

@@ -112,7 +112,7 @@ end
 -- 初始化
 -- ============================================================
 function Segments:Init()
-    self.overall     = self:NewSegment("overall", L["总计"])
+    self.overall     = self:NewSegment("overall", L.OVERALL)
     self.current     = nil
     self.history     = {}
     self.viewIndex   = nil   -- ★ 现在是 nil 或 table {kind=..., localID/sessionID=...}
@@ -558,19 +558,19 @@ end
 
 function Segments:GetViewLabel()
     local seg = self:GetViewSegment()
-    if not seg then return L["无数据"] end
+    if not seg then return L.NO_DATA end
 
     if seg.type == "overall" then
-        return L["|cffaaaaaa总计|r"]
+        return L.COLORED_OVERALL
     elseif seg.type == "mythicplus" then
         if ns.MythicPlus then return ns.MythicPlus:FormatSegLabel(seg) end
-        return seg.name or L["大秘境"]
+        return seg.name or L.MYTHIC_PLUS
     elseif seg.type == "boss" then
         local icon = seg.success == true  and "|cff00ff00[Win]|r "
                   or seg.success == false and "|cffff0000[Loss]|r " or ""
         return icon .. (seg.encounterName or seg.name)
     else
-        return seg.name or L["当前"]
+        return seg.name or L.CURRENT
     end
 end
 
@@ -678,7 +678,7 @@ function Segments:GetHistoryList()
                       or seg.success == false and "|cffff4444[Loss]|r " or ""
             label = icon .. (seg.encounterName or seg.name or "Boss")
         else
-            label = seg.name or L["战斗"]
+            label = seg.name or L.COMBAT
         end
         local dur = seg.duration or 0
         if dur > 0 then
@@ -699,9 +699,9 @@ function Segments:GetHistoryList()
     -- current
     local currentLabel
     if self.current and self.current.isActive then
-        currentLabel = L["|cff00ff00> 当前战斗|r"]
+        currentLabel = L.COLORED_CURRENT_COMBAT
     else
-        currentLabel = L["|cff666666* 当前|r"]
+        currentLabel = L.COLORED_CURRENT_MARKER
     end
     table.insert(list, {
         key       = "current",
@@ -714,7 +714,7 @@ function Segments:GetHistoryList()
     table.insert(list, {
         key   = "overall",
         seg   = self.overall,
-        label = L["|cffaaaaaa* 总计|r"],
+        label = L.COLORED_TOTAL_MARKER,
     })
 
     return list

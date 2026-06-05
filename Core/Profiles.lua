@@ -45,8 +45,8 @@ function ns:SwitchProfile(name)
         if ns.Config.RefreshTitle then ns.Config:RefreshTitle() end
     end
 
-    local displayName = (name == "默认") and L["默认"] or name
-    print(L["|cff00ccff[Light Damage]|r 已应用 "] .. displayName .. L["的配置"])
+    local displayName = (name == "默认") and L.DEFAULT or name
+    print(L.MSG_LIGHT_DAMAGE_APPLIED .. displayName .. L.PROFILE_S_PROFILE)
 
     if oldLang ~= newLang then
         ReloadUI()
@@ -79,7 +79,7 @@ function ns:RenameProfile(oldName, newName)
         LightDamageDB.activeProfile = newName
         if ns.Config and ns.Config.RefreshTitle then ns.Config:RefreshTitle() end
     end
-    print(L["|cff00ccff[Light Damage]|r 配置已重命名为 "] .. newName)
+    print(L.MSG_LIGHT_DAMAGE_PROFILE_RENAMED_TO .. newName)
     return true
 end
 
@@ -240,7 +240,7 @@ function ns:LoadSessionHistory()
     -- 恢复 overall
     local saved = ns.db.savedOverall
     if saved and (saved.totalDamage or 0) > 0 then
-        ns.Segments.overall = ns.Segments:NewSegment("overall", saved.name or L["总计"])
+        ns.Segments.overall = ns.Segments:NewSegment("overall", saved.name or L.OVERALL)
         ns.Segments.overall.isActive         = false
         ns.Segments.overall.duration         = saved.duration         or 0
         ns.Segments.overall.totalDamage      = saved.totalDamage      or 0

@@ -84,9 +84,9 @@ function UI:Refresh()
 
     -- Summary 栏：总计仍直读 Overall API。
     if self.summaryBar:IsShown() then
-        local ovrTitleWord = L["总计"]
+        local ovrTitleWord = L.OVERALL
         local ovrSeg = segs and segs.overall
-        if ovrSeg and ovrSeg._isMerged then ovrTitleWord = L["全程"] end
+        if ovrSeg and ovrSeg._isMerged then ovrTitleWord = L.OVERALL_SEGMENT end
 
         local durSafe = C_DamageMeter.GetSessionDurationSeconds(Enum.DamageMeterSessionType.Overall) or 0
         local dmDmg = self:GetCachedSession(Enum.DamageMeterSessionType.Overall, Enum.DamageMeterType.DamageDone)
@@ -97,9 +97,9 @@ function UI:Refresh()
         if dmHeal then local ok, s = pcall(AbbreviateNumbers, dmHeal.totalAmount); if ok and s then healStr = s end end
 
         if ns.state.inCombat then
-            self.summText:SetFormattedText(L["全程 %s  |  Damage |cffffd100%s|r  Heal |cff66ff66%s|r"], ns:FormatTime(durSafe), dmgStr, healStr)
+            self.summText:SetFormattedText(L.OVERALL_SUMMARY_LINE_FORMAT, ns:FormatTime(durSafe), dmgStr, healStr)
         else
-            self.summText:SetText(string.format(L["%s %s  |  Damage |cffffd100%s|r  Heal |cff66ff66%s|r"], ovrTitleWord, ns:FormatTime(durSafe), dmgStr, healStr))
+            self.summText:SetText(string.format(L.SUMMARY_LINE_FORMAT, ovrTitleWord, ns:FormatTime(durSafe), dmgStr, healStr))
         end
     end
 
@@ -136,19 +136,19 @@ function UI:Refresh()
     end
 
     if useOvr and self.ovrContainer and self.ovrContainer:IsShown() then
-        local ovrTitleWord = L["总计"]
-        if segs and segs.overall and segs.overall._isMerged then ovrTitleWord = L["全程"] end
+        local ovrTitleWord = L.OVERALL
+        if segs and segs.overall and segs.overall._isMerged then ovrTitleWord = L.OVERALL_SEGMENT end
         if isSplitView then
             local priLabel = L[ns.MODE_NAMES[sp.primaryMode] or ""]
             local secLabel = L[ns.MODE_NAMES[sp.secondaryMode] or ""]
-            if sp.primaryMode == "damageTaken" and ns.state.damageTakenView == "enemy" then priLabel = L["敌人承伤"] end
-            if sp.secondaryMode == "damageTaken" and ns.state.damageTakenView == "enemy" then secLabel = L["敌人承伤"] end
-            self.ovrPriHead.label:SetText(string.format(L["|cff4cb8e8[%s%s]|r"], ovrTitleWord, priLabel))
-            self.ovrSecHead.label:SetText(string.format(L["|cff4cb8e8[%s%s]|r"], ovrTitleWord, secLabel))
+            if sp.primaryMode == "damageTaken" and ns.state.damageTakenView == "enemy" then priLabel = L.ENEMY_DAMAGE_TAKEN end
+            if sp.secondaryMode == "damageTaken" and ns.state.damageTakenView == "enemy" then secLabel = L.ENEMY_DAMAGE_TAKEN end
+            self.ovrPriHead.label:SetText(string.format(L.COLORED_OVERALL_HEADER_FORMAT, ovrTitleWord, priLabel))
+            self.ovrSecHead.label:SetText(string.format(L.COLORED_OVERALL_HEADER_FORMAT, ovrTitleWord, secLabel))
         else
             local modeLabel = L[ns.MODE_NAMES[mode] or ""]
-            if mode == "damageTaken" and ns.state.damageTakenView == "enemy" then modeLabel = L["敌人承伤"] end
-            self.ovrPriHead.label:SetText(string.format(L["|cff4cb8e8[%s%s]|r"], ovrTitleWord, modeLabel))
+            if mode == "damageTaken" and ns.state.damageTakenView == "enemy" then modeLabel = L.ENEMY_DAMAGE_TAKEN end
+            self.ovrPriHead.label:SetText(string.format(L.COLORED_OVERALL_HEADER_FORMAT, ovrTitleWord, modeLabel))
         end
     end
 end
@@ -171,7 +171,7 @@ function UI:RefreshTitle()
     if not self.titleText then return end
 
     local segs = ns.Segments
-    local segL = segs and segs:GetViewLabel() or L["无数据"]
+    local segL = segs and segs:GetViewLabel() or L.NO_DATA
     local dot = ""
     local dur = 0
 
@@ -207,12 +207,12 @@ function UI:RefreshHead(h, mode, seg, dur, apiSessionType, apiSessionID)
     if h.dtFriendly then
         if mode == "damageTaken" then
             local isEnemy = (ns.state.damageTakenView == "enemy")
-            h.dtFriendlyText:SetText(L["友方"])
-            h.dtEnemyText:SetText(L["敌方"])
+            h.dtFriendlyText:SetText(L.ALLY)
+            h.dtEnemyText:SetText(L.ENEMY)
             if isEnemy then
                 h.dtFriendlyText:SetTextColor(0.3, 0.5, 0.3)
                 h.dtEnemyText:SetTextColor(1.0, 0.4, 0.4)
-                mn = L["敌人承伤"]
+                mn = L.ENEMY_DAMAGE_TAKEN
             else
                 h.dtFriendlyText:SetTextColor(0.3, 1.0, 0.3)
                 h.dtEnemyText:SetTextColor(0.5, 0.3, 0.3)
@@ -233,7 +233,7 @@ function UI:RefreshHead(h, mode, seg, dur, apiSessionType, apiSessionID)
             local fmt = "|cff%02x%02x%02x%s|r"
             h.label:SetText(string.format(fmt, ac[1]*255, ac[2]*255, ac[3]*255, L[ns.MODE_NAMES["damageTaken"]]))
             local w1 = h.label:GetStringWidth()
-            h.label:SetText(string.format(fmt, ac[1]*255, ac[2]*255, ac[3]*255, L["敌人承伤"]))
+            h.label:SetText(string.format(fmt, ac[1]*255, ac[2]*255, ac[3]*255, L.ENEMY_DAMAGE_TAKEN))
             local w2 = h.label:GetStringWidth()
             h._dtMaxLabelW = math.max(w1, w2) + 2
             h.label:SetText(savedText)
@@ -246,8 +246,8 @@ function UI:RefreshHead(h, mode, seg, dur, apiSessionType, apiSessionID)
 
     local function SetFromSession(session)
         if session and session.totalAmount then
-            if COUNT_MODES[mode] then h.info:SetFormattedText(L["团队总%s: %s次"], mn, AbbreviateNumbers(session.totalAmount))
-            else h.info:SetFormattedText(L["团队总%s: %s"], mn, AbbreviateNumbers(session.totalAmount)) end
+            if COUNT_MODES[mode] then h.info:SetFormattedText(L.GROUP_TOTAL_COUNT_FORMAT, mn, AbbreviateNumbers(session.totalAmount))
+            else h.info:SetFormattedText(L.GROUP_TOTAL_FORMAT, mn, AbbreviateNumbers(session.totalAmount)) end
         else
             h.info:SetText("")
         end
@@ -275,8 +275,8 @@ function UI:RefreshHead(h, mode, seg, dur, apiSessionType, apiSessionID)
         else
             total = mode=="damage" and seg.totalDamage or mode=="healing" and seg.totalHealing or mode=="damageTaken" and seg.totalDamageTaken or 0
         end
-        local valStr = COUNT_MODES[mode] and (ns:FormatNumber(total)..L["次"]) or ns:FormatNumber(total)
-        h.info:SetText(string.format(L["团队总%s: %s"], mn, valStr))
+        local valStr = COUNT_MODES[mode] and (ns:FormatNumber(total)..L.COUNT_SUFFIX) or ns:FormatNumber(total)
+        h.info:SetText(string.format(L.GROUP_TOTAL_FORMAT, mn, valStr))
     else
         h.info:SetText("")
     end
@@ -342,30 +342,30 @@ function UI:ShowTooltip(bar, section)
     local function AddPlayerInfoLines()
         if specName ~= "" or (ilvl and ilvl > 0) or (score and score > 0) then
             GameTooltip:AddLine(" ")
-            if specName ~= "" then GameTooltip:AddDoubleLine(L["专精"], specName, 0.7,0.7,0.7, 1,1,1) end
-            if ilvl and ilvl > 0 then GameTooltip:AddDoubleLine(L["平均装等"], tostring(ilvl), 0.7,0.7,0.7, 1,0.85,0) end
+            if specName ~= "" then GameTooltip:AddDoubleLine(L.SPEC, specName, 0.7,0.7,0.7, 1,1,1) end
+            if ilvl and ilvl > 0 then GameTooltip:AddDoubleLine(L.AVG_ITEM_LEVEL, tostring(ilvl), 0.7,0.7,0.7, 1,0.85,0) end
             if score and score > 0 then
                 local color = C_ChallengeMode and C_ChallengeMode.GetDungeonScoreRarityColor and C_ChallengeMode.GetDungeonScoreRarityColor(score)
-                if color then GameTooltip:AddDoubleLine(L["大秘境评分"], color:WrapTextInColorCode(tostring(score)), 0.7,0.7,0.7, 1,1,1)
-                else GameTooltip:AddDoubleLine(L["大秘境评分"], tostring(score), 0.7,0.7,0.7, 1,0.5,0) end
+                if color then GameTooltip:AddDoubleLine(L.MYTHIC_PLUS_RATING, color:WrapTextInColorCode(tostring(score)), 0.7,0.7,0.7, 1,1,1)
+                else GameTooltip:AddDoubleLine(L.MYTHIC_PLUS_RATING, tostring(score), 0.7,0.7,0.7, 1,0.5,0) end
             end
         end
     end
 
     if bar._isDeath then
-        GameTooltip:AddLine(ns:GetClassHex(d.playerClass)..ns:DisplayName(d.playerName)..L["|r [死亡]"])
+        GameTooltip:AddLine(ns:GetClassHex(d.playerClass)..ns:DisplayName(d.playerName)..L.DEATH_TOOLTIP_SUFFIX)
         AddPlayerInfoLines()
         GameTooltip:AddLine(" ")
-        GameTooltip:AddDoubleLine(L["致命技能"], d.killingAbility or "?", 0.7,0.7,0.7, 1,0.3,0.3)
-        GameTooltip:AddDoubleLine(L["击杀者"], ns:DisplayName(d.killerName) or "?", 0.7,0.7,0.7, 1,1,1)
+        GameTooltip:AddDoubleLine(L.FATAL_SPELL, d.killingAbility or "?", 0.7,0.7,0.7, 1,0.3,0.3)
+        GameTooltip:AddDoubleLine(L.KILLER, ns:DisplayName(d.killerName) or "?", 0.7,0.7,0.7, 1,1,1)
         if d._incomplete then
-            GameTooltip:AddLine(L["|cffaaaaaa死亡回放暂未释放，脱战或稍后会自动补齐|r"])
+            GameTooltip:AddLine(L.COLORED_DEATH_RECAP_PENDING_DESC)
         else
-            GameTooltip:AddDoubleLine(L["死前受伤"], ns:FormatNumber(d.totalDamageTaken or 0), 0.7,0.7,0.7, 1,0.5,0.5)
-            GameTooltip:AddDoubleLine(L["死前受治"], ns:FormatNumber(d.totalHealingReceived or 0), 0.7,0.7,0.7, 0.5,1,0.5)
+            GameTooltip:AddDoubleLine(L.DAMAGE_BEFORE_DEATH, ns:FormatNumber(d.totalDamageTaken or 0), 0.7,0.7,0.7, 1,0.5,0.5)
+            GameTooltip:AddDoubleLine(L.HEALED_BEFORE_DEATH, ns:FormatNumber(d.totalHealingReceived or 0), 0.7,0.7,0.7, 0.5,1,0.5)
         end
         GameTooltip:AddLine(" ")
-        GameTooltip:AddLine(L["|cff00ccff点击查看完整死亡日志|r"], 0.4,0.4,0.4)
+        GameTooltip:AddLine(L.COLORED_DEATH_LOG_HINT, 0.4,0.4,0.4)
         GameTooltip:Show()
         return
     end
@@ -374,17 +374,17 @@ function UI:ShowTooltip(bar, section)
         GameTooltip:AddLine(ns:GetClassHex(bar._classStr)..ns:DisplayName(bar._nameStr or "?").."|r")
         AddPlayerInfoLines()
         GameTooltip:AddLine(" ")
-        GameTooltip:AddLine(L["|cffaaaaaa— API 实时数据 —|r"])
+        GameTooltip:AddLine(L.COLORED_API_REALTIME_DATA)
         if COUNT_MODES[bar._mode] then
-            GameTooltip:AddDoubleLine((L[ns.MODE_NAMES[bar._mode] or bar._mode])..L["次"], AbbreviateNumbers(d.totalAmount), 0.7,0.7,0.7, 1,1,1)
+            GameTooltip:AddDoubleLine((L[ns.MODE_NAMES[bar._mode] or bar._mode])..L.COUNT_SUFFIX, AbbreviateNumbers(d.totalAmount), 0.7,0.7,0.7, 1,1,1)
         elseif ns.db.display.showPerSecond then
-            GameTooltip:AddDoubleLine(ns.MODE_NAMES[bar._mode] or bar._mode, AbbreviateNumbers(d.totalAmount), 0.7,0.7,0.7, 1,1,1)
-            GameTooltip:AddDoubleLine(L["每秒"], AbbreviateNumbers(d.amountPerSecond), 0.7,0.7,0.7, 1,0.85,0)
+            GameTooltip:AddDoubleLine(L[ns.MODE_NAMES[bar._mode] or bar._mode], AbbreviateNumbers(d.totalAmount), 0.7,0.7,0.7, 1,1,1)
+            GameTooltip:AddDoubleLine(L.PER_SECONDS, AbbreviateNumbers(d.amountPerSecond), 0.7,0.7,0.7, 1,0.85,0)
         else
-            GameTooltip:AddDoubleLine(ns.MODE_NAMES[bar._mode] or bar._mode, AbbreviateNumbers(d.totalAmount), 0.7,0.7,0.7, 1,1,1)
+            GameTooltip:AddDoubleLine(L[ns.MODE_NAMES[bar._mode] or bar._mode], AbbreviateNumbers(d.totalAmount), 0.7,0.7,0.7, 1,1,1)
         end
         GameTooltip:AddLine(" ")
-        GameTooltip:AddLine(L["|cff00ccff左键: 技能细分  右键: 切换模式|r"], 0.4,0.4,0.4)
+        GameTooltip:AddLine(L.COLORED_BAR_TOOLTIP_HINT, 0.4,0.4,0.4)
         GameTooltip:Show()
         return
     end
@@ -395,17 +395,17 @@ function UI:ShowTooltip(bar, section)
     GameTooltip:AddLine(ns:GetClassHex(d.class)..ns:DisplayName(d.name or "?").."|r")
     AddPlayerInfoLines()
     GameTooltip:AddLine(" ")
-    GameTooltip:AddLine(L["|cffaaaaaa— 本段 —|r"])
+    GameTooltip:AddLine(L.SEGMENT)
     GameTooltip:AddDoubleLine(mn, ns:FormatNumber(d.value), 0.7,0.7,0.7, 1,1,1)
     if dur2 > 0 and ns.MODE_UNITS[mode] then GameTooltip:AddDoubleLine(ns.MODE_UNITS[mode], string.format("%.1f", d.value/dur2), 0.7,0.7,0.7, 1,0.85,0) end
-    GameTooltip:AddDoubleLine(L["占比"], string.format("%.1f%%", d.percent or 0), 0.7,0.7,0.7, 1,1,1)
-    if d.petDamage and d.petDamage > 0 and mode == "damage" then GameTooltip:AddDoubleLine(L["含宠物"], ns:FormatNumber(d.petDamage), 0.5,0.5,0.5, 0.7,0.7,0.7) end
+    GameTooltip:AddDoubleLine(L.PERCENT, string.format("%.1f%%", d.percent or 0), 0.7,0.7,0.7, 1,1,1)
+    if d.petDamage and d.petDamage > 0 and mode == "damage" then GameTooltip:AddDoubleLine(L.INCL_PET, ns:FormatNumber(d.petDamage), 0.5,0.5,0.5, 0.7,0.7,0.7) end
 
     GameTooltip:AddLine(" ")
-    if d.deaths and d.deaths > 0 then GameTooltip:AddDoubleLine(L["死亡"], d.deaths, 0.7,0.7,0.7, 1,0.3,0.3) end
-    if d.interrupts and d.interrupts > 0 then GameTooltip:AddDoubleLine(L["打断"], d.interrupts, 0.7,0.7,0.7, 0.3,1,0.3) end
-    if d.dispels and d.dispels > 0 then GameTooltip:AddDoubleLine(L["驱散"], d.dispels, 0.7,0.7,0.7, 0.3,0.8,1) end
+    if d.deaths and d.deaths > 0 then GameTooltip:AddDoubleLine(L.DEATHS, d.deaths, 0.7,0.7,0.7, 1,0.3,0.3) end
+    if d.interrupts and d.interrupts > 0 then GameTooltip:AddDoubleLine(L.INTERRUPTS, d.interrupts, 0.7,0.7,0.7, 0.3,1,0.3) end
+    if d.dispels and d.dispels > 0 then GameTooltip:AddDoubleLine(L.DISPELS, d.dispels, 0.7,0.7,0.7, 0.3,0.8,1) end
     GameTooltip:AddLine(" ")
-    GameTooltip:AddLine(L["|cff00ccff左键: 技能细分  右键: 切换模式|r"], 0.4,0.4,0.4)
+    GameTooltip:AddLine(L.COLORED_BAR_TOOLTIP_HINT, 0.4,0.4,0.4)
     GameTooltip:Show()
 end

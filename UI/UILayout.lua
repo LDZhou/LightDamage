@@ -115,19 +115,19 @@ function UI:DoLayout(retryCount)
     if useOvr then
         LayoutInner(self.ovrContainer, self.ovrPriHead, self.ovrPriList, self.ovrSecHead, self.ovrSecList, ovrW, ovrH, isSplitView, sp.primaryMode, sp.secondaryMode)
         self.ovrPriHead.info:Hide(); self.ovrSecHead.info:Hide()
-        local ovrTitleWord = L["总计"]
-        if ns.Segments and ns.Segments.overall and ns.Segments.overall._isMerged then ovrTitleWord = L["全程"] end
+        local ovrTitleWord = L.OVERALL
+        if ns.Segments and ns.Segments.overall and ns.Segments.overall._isMerged then ovrTitleWord = L.OVERALL_SEGMENT end
         if isSplitView then
             local priLabel = L[ns.MODE_NAMES[sp.primaryMode] or ""]
             local secLabel = L[ns.MODE_NAMES[sp.secondaryMode] or ""]
-            if sp.primaryMode == "damageTaken" and ns.state.damageTakenView == "enemy" then priLabel = L["敌人承伤"] end
-            if sp.secondaryMode == "damageTaken" and ns.state.damageTakenView == "enemy" then secLabel = L["敌人承伤"] end
-            self.ovrPriHead.label:SetText(string.format(L["|cff4cb8e8[%s%s]|r"], ovrTitleWord, priLabel))
-            self.ovrSecHead.label:SetText(string.format(L["|cff4cb8e8[%s%s]|r"], ovrTitleWord, secLabel))
+            if sp.primaryMode == "damageTaken" and ns.state.damageTakenView == "enemy" then priLabel = L.ENEMY_DAMAGE_TAKEN end
+            if sp.secondaryMode == "damageTaken" and ns.state.damageTakenView == "enemy" then secLabel = L.ENEMY_DAMAGE_TAKEN end
+            self.ovrPriHead.label:SetText(string.format(L.COLORED_OVERALL_HEADER_FORMAT, ovrTitleWord, priLabel))
+            self.ovrSecHead.label:SetText(string.format(L.COLORED_OVERALL_HEADER_FORMAT, ovrTitleWord, secLabel))
         else
             local modeLabel = L[ns.MODE_NAMES[ns.db.display.mode] or ""]
-            if ns.db.display.mode == "damageTaken" and ns.state.damageTakenView == "enemy" then modeLabel = L["敌人承伤"] end
-            self.ovrPriHead.label:SetText(string.format(L["|cff4cb8e8[%s%s]|r"], ovrTitleWord, modeLabel))
+            if ns.db.display.mode == "damageTaken" and ns.state.damageTakenView == "enemy" then modeLabel = L.ENEMY_DAMAGE_TAKEN end
+            self.ovrPriHead.label:SetText(string.format(L.COLORED_OVERALL_HEADER_FORMAT, ovrTitleWord, modeLabel))
         end
     end
     self:Refresh()

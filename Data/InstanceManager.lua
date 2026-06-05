@@ -78,7 +78,7 @@ function ns.CombatTracker:MergeAndCleanInstance(instanceTag, mythicLevel, mythic
     if mythicLevel > 0 and mythicMapName and mythicMapName ~= "" then zoneName = mythicMapName
     elseif instanceName and instanceName ~= "" then zoneName = instanceName
     elseif instSegs[1].seg._instanceDisplayName and instSegs[1].seg._instanceDisplayName ~= "" then zoneName = instSegs[1].seg._instanceDisplayName
-    else zoneName = instanceTag:match("^([^|]+)") or L["副本"] end
+    else zoneName = instanceTag:match("^([^|]+)") or L.INSTANCE end
 
     local function normalizeSessionName(name)
         if not name or name == "" then return "" end
@@ -439,21 +439,21 @@ function ns.CombatTracker:MergeAndCleanInstance(instanceTag, mythicLevel, mythic
             CT:ResetBaselineToCurrentCount()
             if ns.Segments then
                 ns.Segments._preReloadOverallData = nil
-                if not ns.state.isInInstance then ns.Segments.overall = ns.Segments:NewSegment("overall", L["总计"]) end
+                if not ns.state.isInInstance then ns.Segments.overall = ns.Segments:NewSegment("overall", L.OVERALL) end
             end
             CT._overallDurationSnapshot = nil; CT._exitingInstanceTag = nil
             if ns.SaveSessionHistory then ns:SaveSessionHistory() end
             if ns.UI then C_Timer.After(0, function() ns.UI:Layout() end) end
-            local bossStr = bossCount > 0 and string.format(L["，保留 %d 个 Boss"], bossCount) or ""
-            print(string.format(L["|cff00ccff[Light Damage]|r 副本 %s 已整理%s + 1 条全程汇总"], pending.mapName, bossStr))
+            local bossStr = bossCount > 0 and string.format(L.KEPT_BOSSES_FORMAT, bossCount) or ""
+            print(string.format(L.MSG_LIGHT_DAMAGE_INST_FORMAT_ORGANIZED_FORMAT_PLUS_1_SUMMARY_FORMAT, pending.mapName, bossStr))
             return
         end
     end
 
     -- ================= 分支2:非M+ 或 M+中途放弃 =================
     local mergedName
-    if mythicLevel > 0 then mergedName = string.format(L["|cff4cb8e8+%d|r %s |cffaaaaaa[全程]|r"], mythicLevel, zoneName)
-    else mergedName = string.format(L["%s [全程]"], zoneName) end
+    if mythicLevel > 0 then mergedName = string.format(L.COLORED_MYTHIC_OVERALL_NAME_FORMAT, mythicLevel, zoneName)
+    else mergedName = string.format(L.OVERALL_SEGMENT_NAME_FORMAT, zoneName) end
 
     local merged = segs:NewSegment("history", mergedName)
     merged.isActive = false; merged._instanceTag = nil; merged._isBoss = false; merged._isMerged = true
@@ -559,12 +559,12 @@ function ns.CombatTracker:MergeAndCleanInstance(instanceTag, mythicLevel, mythic
                 if ns.Segments.ClearHiddenSessionIDs then ns.Segments:ClearHiddenSessionIDs() end  -- ★
             end
             CT._baselineSessionCount = 0; CT._lastProcessedCount = 0; CT._initialBaselineSet = false
-            ns.Segments.overall = ns.Segments:NewSegment("overall", L["总计"])
+            ns.Segments.overall = ns.Segments:NewSegment("overall", L.OVERALL)
         end
     end
     CT._overallDurationSnapshot = nil; CT._exitingInstanceTag = nil
     if ns.SaveSessionHistory then ns:SaveSessionHistory() end
     if ns.UI then C_Timer.After(0, function() ns.UI:Layout() end) end
-    local bossStr = bossCount > 0 and string.format(L["，保留 %d 个 Boss"], bossCount) or ""
-    print(string.format(L["|cff00ccff[Light Damage]|r 副本 %s 已整理%s + 1 条全程汇总"], zoneName, bossStr))
+    local bossStr = bossCount > 0 and string.format(L.KEPT_BOSSES_FORMAT, bossCount) or ""
+    print(string.format(L.MSG_LIGHT_DAMAGE_INST_FORMAT_ORGANIZED_FORMAT_PLUS_1_SUMMARY_FORMAT, zoneName, bossStr))
 end

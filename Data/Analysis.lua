@@ -223,7 +223,7 @@ function Analysis:GetSpellBreakdown(segment, guid, mode)
                 if petVal > 0 then
                     table.insert(result, {
                         spellID     = 0,
-                        name        = (pet.name or "Pet") .. L[" (合计)"],
+                        name        = (pet.name or "Pet") .. L.TOTAL_SUFFIX,
                         value       = petVal,
                         hits        = 0, crits = 0, maxHit = 0, minHit = 0, critPercent = 0,
                         isPet       = true,

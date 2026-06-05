@@ -124,7 +124,7 @@ function UI:FillPinnedFromAPI(pinnedBar, listObj, src, rank, mode, maxAmt, sType
     end
 
     pcall(_safeSetBarValue, pinnedBar.value, src.totalAmount, src.amountPerSecond,
-          ns.db.display.showPerSecond, UI.COUNT_MODES[mode], L["次"])
+          ns.db.display.showPerSecond, UI.COUNT_MODES[mode], L.COUNT_SUFFIX)
     if not pinnedBar._apiData then pinnedBar._apiData = {} end
     pinnedBar._apiData.isAPI = true; pinnedBar._apiData.sourceGUID = src.sourceGUID; pinnedBar._apiData.sourceCreatureID = src.sourceCreatureID
     pinnedBar._apiData.isLocalPlayer = true; pinnedBar._apiData.totalAmount = src.totalAmount; pinnedBar._apiData.amountPerSecond = src.amountPerSecond; pinnedBar._apiData.sessionType = sType

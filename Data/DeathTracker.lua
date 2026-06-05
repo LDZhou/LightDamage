@@ -113,9 +113,9 @@ function DT:ParseRecapEvents(recapEvents, maxHP)
         if overkill < 0 then overkill = 0 end
 
         if spellName == "" then
-            if isHeal then spellName = L["治疗"]
-            elseif evType == "SWING_DAMAGE" then spellName = L["近战"]
-            else spellName = L["未知"] end
+            if isHeal then spellName = L.HEALING
+            elseif evType == "SWING_DAMAGE" then spellName = L.MELEE
+            else spellName = L.UNKNOWN end
         end
 
         local hp    = SafeNum(ev.currentHP, 0)
@@ -181,7 +181,7 @@ function DT:BuildDeathRecordFromRecapID(recapID, src)
     end
 
     -- 关键：src.name 是 ConditionalSecret，secret 时原样保存给 UI，不要替换成“未知”。
-    local playerName = DisplayNameValue(src and src.name, isSelf and (UnitName("player") or L["我"]) or L["未知"])
+    local playerName = DisplayNameValue(src and src.name, isSelf and (UnitName("player") or L.ME) or L.UNKNOWN)
 
     local maxHP = GetRecapMaxHealth(recapID)
     local recapEvents = GetRecapEvents(recapID)
@@ -220,7 +220,7 @@ function DT:BuildDeathRecordFromRecapID(recapID, src)
         playerGUID           = guid,
         playerClass          = class,
         isSelf               = isSelf,
-        killingAbility       = (#events == 0) and L["等待死亡回放"] or killingAbility,
+        killingAbility       = (#events == 0) and L.DEATH_RECAP_PENDING or killingAbility,
         killerName           = killerName,
         events               = events,
         lastHP               = 0,
@@ -289,11 +289,11 @@ function DT:GetDeathLogFromAPI(sessionType, sessionID, fallbackSegment)
                 InsertOrdered(result, {
                     timestamp            = time(),
                     gameTime             = GetTime(),
-                    playerName           = DisplayNameValue(src.name, isSelf and (UnitName("player") or L["我"]) or L["未知"]),
+                    playerName           = DisplayNameValue(src.name, isSelf and (UnitName("player") or L.ME) or L.UNKNOWN),
                     playerGUID           = guid,
                     playerClass          = src.classFilename or "WARRIOR",
                     isSelf               = isSelf,
-                    killingAbility       = L["等待死亡回放"],
+                    killingAbility       = L.DEATH_RECAP_PENDING,
                     killerName           = "",
                     events               = {},
                     lastHP               = 0,

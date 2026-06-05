@@ -20,10 +20,10 @@ local PREVIEW_MOCK = {
 }
 
 local PREVIEW_SCENES = {
-    { id="mplus",    labelKey="大秘境" },
-    { id="raid",     labelKey="团队副本" },
-    { id="dungeon",  labelKey="其他副本" },
-    { id="outdoor",  labelKey="非副本" },
+    { id="mplus",    labelKey="MYTHIC_PLUS" },
+    { id="raid",     labelKey="RAID_INSTANCE" },
+    { id="dungeon",  labelKey="OTHER_INSTANCES" },
+    { id="outdoor",  labelKey="NON_INSTANCE" },
 }
 
 function Config:BuildSceneSwitcher()
@@ -33,7 +33,7 @@ function Config:BuildSceneSwitcher()
     sw:SetScale(ns.db and ns.db.window and ns.db.window.configScale or 1.0)
     sw:SetBackdrop({ bgFile="Interface\\Buttons\\WHITE8X8", edgeFile=nil, edgeSize=0 }); sw:SetBackdropColor(0.05, 0.05, 0.06, 0.98)
     self:CreateBorder(sw, 0.15, 0.15, 0.2, 1); sw:Hide(); self._pvSwitcher = sw
-    local hint = sw:CreateFontString(nil, "OVERLAY"); hint:SetFont(STANDARD_TEXT_FONT, 11, "OUTLINE"); hint:SetPoint("LEFT", 14, 0); hint:SetText(L["|cff00ccff预览场景:|r"])
+    local hint = sw:CreateFontString(nil, "OVERLAY"); hint:SetFont(STANDARD_TEXT_FONT, 11, "OUTLINE"); hint:SetPoint("LEFT", 14, 0); hint:SetText(L.COLORED_PREVIEW_LABEL)
     local btnW, btnGap, rightOffset = 76, 6, -12
     self._pvSceneBtns = {}
     for i = #PREVIEW_SCENES, 1, -1 do
@@ -63,7 +63,7 @@ function Config:OpenPreview()
         uiX = ns.db.window.x, uiY = ns.db.window.y,
     }
     self._pvRefreshBlocked = true; ns.Segments._locked = false; self._previewActive = true; self._previewSceneId = "mplus"
-    if self._previewBtnT then self._previewBtnT:SetText(L["取消预览"]) end
+    if self._previewBtnT then self._previewBtnT:SetText(L.CANCEL_PREVIEW) end
     ns.UI.frame:ClearAllPoints(); ns.UI.frame:SetPoint("TOPLEFT", self.panel, "TOPRIGHT", 8, 0); ns.UI.frame:Show()
     if self._pvSwitcher then self._pvSwitcher:ClearAllPoints(); self._pvSwitcher:SetPoint("BOTTOM", ns.UI.frame, "TOP", 0, 8); self._pvSwitcher:Show() end
     self:ApplyPreviewScene("mplus")
@@ -77,7 +77,7 @@ function Config:ClosePreview()
     ns.UI.frame:ClearAllPoints(); ns.UI.frame:SetPoint(self._pvSave.uiPoint, UIParent, self._pvSave.uiRelPoint, self._pvSave.uiX, self._pvSave.uiY)
     if self._pvSwitcher then self._pvSwitcher:Hide() end
     self._pvSave = nil; self._previewActive = false; self._pvRefreshBlocked = false
-    if self._previewBtnT then self._previewBtnT:SetText(L["预览"]) end
+    if self._previewBtnT then self._previewBtnT:SetText(L.PREVIEW) end
     if ns.Analysis then ns.Analysis:InvalidateCache() end; ns.UI:Layout()
 end
 
@@ -99,7 +99,7 @@ function Config:ApplyPreviewScene(sceneId)
 end
 
 function Config:BuildMockSegment(isOverall)
-    local seg = ns.Segments:NewSegment("history", isOverall and L["模拟全程"] or L["模拟战斗"])
+    local seg = ns.Segments:NewSegment("history", isOverall and L.MOCK_OVERALL or L.MOCK_COMBAT)
     seg.isActive = false; seg.duration = isOverall and 330 or 225
     local totalDmg, totalHeal, totalTaken = 0, 0, 0
     for i, mock in ipairs(PREVIEW_MOCK) do

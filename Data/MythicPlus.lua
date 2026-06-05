@@ -114,8 +114,8 @@ function MP:Init()
         if not id then return end
 
         local level = getKeystoneLevel() or 0
-        enterInstance(id, name or GetZoneText() or L["大秘境"], level, timeLimit)
-        print(string.format(L["|cff4cb8e8[Light Damage]|r 检测到大秘境: %s +%d (reload)"], name, level))
+        enterInstance(id, name or GetZoneText() or L.MYTHIC_PLUS, level, timeLimit)
+        print(string.format(L.MSG_LIGHT_DAMAGE_MYTHIC_PLUS_DETECTED_FORMAT_PLUS_FORMAT_RELOAD_FORM, name, level))
 
         if ns.CombatTracker then
             ns.CombatTracker._currentMythicLevel   = level
@@ -157,8 +157,8 @@ function MP:OnStart()
                 if seg._instanceTag == preTag then
                     seg._instanceTag = nil
                     seg._preKeystone = true
-                    if not seg.name:find(L["%[开本前%]"]) then
-                        seg.name = L["[开本前] "] .. (seg.name or L["战斗"])
+                    if not seg.name:find(L.PRE_INSTANCE_PATTERN) then
+                        seg.name = L.PRE_INSTANCE_PREFIX .. (seg.name or L.COMBAT)
                     end
                 end
             end
@@ -178,7 +178,7 @@ function MP:OnStart()
 
         local id, name, timeLimit = getMapInfo()
         local level = getKeystoneLevel()
-        name  = name  or GetZoneText() or L["大秘境"]
+        name  = name  or GetZoneText() or L.MYTHIC_PLUS
         level = level or 0
         enterInstance(id, name, level, timeLimit)
     end)
@@ -194,11 +194,11 @@ function MP:OnCompleted(time, onTime)
 
     local status  = onTime and "✓" or "✗"
     local runName = string.format("+%d %s %s",
-        MP._level or 0, MP._mapName or L["大秘境"], status)
+        MP._level or 0, MP._mapName or L.MYTHIC_PLUS, status)
 
     MP:BuildMythicSegment(runName, onTime)
 
-    print(string.format(L["|cff4cb8e8[Light Damage]|r M+ 完成: %s (计时: %s)"],
+    print(string.format(L.MSG_LIGHT_DAMAGE_MYTHIC_PLUS_COMPLETED_FORMAT_TIME_FORMAT,
         runName, ns:FormatTime((time or 0) / 1000)))
 
     leaveInstance()
@@ -217,7 +217,7 @@ function MP:OnReset()
         local elapsed = MP._startTime and (GetTime() - MP._startTime) or 0
         if elapsed > 30 then
             local runName = string.format("+%d %s —",
-                MP._level or 0, MP._mapName or L["大秘境"])
+                MP._level or 0, MP._mapName or L.MYTHIC_PLUS)
             MP:BuildMythicSegment(runName, nil)
         end
     end
@@ -238,7 +238,7 @@ function MP:OnEnterDungeon()
     if instanceType ~= "party" and instanceType ~= "raid" then return end
 
     local id, name, timeLimit = getMapInfo()
-    name = name or GetZoneText() or L["副本"]
+    name = name or GetZoneText() or L.INSTANCE
     local level = getKeystoneLevel() or 0
     enterInstance(id, name, level, timeLimit)
 end
@@ -249,13 +249,13 @@ end
 function MP:OnLeaveInstance()
     if not MP._active then return end
 
-    local runName = MP._mapName or L["副本"]
+    local runName = MP._mapName or L.INSTANCE
     if MP._level and MP._level > 0 then
         runName = string.format("+%d %s —", MP._level, runName)
     end
 
     MP:BuildMythicSegment(runName, nil)
-    print(string.format(L["|cff4cb8e8[Light Damage]|r 离开副本，数据已归档"]))
+    print(string.format(L.MSG_LIGHT_DAMAGE_LEFT_INSTANCE_DATA_ARCHIVED))
 
     leaveInstance()
 
@@ -272,7 +272,7 @@ function MP:BuildMythicSegment(name, success)
         name    = name,
         success = success,
         level   = MP._level   or 0,
-        mapName = MP._mapName or L["大秘境"],
+        mapName = MP._mapName or L.MYTHIC_PLUS,
         mapID   = MP._mapID,
         elapsed = MP._elapsedOnStop,
     }
@@ -324,7 +324,7 @@ local _headerInfoCache = {}
 function MP:GetHeaderInfo()
     if not MP._active then return nil end
     _headerInfoCache.level     = MP._level   or 0
-    _headerInfoCache.name      = MP._mapName or L["副本"]
+    _headerInfoCache.name      = MP._mapName or L.INSTANCE
     _headerInfoCache.elapsed   = MP:GetElapsed()
     _headerInfoCache.timeLimit = MP._timeLimit or 0
     return _headerInfoCache
@@ -338,7 +338,7 @@ function MP:FormatSegLabel(seg)
     else                              status = " |cffaaaaaa—|r" end
     local levelStr = (seg.mythicLevel and seg.mythicLevel > 0)
         and string.format("|cff4cb8e8+%d|r ", seg.mythicLevel) or ""
-    return levelStr .. (seg.mapName or L["副本"]) .. status
+    return levelStr .. (seg.mapName or L.INSTANCE) .. status
 end
 
 function MP:SetAutoCleanAge(seconds)
