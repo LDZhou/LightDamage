@@ -212,6 +212,7 @@ ns:RegisterLocale("zhTW", {
     OTHER_INSTANCES = "其他副本",
     OTHER_INSTANCES_INCL_DELVES_BGS_ARENAS = "其他副本 (含探究/戰場/競技場)",
     OUTLINE = "發光描邊 (Outline)",
+    OUTLINE_MONOCHROME = "發光單色描邊 (Outline Monochrome)",
     OUT_OF_COMBAT = "脫戰時",
     OVERALL = "總計",
     OVERALL_DATA_TOOLTIP = "關於「總計」數據：\n 統計起點： 每次進入或離開副本時重新開始。\n 顯示內容： 自起點起累積的所有戰鬥彙總。\n 請注意： 手動刪除某段具體的戰鬥紀錄，不會影響總計數據。",

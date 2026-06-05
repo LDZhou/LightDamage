@@ -212,6 +212,7 @@ ns:RegisterLocale("zhCN", {
     OTHER_INSTANCES = "其他副本",
     OTHER_INSTANCES_INCL_DELVES_BGS_ARENAS = "其他副本 (含地下堡/战场/竞技场)",
     OUTLINE = "发光描边 (Outline)",
+    OUTLINE_MONOCHROME = "发光单色描边 (Outline Monochrome)",
     OUT_OF_COMBAT = "脱战时",
     OVERALL = "总计",
     OVERALL_DATA_TOOLTIP = "关于“总计”数据：\n 统计起点： 每次进入或离开副本时重新开始。\n 显示内容： 自起点起累积的所有战斗汇总。\n 请注意： 手动删除某段具体的战斗记录，不会影响总计数据。",

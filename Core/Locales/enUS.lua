@@ -212,6 +212,7 @@ ns:RegisterLocale("enUS", {
     OTHER_INSTANCES = "Other Instances",
     OTHER_INSTANCES_INCL_DELVES_BGS_ARENAS = "Other Instances (incl. Delves/BGs/Arenas)",
     OUTLINE = "Outline",
+    OUTLINE_MONOCHROME = "Outline Monochrome",
     OUT_OF_COMBAT = "Out of Combat",
     OVERALL = "Overall",
     OVERALL_DATA_TOOLTIP = "About 'Overall' Data:\n Starting Point: Resets each time you enter or leave an instance.\n Content: Accumulates all combat data from the starting point.\n Note: Manually deleting a specific combat segment does not affect the overall data.",

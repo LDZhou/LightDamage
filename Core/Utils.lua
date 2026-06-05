@@ -202,6 +202,17 @@ function ns:SafeStr(val)
     return (ok and s) or ""
 end
 
+function ns:NormalizeFontOutline(outline)
+    if not outline or outline == "" then return "" end
+    local compact = tostring(outline):upper():gsub("%s+", ""):gsub(",", "")
+    if compact == "OUTLINEMONOCHROME" then
+        return "OUTLINE, MONOCHROME"
+    elseif compact == "THICKOUTLINEMONOCHROME" then
+        return "THICKOUTLINE, MONOCHROME"
+    end
+    return outline
+end
+
 -- GUID相关
 function ns:IsPlayerGUID(guid)
     return guid and guid:match("^Player%-") ~= nil

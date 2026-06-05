@@ -25,6 +25,8 @@ local categories = {
 -- ============================================================
 -- LibSharedMedia 材质/字体列表
 -- ============================================================
+local FONT_OUTLINE_MEDIA_TYPES = { "fontoutline", "fontflag", "fontflags" }
+
 function Config:GetSharedMediaTextures()
     local result = {}
     local builtins = {
@@ -50,6 +52,48 @@ function Config:GetSharedMediaFonts()
     if LSM then
         local list = LSM:List(LSM.MediaType.FONT)
         if list then for _, name in ipairs(list) do local path = LSM:Fetch(LSM.MediaType.FONT, name); if path and not builtinPaths[path] then table.insert(result, { l = name, v = path }) end end end
+    end
+    return result
+end
+
+function Config:GetSharedMediaFontOutlines()
+    local result = {
+        {l=L.NONE, v=""},
+        {l=L.OUTLINE, v="OUTLINE"},
+        {l=L.THICK_OUTLINE, v="THICKOUTLINE"},
+        {l=L.OUTLINE_MONOCHROME, v="OUTLINE, MONOCHROME"},
+    }
+    local known = {}
+    for _, b in ipairs(result) do known[b.v] = true end
+
+    local LSM = LibStub and LibStub("LibSharedMedia-3.0", true)
+    if LSM then
+        local mediaTypes = {}
+        local seenMediaTypes = {}
+        local function AddMediaType(mediaType)
+            if type(mediaType) == "string" and not seenMediaTypes[mediaType] then
+                table.insert(mediaTypes, mediaType)
+                seenMediaTypes[mediaType] = true
+            end
+        end
+        AddMediaType(LSM.MediaType and LSM.MediaType.FONT_OUTLINE)
+        for _, mediaType in ipairs(FONT_OUTLINE_MEDIA_TYPES) do AddMediaType(mediaType) end
+
+        for _, mediaType in ipairs(mediaTypes) do
+            local list = LSM:List(mediaType)
+            if list then
+                for _, name in ipairs(list) do
+                    local flag = LSM:Fetch(mediaType, name, true)
+                    if type(flag) == "string" then
+                        flag = ns.NormalizeFontOutline and ns:NormalizeFontOutline(flag) or flag
+                        if flag ~= "" and not known[flag] then
+                            table.insert(result, {l=name, v=flag})
+                            known[flag] = true
+                        end
+                    end
+                end
+            end
+        end
     end
     return result
 end

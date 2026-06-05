@@ -130,6 +130,7 @@ function UI:GetBarConfig()
 end
 
 function UI:ApplyFont(fs, font, size, outline, shadow)
+    outline = ns.NormalizeFontOutline and ns:NormalizeFontOutline(outline) or outline
     local hash = font .. "|" .. size .. "|" .. (outline or "") .. "|" .. (shadow and "1" or "0")
     if fs._fontHash == hash then return end
     fs._fontHash = hash

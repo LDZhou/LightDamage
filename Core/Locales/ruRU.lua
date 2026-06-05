@@ -212,6 +212,7 @@ ns:RegisterLocale("ruRU", {
     OTHER_INSTANCES = "Другие подземелья",
     OTHER_INSTANCES_INCL_DELVES_BGS_ARENAS = "Другие инсты (вкл. Вылазки/БГ/Арены)",
     OUTLINE = "Контур (Outline)",
+    OUTLINE_MONOCHROME = "Контур монохромный (Outline Monochrome)",
     OUT_OF_COMBAT = "Вне боя",
     OVERALL = "Общее",
     OVERALL_DATA_TOOLTIP = "О данных 'Общее':\n Начало отсчета: Сбрасывается при каждом входе или выходе из подземелья.\n Содержимое: Накапливает все бои с момента старта.\n Примечание: Ручное удаление отдельного боя не влияет на общие данные.",

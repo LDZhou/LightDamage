@@ -239,6 +239,7 @@ function DV:ApplyTheme()
     
     -- 3. ★ 使用全新 DetailDisplay 字体同步
     local _, _, _, font, fSz, fOut, fShad = self:GetBarConfig()
+    fOut = ns.NormalizeFontOutline and ns:NormalizeFontOutline(fOut) or fOut
     local function _applyFont(fs, sz)
         fs:SetFont(font, sz, fOut)
         if fShad then fs:SetShadowColor(0,0,0,1); fs:SetShadowOffset(1,-1)
@@ -378,6 +379,7 @@ function DV:PlaceRow(idx, yOff, h, bgOverride, thickness, vOffset)
     r.frame:Show()
 
     local _, _, _, font, fSz, fOut, fShad = self:GetBarConfig()
+    fOut = ns.NormalizeFontOutline and ns:NormalizeFontOutline(fOut) or fOut
     local function _applyFont(fs, sz)
         fs:SetFont(font, sz, fOut)
         if fShad then fs:SetShadowColor(0,0,0,1); fs:SetShadowOffset(1,-1)

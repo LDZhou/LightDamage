@@ -202,8 +202,7 @@ end
 -- ============================================================
 function Config:BuildLookPage()
     local inner = self.pages["look"].inner; local y = 0
-    local outlines = { {l=L.NONE, v=""}, {l=L.OUTLINE, v="OUTLINE"}, {l=L.THICK_OUTLINE, v="THICKOUTLINE"} }
-    local textures = self:GetSharedMediaTextures(); local fonts = self:GetSharedMediaFonts()
+    local textures = self:GetSharedMediaTextures(); local fonts = self:GetSharedMediaFonts(); local outlines = self:GetSharedMediaFontOutlines()
 
     y = self:H(inner, L.CONFIG_GLOBAL_SIZE, y)
     y = self:Slider(inner, L.CONFIG_WINDOW_SCALE, y, 0.5, 2.0, 0.05, function() return ns.db.window.scale end, function(v) ns.db.window.scale = v; if ns.UI and ns.UI.frame then ns.UI.frame:SetScale(v) end end)
