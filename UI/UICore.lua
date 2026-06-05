@@ -129,6 +129,77 @@ function UI:GetBarConfig()
            db.fontOutline or "OUTLINE", db.fontShadow or false
 end
 
+function UI:GetDisplayFontConfig(kind)
+    local db = ns.db.display or {}
+    if kind == "title" then
+        return db.titleFont or db.font or STANDARD_TEXT_FONT,
+               db.titleFontSize or db.fontSizeBase or 10,
+               db.titleFontOutline or db.fontOutline or "OUTLINE",
+               db.titleFontShadow or false
+    elseif kind == "header" then
+        return db.headerFont or db.font or STANDARD_TEXT_FONT,
+               db.headerFontSize or db.fontSizeBase or 9,
+               db.headerFontOutline or db.fontOutline or "OUTLINE",
+               db.headerFontShadow or false
+    elseif kind == "name" then
+        return db.nameFont or db.font or STANDARD_TEXT_FONT,
+               db.nameFontSize or db.fontSizeBase or 12,
+               db.nameFontOutline or db.fontOutline or "OUTLINE",
+               db.nameFontShadow or false
+    elseif kind == "tab" then
+        return db.tabFont or db.font or STANDARD_TEXT_FONT,
+               db.tabFontSize or math.max(8, (db.fontSizeBase or 10) - 1),
+               db.tabFontOutline or db.fontOutline or "OUTLINE",
+               db.tabFontShadow or false
+    end
+    local _, _, _, font, size, outline, shadow = self:GetBarConfig()
+    return font, size, outline, shadow
+end
+
+function UI:GetDisplayColor(field, fallback)
+    local db = ns.db and ns.db.display or {}
+    local c = db[field] or fallback or {1, 1, 1, 1}
+    return c[1] or 1, c[2] or 1, c[3] or 1, c[4] or 1
+end
+
+function UI:SetFontStringColor(fs, field, fallback)
+    if not fs then return end
+    fs:SetTextColor(self:GetDisplayColor(field, fallback))
+end
+
+function UI:GetModeTitleColor(mode)
+    local colors = ns.db and ns.db.display and ns.db.display.dataTitleColors
+    local fallback = mode == "damage" and T.dmgC
+        or mode == "healing" and T.healC
+        or mode == "damageTaken" and T.takenC
+        or mode == "enemyDamageTaken" and T.takenC
+        or T.accent
+    local c = colors and colors[mode] or fallback
+    return c[1] or 1, c[2] or 1, c[3] or 1, c[4] or 1
+end
+
+function UI:ColorizeText(text, r, g, b)
+    return string.format("|cff%02x%02x%02x%s|r",
+        math.floor((r or 1) * 255 + 0.5),
+        math.floor((g or 1) * 255 + 0.5),
+        math.floor((b or 1) * 255 + 0.5),
+        text or "")
+end
+
+function UI:SetModeHeaderText(label, text, mode)
+    if not label then return end
+    local r, g, b = self:GetModeTitleColor(mode)
+    label:SetText(self:ColorizeText(text, r, g, b))
+end
+
+function UI:SetTabTextColor(tabText, active)
+    if active then
+        self:SetFontStringColor(tabText, "tabActiveFontColor", {1, 1, 1, 1})
+    else
+        self:SetFontStringColor(tabText, "tabInactiveFontColor", {0.55, 0.55, 0.55, 0.9})
+    end
+end
+
 function UI:ApplyFont(fs, font, size, outline, shadow)
     outline = ns.NormalizeFontOutline and ns:NormalizeFontOutline(outline) or outline
     local hash = font .. "|" .. size .. "|" .. (outline or "") .. "|" .. (shadow and "1" or "0")
@@ -147,7 +218,15 @@ end
 
 function UI:ApplyAllFontsIfNeeded()
     local db = ns.db.display
-    local hash = (db.font or "") .. "|" .. (db.fontSizeBase or 10) .. "|" .. (db.fontOutline or "")
+    local hash = table.concat({
+        db.font or "", db.fontSizeBase or 10, db.fontOutline or "", db.fontShadow and "1" or "0",
+        db.titleFont or "", db.titleFontSize or 10, db.titleFontOutline or "", db.titleFontShadow and "1" or "0",
+        db.headerFont or "", db.headerFontSize or 9, db.headerFontOutline or "", db.headerFontShadow and "1" or "0",
+        db.nameFont or "", db.nameFontSize or 12, db.nameFontOutline or "", db.nameFontShadow and "1" or "0",
+        db.tabFont or "", db.tabFontSize or 9, db.tabFontOutline or "", db.tabFontShadow and "1" or "0",
+        tostring(db.fontColor), tostring(db.titleFontColor), tostring(db.headerFontColor),
+        tostring(db.nameFontColor), tostring(db.tabActiveFontColor), tostring(db.tabInactiveFontColor),
+    }, "|")
     if hash == self._lastFontHash then return end
     self._lastFontHash = hash
     self:ApplyAllFonts()
@@ -155,16 +234,24 @@ end
 
 function UI:ApplyAllFonts()
     if not self.frame then return end
-    local _, _, _, font, fSz, fOut, fShad = self:GetBarConfig()
+    local font, fSz, fOut, fShad = self:GetDisplayFontConfig("title")
     if self.titleText then self:ApplyFont(self.titleText, font, fSz, fOut, fShad) end
     if self.titleTime then self:ApplyFont(self.titleTime, font, fSz, fOut, fShad) end
-    if self.summText then self:ApplyFont(self.summText, font, fSz - 1, fOut, fShad) end
+    if self.summText then self:ApplyFont(self.summText, font, math.max(8, fSz - 1), fOut, fShad) end
+    self:SetFontStringColor(self.titleText, "titleFontColor", {1, 1, 1, 0.93})
     local function applyHead(h)
-        if h then self:ApplyFont(h.label, font, fSz - 1, fOut, fShad); self:ApplyFont(h.info, font, fSz - 1, fOut, fShad) end
+        if not h then return end
+        local hFont, hSz, hOut, hShad = self:GetDisplayFontConfig("header")
+        self:ApplyFont(h.label, hFont, hSz, hOut, hShad)
+        self:ApplyFont(h.info, hFont, hSz, hOut, hShad)
+        if h.dtFriendlyText then self:ApplyFont(h.dtFriendlyText, hFont, math.max(8, hSz - 1), hOut, hShad) end
+        if h.dtEnemyText then self:ApplyFont(h.dtEnemyText, hFont, math.max(8, hSz - 1), hOut, hShad) end
+        self:SetFontStringColor(h.info, "headerFontColor", {0.55, 0.55, 0.55, 0.9})
     end
     applyHead(self.priHead); applyHead(self.secHead); applyHead(self.ovrPriHead); applyHead(self.ovrSecHead)
-    if self.tabs then for _, t in ipairs(self.tabs) do self:ApplyFont(t.text, font, fSz - 1, fOut, fShad) end end
-    if self.splitTab then self:ApplyFont(self.splitTab.text, font, fSz - 1, fOut, fShad) end
+    local tFont, tSz, tOut, tShad = self:GetDisplayFontConfig("tab")
+    if self.tabs then for _, t in ipairs(self.tabs) do self:ApplyFont(t.text, tFont, tSz, tOut, tShad) end end
+    if self.splitTab then self:ApplyFont(self.splitTab.text, tFont, tSz, tOut, tShad) end
 end
 
 function UI:GetCachedSession(sessionType, dmType)

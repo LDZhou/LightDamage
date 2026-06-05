@@ -45,6 +45,7 @@ end
 
 function UI:PositionPinnedBar(pinnedBar, listObj, position)
     local bh, gap, _, font, fSz, fOut, fShad = self:GetBarConfig()
+    local nameFont, nameSz, nameOut, nameShad = self:GetDisplayFontConfig("name")
     pinnedBar.frame:ClearAllPoints(); pinnedBar.frame:SetHeight(bh)
     if position == "top" then
         pinnedBar.frame:SetPoint("BOTTOMLEFT", listObj.sf, "TOPLEFT", 0, 0); pinnedBar.frame:SetPoint("BOTTOMRIGHT", listObj.sf, "TOPRIGHT", 0, 0)
@@ -52,13 +53,14 @@ function UI:PositionPinnedBar(pinnedBar, listObj, position)
         pinnedBar.frame:SetPoint("TOPLEFT", listObj.sf, "BOTTOMLEFT", 0, 0); pinnedBar.frame:SetPoint("TOPRIGHT", listObj.sf, "BOTTOMRIGHT", 0, 0)
     end
     self:AnchorBarTexts(pinnedBar)
-    self:ApplyFont(pinnedBar.rank, font, fSz-1, fOut, fShad); self:ApplyFont(pinnedBar.name, font, fSz, fOut, fShad); self:ApplyFont(pinnedBar.value, font, fSz-1, fOut, fShad)
+    self:ApplyFont(pinnedBar.rank, font, fSz-1, fOut, fShad); self:ApplyFont(pinnedBar.name, nameFont, nameSz, nameOut, nameShad); self:ApplyFont(pinnedBar.value, font, fSz-1, fOut, fShad)
 end
 
 function UI:FillPinnedFromData(pinnedBar, listObj, d, rank, dur, mode, maxV, position)
     self:PositionPinnedBar(pinnedBar, listObj, position)
     local bh, gap, alpha = self:GetBarConfig(); local texPath = ns.db.display.barTexture or "Interface\\Buttons\\WHITE8X8"
-    local textMode = ns.db.display.textColorMode or "class"
+    local tr, tg, tb, ta = self:GetDisplayColor("fontColor", {1, 1, 1, 0.93})
+    local fixedNameColor = (ns.db.display.nameColorMode == "custom") and ns.db.display.nameFontColor or nil
     pinnedBar.statusbar:Hide(); pinnedBar.fill:Show()
     local cc = ns:GetClassColor(d.class) or {0.5, 0.5, 0.5}
     local offset = ns.db.display.showSpecIcon and (bh + 4) or 0
@@ -67,13 +69,12 @@ function UI:FillPinnedFromData(pinnedBar, listObj, d, rank, dur, mode, maxV, pos
     pinnedBar.fill:SetTexture(texPath); pinnedBar.fill:SetVertexColor(cc[1], cc[2], cc[3], alpha)
     pinnedBar.statusbar:SetStatusBarTexture(texPath)
     pinnedBar.rank:SetText(ns.db.display.showRank and (rank .. ".") or "")
+    pinnedBar.rank:SetTextColor(tr, tg, tb, ta)
     pinnedBar.name:SetText(ns:DisplayName(d.name))
-    do local nr, ng, nb
-        if textMode == "white" then nr, ng, nb = 1, 1, 1
-        elseif textMode == "custom" then local c = ns.db.display.textColor or {1,1,1}; nr, ng, nb = c[1], c[2], c[3]
-        else nr, ng, nb = cc[1], cc[2], cc[3] end; pinnedBar.name:SetTextColor(nr, ng, nb)
-    end
+    if fixedNameColor then pinnedBar.name:SetTextColor(fixedNameColor[1], fixedNameColor[2], fixedNameColor[3], fixedNameColor[4] or 1)
+    else pinnedBar.name:SetTextColor(cc[1], cc[2], cc[3]) end
     pinnedBar.value:SetText(self:MakeValueStr(d.value, dur, mode, d.perSec, d.percent))
+    pinnedBar.value:SetTextColor(tr, tg, tb, ta)
     pinnedBar._data = d; pinnedBar._mode = mode; pinnedBar._isDeath = false; pinnedBar._guid = d.guid; pinnedBar._nameStr = d.name; pinnedBar._classStr = d.class
     if pinnedBar.specIcon then
         local specID = d.specID
@@ -96,7 +97,8 @@ end
 function UI:FillPinnedFromAPI(pinnedBar, listObj, src, rank, mode, maxAmt, sType, position, sessionID)
     self:PositionPinnedBar(pinnedBar, listObj, position)
     local bh, gap, alpha = self:GetBarConfig(); local texPath = ns.db.display.barTexture or "Interface\\Buttons\\WHITE8X8"
-    local textMode = ns.db.display.textColorMode or "class"
+    local tr, tg, tb, ta = self:GetDisplayColor("fontColor", {1, 1, 1, 0.93})
+    local fixedNameColor = (ns.db.display.nameColorMode == "custom") and ns.db.display.nameFontColor or nil
     pinnedBar.fill:Hide(); pinnedBar.statusbar:Show()
     local cls = src.classFilename or "WARRIOR"; local cc = ns:GetClassColor(cls) or {0.5, 0.5, 0.5}
     pinnedBar.statusbar:SetStatusBarTexture(texPath); pinnedBar.statusbar:SetStatusBarColor(cc[1], cc[2], cc[3], alpha)
@@ -104,6 +106,7 @@ function UI:FillPinnedFromAPI(pinnedBar, listObj, src, rank, mode, maxAmt, sType
     pcall(_safeSetStatusBar, pinnedBar.statusbar, maxAmt or 1, src.totalAmount)
 
     pinnedBar.rank:SetText(ns.db.display.showRank and (rank .. ".") or "")
+    pinnedBar.rank:SetTextColor(tr, tg, tb, ta)
 
     local nameRaw = src.name
     local nameStr = ""
@@ -116,15 +119,12 @@ function UI:FillPinnedFromAPI(pinnedBar, listObj, src, rank, mode, maxAmt, sType
         if ok and str then nameStr = str end
     end
     pinnedBar.name:SetText(ns:DisplayName(nameStr))
-
-    do local nr, ng, nb
-        if textMode == "white" then nr, ng, nb = 1, 1, 1
-        elseif textMode == "custom" then local c = ns.db.display.textColor or {1,1,1}; nr, ng, nb = c[1], c[2], c[3]
-        else nr, ng, nb = cc[1], cc[2], cc[3] end; pinnedBar.name:SetTextColor(nr, ng, nb)
-    end
+    if fixedNameColor then pinnedBar.name:SetTextColor(fixedNameColor[1], fixedNameColor[2], fixedNameColor[3], fixedNameColor[4] or 1)
+    else pinnedBar.name:SetTextColor(cc[1], cc[2], cc[3]) end
 
     pcall(_safeSetBarValue, pinnedBar.value, src.totalAmount, src.amountPerSecond,
           ns.db.display.showPerSecond, UI.COUNT_MODES[mode], L.COUNT_SUFFIX)
+    pinnedBar.value:SetTextColor(tr, tg, tb, ta)
     if not pinnedBar._apiData then pinnedBar._apiData = {} end
     pinnedBar._apiData.isAPI = true; pinnedBar._apiData.sourceGUID = src.sourceGUID; pinnedBar._apiData.sourceCreatureID = src.sourceCreatureID
     pinnedBar._apiData.isLocalPlayer = true; pinnedBar._apiData.totalAmount = src.totalAmount; pinnedBar._apiData.amountPerSecond = src.amountPerSecond; pinnedBar._apiData.sessionType = sType

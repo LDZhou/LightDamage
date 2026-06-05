@@ -160,9 +160,11 @@ function UI:FillBars(bars, listObj, data, dur, mode)
     local count = math.min(#data, MAX_BARS)
     self:UpdateScrollState(listObj, count)
     local maxV = data[1] and data[1].value or 0
-    local textMode = ns.db.display.textColorMode or "class"
     local texPath = ns.db.display.barTexture or "Interface\\Buttons\\WHITE8X8"
     local bh, gap, alpha, font, fSz, fOut, fShad = self:GetBarConfig()
+    local nameFont, nameSz, nameOut, nameShad = self:GetDisplayFontConfig("name")
+    local tr, tg, tb, ta = self:GetDisplayColor("fontColor", {1, 1, 1, 0.93})
+    local fixedNameColor = (ns.db.display.nameColorMode == "custom") and ns.db.display.nameFontColor or nil
 
     for i, bar in ipairs(bars) do
         if i <= count then
@@ -170,7 +172,7 @@ function UI:FillBars(bars, listObj, data, dur, mode)
             bar.frame:SetPoint("TOPLEFT", listObj.child, "TOPLEFT", 0, -((i-1)*(bh+gap)))
             bar.frame:SetPoint("TOPRIGHT", listObj.child, "TOPRIGHT", 0, -((i-1)*(bh+gap)))
             self:AnchorBarTexts(bar)
-            self:ApplyFont(bar.rank, font, fSz-1, fOut, fShad); self:ApplyFont(bar.name, font, fSz, fOut, fShad); self:ApplyFont(bar.value, font, fSz-1, fOut, fShad)
+            self:ApplyFont(bar.rank, font, fSz-1, fOut, fShad); self:ApplyFont(bar.name, nameFont, nameSz, nameOut, nameShad); self:ApplyFont(bar.value, font, fSz-1, fOut, fShad)
             local d = data[i]; bar._data = d; bar._mode = mode; bar._isDeath = false; bar._guid = d.guid; bar._nameStr = d.name; bar._classStr = d.class
             bar.fill:Hide(); bar.statusbar:Show()
             local cc = ns:GetClassColor(d.class) or {0.5, 0.5, 0.5}
@@ -184,14 +186,10 @@ function UI:FillBars(bars, listObj, data, dur, mode)
             bar.statusbar:SetStatusBarTexture(texPath)
             bar.statusbar:SetStatusBarColor(cc[1], cc[2], cc[3], alpha)
             bar.rank:SetText(ns.db.display.showRank and (i..".") or "")
+            bar.rank:SetTextColor(tr, tg, tb, ta)
             bar.name:SetText(ns:DisplayName(d.name))
-            do
-                local nr, ng, nb
-                if textMode == "white" then nr, ng, nb = 1, 1, 1
-                elseif textMode == "custom" then local c = ns.db.display.textColor or {1,1,1}; nr, ng, nb = c[1], c[2], c[3]
-                else nr, ng, nb = cc[1], cc[2], cc[3] end
-                bar.name:SetTextColor(nr, ng, nb)
-            end
+            if fixedNameColor then bar.name:SetTextColor(fixedNameColor[1], fixedNameColor[2], fixedNameColor[3], fixedNameColor[4] or 1)
+            else bar.name:SetTextColor(cc[1], cc[2], cc[3]) end
             if bar.specIcon then
                 local specID = d and d.specID
                 if d.guid == ns.state.playerGUID then
@@ -204,6 +202,7 @@ function UI:FillBars(bars, listObj, data, dur, mode)
                 if ns.db.display.showSpecIcon and icon then bar.specIcon:SetTexture(icon); bar.specIcon:Show() else bar.specIcon:Hide() end
             end
             bar.value:SetText(self:MakeValueStr(d.value, dur, mode, d.perSec, d.percent))
+            bar.value:SetTextColor(tr, tg, tb, ta)
             bar.frame:Show()
         else
             if bar.specIcon then bar.specIcon:Hide() end
@@ -234,15 +233,18 @@ function UI:FillBarsFromAPI(bars, listObj, mode, sessionType, sessionID)
     if not session or not session.combatSources then self:UpdateScrollState(listObj, 0); for _, bar in ipairs(bars) do bar.frame:Hide() end; return end
     local sources, maxAmt = session.combatSources, session.maxAmount
     local count = math.min(#sources, MAX_BARS); self:UpdateScrollState(listObj, count)
-    local textMode = ns.db.display.textColorMode or "class"; local texPath = ns.db.display.barTexture or "Interface\\Buttons\\WHITE8X8"
+    local texPath = ns.db.display.barTexture or "Interface\\Buttons\\WHITE8X8"
     local bh, gap, alpha, font, fSz, fOut, fShad = self:GetBarConfig()
+    local nameFont, nameSz, nameOut, nameShad = self:GetDisplayFontConfig("name")
+    local tr, tg, tb, ta = self:GetDisplayColor("fontColor", {1, 1, 1, 0.93})
+    local fixedNameColor = (ns.db.display.nameColorMode == "custom") and ns.db.display.nameFontColor or nil
 
     for i, bar in ipairs(bars) do
         if i <= count then
             local src = sources[i]; bar.frame:SetHeight(bh); bar.frame:ClearAllPoints()
             bar.frame:SetPoint("TOPLEFT", listObj.child, "TOPLEFT", 0, -((i-1)*(bh+gap)))
             bar.frame:SetPoint("TOPRIGHT", listObj.child, "TOPRIGHT", 0, -((i-1)*(bh+gap)))
-            self:AnchorBarTexts(bar); self:ApplyFont(bar.rank, font, fSz-1, fOut, fShad); self:ApplyFont(bar.name, font, fSz, fOut, fShad); self:ApplyFont(bar.value, font, fSz-1, fOut, fShad)
+            self:AnchorBarTexts(bar); self:ApplyFont(bar.rank, font, fSz-1, fOut, fShad); self:ApplyFont(bar.name, nameFont, nameSz, nameOut, nameShad); self:ApplyFont(bar.value, font, fSz-1, fOut, fShad)
             bar.fill:Hide(); bar.statusbar:Show()
             local cls = src.classFilename or "WARRIOR"; local cc = ns:GetClassColor(cls) or {0.5, 0.5, 0.5}
 
@@ -254,6 +256,7 @@ function UI:FillBarsFromAPI(bars, listObj, mode, sessionType, sessionID)
             pcall(_safeSetStatusBar, bar.statusbar, maxAmt or 1, src.totalAmount)
 
             bar.rank:SetText(ns.db.display.showRank and (i .. ".") or "")
+            bar.rank:SetTextColor(tr, tg, tb, ta)
 
             local nameRaw = src.name
             local nameStr = ""
@@ -267,16 +270,12 @@ function UI:FillBarsFromAPI(bars, listObj, mode, sessionType, sessionID)
             end
             bar.name:SetText(ns:DisplayName(nameStr)); bar._nameStr = nameStr
 
-            do
-                local nr, ng, nb
-                if textMode == "white" then nr, ng, nb = 1, 1, 1
-                elseif textMode == "custom" then local c = ns.db.display.textColor or {1,1,1}; nr, ng, nb = c[1], c[2], c[3]
-                else nr, ng, nb = cc[1], cc[2], cc[3] end
-                bar.name:SetTextColor(nr, ng, nb)
-            end
+            if fixedNameColor then bar.name:SetTextColor(fixedNameColor[1], fixedNameColor[2], fixedNameColor[3], fixedNameColor[4] or 1)
+            else bar.name:SetTextColor(cc[1], cc[2], cc[3]) end
 
             pcall(_safeSetBarValue, bar.value, src.totalAmount, src.amountPerSecond,
                   ns.db.display.showPerSecond, COUNT_MODES[mode], L.COUNT_SUFFIX)
+            bar.value:SetTextColor(tr, tg, tb, ta)
 
             if not bar._apiData then bar._apiData = {} end
             bar._apiData.isAPI = true; bar._apiData.sourceGUID = src.sourceGUID; bar._apiData.sourceCreatureID = src.sourceCreatureID
@@ -359,6 +358,9 @@ function UI:FillDeathBars(seg, bars, listObj, sessionType, sessionID)
     self:UpdateScrollState(listObj, count)
     local cw = listObj.child:GetWidth()
     local bh, gap, alpha, font, fSz, fOut, fShad = self:GetBarConfig()
+    local nameFont, nameSz, nameOut, nameShad = self:GetDisplayFontConfig("name")
+    local tr, tg, tb, ta = self:GetDisplayColor("fontColor", {1, 1, 1, 0.93})
+    local fixedNameColor = (ns.db.display.nameColorMode == "custom") and ns.db.display.nameFontColor or nil
 
     if #items == 0 then
         for _, bar in ipairs(bars) do bar.frame:Hide() end
@@ -367,12 +369,12 @@ function UI:FillDeathBars(seg, bars, listObj, sessionType, sessionID)
         bar.frame:SetPoint("TOPLEFT", listObj.child, "TOPLEFT", 0, 0)
         bar.frame:SetPoint("TOPRIGHT", listObj.child, "TOPRIGHT", 0, 0)
         self:AnchorBarTexts(bar)
-        self:ApplyFont(bar.rank, font, fSz-1, fOut, fShad); self:ApplyFont(bar.name, font, fSz, fOut, fShad); self:ApplyFont(bar.value, font, fSz-1, fOut, fShad)
+        self:ApplyFont(bar.rank, font, fSz-1, fOut, fShad); self:ApplyFont(bar.name, nameFont, nameSz, nameOut, nameShad); self:ApplyFont(bar.value, font, fSz-1, fOut, fShad)
         bar._data = nil; bar._isDeath = false; bar._guid = nil
         bar.statusbar:Hide(); bar.fill:Show(); bar.fill:SetWidth(1); bar.fill:SetVertexColor(0,0,0,0)
         bar.rank:SetText("")
         bar.name:SetText(L.COLORED_NO_DEATHS_IN_SEGMENT)
-        bar.name:SetTextColor(1,1,1)
+        bar.name:SetTextColor(tr, tg, tb, ta)
         bar.value:SetText("")
         if bar.specIcon then bar.specIcon:Hide() end
         bar.frame:Show()
@@ -387,7 +389,7 @@ function UI:FillDeathBars(seg, bars, listObj, sessionType, sessionID)
             bar.frame:SetPoint("TOPLEFT", listObj.child, "TOPLEFT", 0, -((i-1)*(bh+gap)))
             bar.frame:SetPoint("TOPRIGHT", listObj.child, "TOPRIGHT", 0, -((i-1)*(bh+gap)))
             self:AnchorBarTexts(bar)
-            self:ApplyFont(bar.rank, font, fSz-1, fOut, fShad); self:ApplyFont(bar.name, font, fSz, fOut, fShad); self:ApplyFont(bar.value, font, fSz-1, fOut, fShad)
+            self:ApplyFont(bar.rank, font, fSz-1, fOut, fShad); self:ApplyFont(bar.name, nameFont, nameSz, nameOut, nameShad); self:ApplyFont(bar.value, font, fSz-1, fOut, fShad)
             bar.statusbar:Hide(); bar.fill:Show()
 
             if item.isSeparator then
@@ -395,7 +397,7 @@ function UI:FillDeathBars(seg, bars, listObj, sessionType, sessionID)
                 bar.fill:SetWidth(cw); bar.fill:SetVertexColor(0.06,0.06,0.08,0.95)
                 bar.rank:SetText("")
                 bar.name:SetText(item.label .. string.format(" |cff666666(%d)|r", item.count))
-                bar.name:SetTextColor(1,1,1)
+                bar.name:SetTextColor(tr, tg, tb, ta)
                 bar.value:SetText("")
                 if bar.specIcon then bar.specIcon:Hide() end
             else
@@ -406,7 +408,8 @@ function UI:FillDeathBars(seg, bars, listObj, sessionType, sessionID)
 
                 local cc = ns:GetClassColor(d.playerClass) or {0.7, 0.7, 0.7}
                 bar.name:SetText(ns:DisplayName(d.playerName or "?"))
-                bar.name:SetTextColor(cc[1], cc[2], cc[3])
+                if fixedNameColor then bar.name:SetTextColor(fixedNameColor[1], fixedNameColor[2], fixedNameColor[3], fixedNameColor[4] or 1)
+                else bar.name:SetTextColor(cc[1], cc[2], cc[3]) end
 
                 local killStr
                 if d._incomplete then

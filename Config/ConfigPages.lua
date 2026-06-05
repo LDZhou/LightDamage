@@ -200,63 +200,233 @@ end
 -- ============================================================
 -- Look 页
 -- ============================================================
+function Config:ShowLookSubPage(id)
+    self.activeLookSubPage = id
+    for sid, page in pairs(self.lookSubPages or {}) do
+        if sid == id then page:Show() else page:Hide() end
+    end
+    for sid, btn in pairs(self.lookSubBtns or {}) do
+        local active = sid == id
+        btn.bg:SetShown(active)
+        btn.text:SetTextColor(active and 1 or 0.6, active and 1 or 0.6, active and 1 or 0.6)
+    end
+    local page = self.lookSubPages and self.lookSubPages[id]
+    local inner = self.pages["look"].inner
+    if page and inner then
+        inner:SetHeight((page:GetHeight() or 0) + 44)
+        self:UpdatePageScroll("look")
+    end
+end
+
+function Config:BuildLookSubTabs(inner)
+    local tabs = {
+        {id="general",  label=L.LOOK_TAB_GENERAL},
+        {id="colors",   label=L.LOOK_TAB_COLORS},
+        {id="fonts",    label=L.LOOK_TAB_FONTS},
+        {id="bars",     label=L.LOOK_TAB_BARS},
+        {id="details",  label=L.LOOK_TAB_DETAILS},
+        {id="behavior", label=L.LOOK_TAB_BEHAVIOR},
+    }
+    self.lookSubBtns = {}
+    local w, gap = 56, 2
+    for i, tab in ipairs(tabs) do
+        local btn = CreateFrame("Button", nil, inner)
+        btn:SetSize(w, 22)
+        btn:SetPoint("TOPLEFT", inner, "TOPLEFT", (i - 1) * (w + gap), 0)
+        self:FillBg(btn, 0.07, 0.07, 0.09, 1)
+        self:CreateBorder(btn, 0.22, 0.22, 0.28, 1)
+        btn.bg = btn:CreateTexture(nil, "BORDER")
+        btn.bg:SetAllPoints()
+        btn.bg:SetColorTexture(0, 0.65, 1, 0.18)
+        local text = btn:CreateFontString(nil, "OVERLAY")
+        text:SetFont(STANDARD_TEXT_FONT, 10, "OUTLINE")
+        text:SetPoint("CENTER")
+        text:SetText(tab.label)
+        text:SetTextColor(0.6, 0.6, 0.6)
+        btn.text = text
+        btn:SetScript("OnClick", function() self:ShowLookSubPage(tab.id) end)
+        btn:SetScript("OnEnter", function() if self.activeLookSubPage ~= tab.id then text:SetTextColor(1, 1, 1) end end)
+        btn:SetScript("OnLeave", function() if self.activeLookSubPage ~= tab.id then text:SetTextColor(0.6, 0.6, 0.6) end end)
+        self.lookSubBtns[tab.id] = btn
+    end
+end
+
+function Config:AddFontSettingsBlock(parent, y, title, fields, defaultSize, refreshFn)
+    y = self:H(parent, title, y)
+    local fonts = self._lookFonts or self:GetSharedMediaFonts()
+    local outlines = self._lookOutlines or self:GetSharedMediaFontOutlines()
+    local db = fields.db or ns.db.display
+    local function getFont() return db[fields.font] or db.font or STANDARD_TEXT_FONT end
+    local function getSize() return db[fields.size] or defaultSize end
+    local function getOutline() return db[fields.outline] or db.fontOutline or "OUTLINE" end
+    local function getShadow() return db[fields.shadow] or false end
+    local function getColor()
+        local c = db[fields.color] or fields.colorFallback or {1, 1, 1, 1}
+        return c[1], c[2], c[3], c[4]
+    end
+    y = self:Dropdown(parent, L.CONFIG_FONT_FAMILY, y, fonts, getFont, function(v) db[fields.font] = v; refreshFn() end)
+    y = self:Slider(parent, L.CONFIG_FONT_SIZE, y, 8, 22, 1, getSize, function(v) db[fields.size] = v; refreshFn() end)
+    y = self:Dropdown(parent, L.CONFIG_FONT_OUTLINE, y, outlines, getOutline, function(v) db[fields.outline] = v; refreshFn() end)
+    y = self:Check(parent, L.CONFIG_ENABLE_TEXT_SHADOW, y, getShadow, function(v) db[fields.shadow] = v; refreshFn() end)
+    if fields.color then
+        y = self:ColorSwatch(parent, fields.colorLabel or L.CONFIG_FONT_COLOR, y, getColor,
+            function(r, g, b, a) db[fields.color] = {r, g, b, a}; refreshFn() end)
+    end
+    return y - 8
+end
+
+function Config:AddDataTitleColorControls(parent, y, refreshFn)
+    if not ns.db.display.dataTitleColors then ns.db.display.dataTitleColors = {} end
+    local colors = ns.db.display.dataTitleColors
+    local function Add(label, key, fallback)
+        y = self:ColorSwatch(parent, label, y,
+            function()
+                local c = colors[key] or fallback
+                return c[1], c[2], c[3], c[4] or 1
+            end,
+            function(r, g, b, a)
+                colors[key] = {r, g, b, a}
+                if refreshFn then refreshFn() elseif ns.UI then ns.UI:Refresh() end
+            end)
+    end
+    Add(L.DAMAGE .. L.CONFIG_TITLE_COLOR_SUFFIX, "damage", {1.0, 0.82, 0.0, 1})
+    Add(L.HEALING .. L.CONFIG_TITLE_COLOR_SUFFIX, "healing", {0.4, 1.0, 0.4, 1})
+    Add(L.DAMAGE_TAKEN .. L.CONFIG_TITLE_COLOR_SUFFIX, "damageTaken", {1.0, 0.3, 0.3, 1})
+    Add(L.ENEMY_DAMAGE_TAKEN .. L.CONFIG_TITLE_COLOR_SUFFIX, "enemyDamageTaken", {1.0, 0.3, 0.3, 1})
+    Add(L.DEATHS .. L.CONFIG_TITLE_COLOR_SUFFIX, "deaths", {0.0, 0.65, 1.0, 1})
+    Add(L.INTERRUPTS .. L.CONFIG_TITLE_COLOR_SUFFIX, "interrupts", {0.0, 0.65, 1.0, 1})
+    Add(L.DISPELS .. L.CONFIG_TITLE_COLOR_SUFFIX, "dispels", {0.0, 0.65, 1.0, 1})
+    return y
+end
+
 function Config:BuildLookPage()
-    local inner = self.pages["look"].inner; local y = 0
-    local textures = self:GetSharedMediaTextures(); local fonts = self:GetSharedMediaFonts(); local outlines = self:GetSharedMediaFontOutlines()
+    local inner = self.pages["look"].inner
+    self._lookFonts = self:GetSharedMediaFonts()
+    self._lookOutlines = self:GetSharedMediaFontOutlines()
+    local textures = self:GetSharedMediaTextures()
+    self:BuildLookSubTabs(inner)
 
-    y = self:H(inner, L.CONFIG_GLOBAL_SIZE, y)
-    y = self:Slider(inner, L.CONFIG_WINDOW_SCALE, y, 0.5, 2.0, 0.05, function() return ns.db.window.scale end, function(v) ns.db.window.scale = v; if ns.UI and ns.UI.frame then ns.UI.frame:SetScale(v) end end)
-    y = self:Slider(inner, L.CONFIG_PANEL_SCALE, y, 0.5, 2.0, 0.05, function() return ns.db.window.configScale or 1.0 end, function(v) ns.db.window.configScale = v; if self.panel then self.panel:SetScale(v) end; if self._pvSwitcher then self._pvSwitcher:SetScale(v) end end)
-    y = self:Check(inner, L.CONFIG_LOCK_WINDOW, y, function() return ns.db.window.locked end, function(v) ns.db.window.locked = v; if ns.UI and ns.UI.UpdateLockState then ns.UI:UpdateLockState() end end)
+    self.lookSubPages = {}
+    local function NewSubPage(id)
+        local page = CreateFrame("Frame", nil, inner)
+        page:SetWidth(inner:GetWidth())
+        page:SetPoint("TOPLEFT", inner, "TOPLEFT", 0, -34)
+        page:Hide()
+        self.lookSubPages[id] = page
+        return page
+    end
+    local function RefreshFonts()
+        if ns.UI then
+            ns.UI._lastFontHash = nil
+            ns.UI:ApplyAllFonts()
+            ns.UI:LayoutTabs()
+            ns.UI:Refresh()
+        end
+        self:RefreshUI()
+    end
 
-    y = y - 12; y = self:H(inner, L.CONFIG_ICON_STYLE, y)
-    y = self:Dropdown(inner, L.CONFIG_SPEC_ICON_PACK, y,
+    local page = NewSubPage("general"); local y = 0
+    y = self:H(page, L.CONFIG_GLOBAL_SIZE, y)
+    y = self:Slider(page, L.CONFIG_WINDOW_SCALE, y, 0.5, 2.0, 0.05, function() return ns.db.window.scale end, function(v) ns.db.window.scale = v; if ns.UI and ns.UI.frame then ns.UI.frame:SetScale(v) end end)
+    y = self:Slider(page, L.CONFIG_PANEL_SCALE, y, 0.5, 2.0, 0.05, function() return ns.db.window.configScale or 1.0 end, function(v) ns.db.window.configScale = v; if self.panel then self.panel:SetScale(v) end; if self._pvSwitcher then self._pvSwitcher:SetScale(v) end end)
+    y = self:Check(page, L.CONFIG_LOCK_WINDOW, y, function() return ns.db.window.locked end, function(v) ns.db.window.locked = v; if ns.UI and ns.UI.UpdateLockState then ns.UI:UpdateLockState() end end)
+    y = y - 12; y = self:H(page, L.CONFIG_ICON_STYLE, y)
+    y = self:Dropdown(page, L.CONFIG_SPEC_ICON_PACK, y,
         { {l=L.DEFAULT, v="default"}, {l="Apex", v="apex"}, {l="Cartoon", v="cartoon"}, {l="ToxiUI", v="toxiui"} , {l="LightDamage", v="lightdamage"}},
         function() return ns.db.display.iconPack or "default" end,
         function(v) ns.db.display.iconPack = v; self:RefreshUI() end)
+    page:SetHeight(math.abs(y) + 8)
 
-    y = y - 12; y = self:H(inner, L.CONFIG_UI_COLORS, y)
-    y = self:ColorSwatch(inner, L.CONFIG_TITLE_TAB_THEME_COLOR, y, function() local c = ns.db.window.themeColor or {0.08, 0.08, 0.12, 1}; return c[1], c[2], c[3], c[4] end, function(r, g, b, a) ns.db.window.themeColor = {r, g, b, a}; if ns.UI and ns.UI.ApplyTheme then ns.UI:ApplyTheme() end end)
-    y = self:ColorSwatch(inner, L.CONFIG_DATA_BACKGROUND_COLOR, y, function() local c = ns.db.window.bgColor or {0.04, 0.04, 0.05, 0.90}; return c[1], c[2], c[3], c[4] end, function(r, g, b, a) ns.db.window.bgColor = {r, g, b, a}; if ns.UI and ns.UI.ApplyTheme then ns.UI:ApplyTheme() end end)
-    y = self:ColorSwatch(inner, L.CONFIG_OVERALL_COLUMN_BACKGROUND_COLOR, y, function() local c = ns.db.window.ovrBgColor or {0.02, 0.04, 0.08, 0.95}; return c[1], c[2], c[3], c[4] end, function(r, g, b, a) ns.db.window.ovrBgColor = {r, g, b, a}; if ns.UI and ns.UI.ApplyTheme then ns.UI:ApplyTheme() end end)
+    page = NewSubPage("colors"); y = 0
+    y = self:H(page, L.CONFIG_UI_COLORS, y)
+    y = self:ColorSwatch(page, L.CONFIG_TITLE_TAB_THEME_COLOR, y, function() local c = ns.db.window.themeColor or {0.08, 0.08, 0.12, 1}; return c[1], c[2], c[3], c[4] end, function(r, g, b, a) ns.db.window.themeColor = {r, g, b, a}; if ns.UI and ns.UI.ApplyTheme then ns.UI:ApplyTheme() end end)
+    y = self:ColorSwatch(page, L.CONFIG_DATA_BACKGROUND_COLOR, y, function() local c = ns.db.window.bgColor or {0.04, 0.04, 0.05, 0.90}; return c[1], c[2], c[3], c[4] end, function(r, g, b, a) ns.db.window.bgColor = {r, g, b, a}; if ns.UI and ns.UI.ApplyTheme then ns.UI:ApplyTheme() end end)
+    y = self:ColorSwatch(page, L.CONFIG_OVERALL_COLUMN_BACKGROUND_COLOR, y, function() local c = ns.db.window.ovrBgColor or {0.02, 0.04, 0.08, 0.95}; return c[1], c[2], c[3], c[4] end, function(r, g, b, a) ns.db.window.ovrBgColor = {r, g, b, a}; if ns.UI and ns.UI.ApplyTheme then ns.UI:ApplyTheme() end end)
+    page:SetHeight(math.abs(y) + 8)
 
-    y = y - 12; y = self:H(inner, L.CONFIG_NAME_COLOR, y)
-    local colorModes = { {l=L.CONFIG_CLASS_COLOR, v="class"}, {l=L.PURE_WHITE, v="white"}, {l=L.CUSTOM, v="custom"} }
-    y = self:Dropdown(inner, L.CONFIG_NAME_COLOR_SELECTION, y, colorModes, function() return ns.db.display.textColorMode or "class" end, function(v) ns.db.display.textColorMode = v; self:RefreshUI() end)
-    y = self:ColorSwatchNoAlpha(inner, L.CONFIG_CUSTOM_NAME_COLOR, y, function() local c = ns.db.display.textColor or {1.0, 1.0, 1.0}; return c[1], c[2], c[3] end, function(r, g, b) ns.db.display.textColor = {r, g, b}; self:RefreshUI() end)
+    page = NewSubPage("fonts"); y = 0
+    local function RebuildLookPage(subPage)
+        if not self.panel or not self.panel:IsShown() then return end
+        local savedScroll = 0
+        if self.pages and self.pages.look and self.pages.look.sb then
+            savedScroll = self.pages.look.sb:GetValue() or 0
+        end
+        local function DoRebuild()
+            if not self.panel or not self.panel:IsShown() then return end
+            self.panel:Hide()
+            self.panel:SetParent(nil)
+            self.panel = nil
+            self.colorSwatches = nil
+            self:Build()
+            self.panel:Show()
+            self:ShowPage("look")
+            self:ShowLookSubPage(subPage or "fonts")
+            local pg = self.pages and self.pages.look
+            if pg and pg.sb then
+                local _, maxScroll = pg.sb:GetMinMaxValues()
+                pg.sb:SetValue(math.max(0, math.min(maxScroll or 0, savedScroll)))
+            end
+        end
+        if C_Timer and C_Timer.After then C_Timer.After(0, DoRebuild) else DoRebuild() end
+    end
+    y = self:AddFontSettingsBlock(page, y, L.CONFIG_BASE_TEXT_FONT_SETTINGS, {font="font", size="fontSizeBase", outline="fontOutline", shadow="fontShadow", color="fontColor", colorFallback={1, 1, 1, 0.93}}, 13, RefreshFonts)
+    y = self:AddFontSettingsBlock(page, y, L.CONFIG_TOP_TITLE_FONT_SETTINGS, {font="titleFont", size="titleFontSize", outline="titleFontOutline", shadow="titleFontShadow", color="titleFontColor", colorFallback={1, 1, 1, 0.93}}, 10, RefreshFonts)
+    y = self:AddFontSettingsBlock(page, y, L.CONFIG_DATA_HEADER_FONT_SETTINGS, {font="headerFont", size="headerFontSize", outline="headerFontOutline", shadow="headerFontShadow"}, 9, RefreshFonts)
+    y = self:AddDataTitleColorControls(page, y, RefreshFonts)
+    y = self:AddFontSettingsBlock(page, y, L.CONFIG_PLAYER_NAME_FONT_SETTINGS, {font="nameFont", size="nameFontSize", outline="nameFontOutline", shadow="nameFontShadow"}, 13, RefreshFonts)
+    local nameColorModeOpts = {{l=L.CONFIG_CLASS_COLOR, v="class"}, {l=L.CUSTOM, v="custom"}}
+    y = self:Dropdown(page, L.CONFIG_PLAYER_NAME_COLOR_MODE, y, nameColorModeOpts,
+        function() return ns.db.display.nameColorMode or "class" end,
+        function(v) ns.db.display.nameColorMode = v; RefreshFonts(); RebuildLookPage("fonts") end)
+    if (ns.db.display.nameColorMode or "class") == "custom" then
+        y = self:ColorSwatch(page, L.CONFIG_CUSTOM_PLAYER_NAME_COLOR, y,
+            function() local c = ns.db.display.nameFontColor or {1, 1, 1, 1}; return c[1], c[2], c[3], c[4] end,
+            function(r, g, b, a) ns.db.display.nameFontColor = {r, g, b, a}; RefreshFonts() end)
+    end
+    y = self:AddFontSettingsBlock(page, y, L.CONFIG_BOTTOM_TAB_FONT_SETTINGS, {font="tabFont", size="tabFontSize", outline="tabFontOutline", shadow="tabFontShadow", color="tabActiveFontColor", colorLabel=L.CONFIG_TAB_ACTIVE_FONT_COLOR, colorFallback={1, 1, 1, 1}}, 9, RefreshFonts)
+    y = self:ColorSwatch(page, L.CONFIG_TAB_INACTIVE_FONT_COLOR, y, function() local c = ns.db.display.tabInactiveFontColor or {0.55, 0.55, 0.55, 0.9}; return c[1], c[2], c[3], c[4] end, function(r, g, b, a) ns.db.display.tabInactiveFontColor = {r, g, b, a}; RefreshFonts() end)
+    page:SetHeight(math.abs(y) + 8)
 
-    y = y - 12; y = self:H(inner, L.CONFIG_FONT_SETTINGS, y)
-    y = self:Dropdown(inner, L.CONFIG_GLOBAL_FONT, y, fonts, function() return ns.db.display.font or STANDARD_TEXT_FONT end, function(v) ns.db.display.font=v; self:RefreshUI() end)
-    y = self:Slider(inner, L.CONFIG_FONT_BASE_SIZE, y, 8, 20, 1, function() return ns.db.display.fontSizeBase or 10 end, function(v) ns.db.display.fontSizeBase=v; self:RefreshUI() end)
-    y = self:Dropdown(inner, L.CONFIG_FONT_OUTLINE, y, outlines, function() return ns.db.display.fontOutline or "OUTLINE" end, function(v) ns.db.display.fontOutline=v; self:RefreshUI() end)
-    y = self:Check(inner, L.CONFIG_ENABLE_TEXT_SHADOW, y, function() return ns.db.display.fontShadow end, function(v) ns.db.display.fontShadow=v; self:RefreshUI() end)
+    page = NewSubPage("bars"); y = 0
+    y = self:H(page, L.CONFIG_BAR_APPEARANCE, y)
+    y = self:Slider(page, L.CONFIG_LAYOUT_ROW_HEIGHT_TEXT_ICON_AREA, y, 10, 30, 1, function() return ns.db.display.barHeight end, function(v) ns.db.display.barHeight=v; self:RefreshUI() end)
+    y = self:Slider(page, L.CONFIG_BAR_ACTUAL_THICKNESS, y, 1, 30, 1, function() return ns.db.display.barThickness or ns.db.display.barHeight or 19 end, function(v) ns.db.display.barThickness=v; self:RefreshUI() end)
+    y = self:Slider(page, L.CONFIG_BAR_VERTICAL_OFFSET_BOTTOM_UP, y, 0, 30, 1, function() return ns.db.display.barVOffset or 0 end, function(v) ns.db.display.barVOffset=v; self:RefreshUI() end)
+    y = self:Slider(page, L.CONFIG_DATA_BAR_SPACING, y, 0, 10, 1, function() return ns.db.display.barGap or 1 end, function(v) ns.db.display.barGap=v; self:RefreshUI() end)
+    y = self:Slider(page, L.CONFIG_DATA_BAR_OPACITY, y, 0.1, 1.0, 0.05, function() return ns.db.display.barAlpha or 0.85 end, function(v) ns.db.display.barAlpha=v; self:RefreshUI() end)
+    y = self:Dropdown(page, L.CONFIG_DATA_BAR_MATERIAL, y, textures, function() return ns.db.display.barTexture or "Interface\\Buttons\\WHITE8X8" end, function(v) ns.db.display.barTexture=v; self:RefreshUI() end)
+    page:SetHeight(math.abs(y) + 8)
 
-    y = y - 12; y = self:H(inner, L.CONFIG_BAR_APPEARANCE, y)
-    y = self:Slider(inner, L.CONFIG_LAYOUT_ROW_HEIGHT_TEXT_ICON_AREA, y, 10, 30, 1, function() return ns.db.display.barHeight end, function(v) ns.db.display.barHeight=v; self:RefreshUI() end)
-    y = self:Slider(inner, L.CONFIG_BAR_ACTUAL_THICKNESS, y, 1, 30, 1, function() return ns.db.display.barThickness or ns.db.display.barHeight or 19 end, function(v) ns.db.display.barThickness=v; self:RefreshUI() end)
-    y = self:Slider(inner, L.CONFIG_BAR_VERTICAL_OFFSET_BOTTOM_UP, y, 0, 30, 1, function() return ns.db.display.barVOffset or 0 end, function(v) ns.db.display.barVOffset=v; self:RefreshUI() end)
-    y = self:Slider(inner, L.CONFIG_DATA_BAR_SPACING, y, 0, 10, 1, function() return ns.db.display.barGap or 1 end, function(v) ns.db.display.barGap=v; self:RefreshUI() end)
-    y = self:Slider(inner, L.CONFIG_DATA_BAR_OPACITY, y, 0.1, 1.0, 0.05, function() return ns.db.display.barAlpha or 0.85 end, function(v) ns.db.display.barAlpha=v; self:RefreshUI() end)
-    y = self:Dropdown(inner, L.CONFIG_DATA_BAR_MATERIAL, y, textures, function() return ns.db.display.barTexture or "Interface\\Buttons\\WHITE8X8" end, function(v) ns.db.display.barTexture=v; self:RefreshUI() end)
+    page = NewSubPage("details"); y = 0
+    y = self:H(page, L.SPELL_DETAILS_APPEARANCE, y)
+    y = self:Slider(page, L.CONFIG_LAYOUT_ROW_HEIGHT_TEXT_ICON_AREA, y, 10, 40, 1, function() return ns.db.detailDisplay.barHeight end, function(v) ns.db.detailDisplay.barHeight=v; if ns.DetailView then ns.DetailView:Refresh() end end)
+    y = self:Slider(page, L.CONFIG_BAR_ACTUAL_THICKNESS, y, 1, 40, 1, function() return ns.db.detailDisplay.barThickness or ns.db.detailDisplay.barHeight or 20 end, function(v) ns.db.detailDisplay.barThickness=v; if ns.DetailView then ns.DetailView:Refresh() end end)
+    y = self:Slider(page, L.CONFIG_BAR_VERTICAL_OFFSET_BOTTOM_UP, y, 0, 30, 1, function() return ns.db.detailDisplay.barVOffset or 0 end, function(v) ns.db.detailDisplay.barVOffset=v; if ns.DetailView then ns.DetailView:Refresh() end end)
+    y = self:Slider(page, L.CONFIG_DATA_BAR_SPACING, y, 0, 10, 1, function() return ns.db.detailDisplay.barGap or 1 end, function(v) ns.db.detailDisplay.barGap=v; if ns.DetailView then ns.DetailView:Refresh() end end)
+    y = self:Slider(page, L.CONFIG_DATA_BAR_OPACITY, y, 0.1, 1.0, 0.05, function() return ns.db.detailDisplay.barAlpha or 0.92 end, function(v) ns.db.detailDisplay.barAlpha=v; if ns.DetailView then ns.DetailView:Refresh() end end)
+    y = self:Dropdown(page, L.CONFIG_DATA_BAR_MATERIAL, y, textures, function() return ns.db.detailDisplay.barTexture or "Interface\\Buttons\\WHITE8X8" end, function(v) ns.db.detailDisplay.barTexture=v; if ns.DetailView then ns.DetailView:Refresh() end end)
+    local detailBarColorModeOpts = {{l=L.CONFIG_DEFAULT_COLORS, v="default"}, {l=L.CUSTOM, v="custom"}}
+    y = self:Dropdown(page, L.CONFIG_DETAIL_BAR_COLOR_MODE, y, detailBarColorModeOpts,
+        function() return ns.db.detailDisplay.barColorMode or "default" end,
+        function(v) ns.db.detailDisplay.barColorMode = v; if ns.DetailView then ns.DetailView:Refresh() end; RebuildLookPage("details") end)
+    if (ns.db.detailDisplay.barColorMode or "default") == "custom" then
+        y = self:ColorSwatch(page, L.CONFIG_DETAIL_CUSTOM_BAR_COLOR, y,
+            function() local c = ns.db.detailDisplay.barColor or {0, 0.65, 1, 0.92}; return c[1], c[2], c[3], c[4] end,
+            function(r, g, b, a) ns.db.detailDisplay.barColor = {r, g, b, a}; if ns.DetailView then ns.DetailView:Refresh() end end)
+    end
+    y = self:AddFontSettingsBlock(page, y, L.CONFIG_SPELL_DETAILS_FONT, {db=ns.db.detailDisplay, font="font", size="fontSizeBase", outline="fontOutline", shadow="fontShadow", color="fontColor", colorFallback={1, 1, 1, 1}}, 10,
+        function() if ns.DetailView then ns.DetailView:ApplyTheme(); ns.DetailView:Refresh() end end)
+    page:SetHeight(math.abs(y) + 8)
 
-    y = y - 12; y = self:H(inner, L.SPELL_DETAILS_APPEARANCE, y)
-    y = self:Slider(inner, L.CONFIG_LAYOUT_ROW_HEIGHT_TEXT_ICON_AREA, y, 10, 40, 1, function() return ns.db.detailDisplay.barHeight end, function(v) ns.db.detailDisplay.barHeight=v; if ns.DetailView then ns.DetailView:Refresh() end end)
-    y = self:Slider(inner, L.CONFIG_BAR_ACTUAL_THICKNESS, y, 1, 40, 1, function() return ns.db.detailDisplay.barThickness or ns.db.detailDisplay.barHeight or 20 end, function(v) ns.db.detailDisplay.barThickness=v; if ns.DetailView then ns.DetailView:Refresh() end end)
-    y = self:Slider(inner, L.CONFIG_BAR_VERTICAL_OFFSET_BOTTOM_UP, y, 0, 30, 1, function() return ns.db.detailDisplay.barVOffset or 0 end, function(v) ns.db.detailDisplay.barVOffset=v; if ns.DetailView then ns.DetailView:Refresh() end end)
-    y = self:Slider(inner, L.CONFIG_DATA_BAR_SPACING, y, 0, 10, 1, function() return ns.db.detailDisplay.barGap or 1 end, function(v) ns.db.detailDisplay.barGap=v; if ns.DetailView then ns.DetailView:Refresh() end end)
-    y = self:Slider(inner, L.CONFIG_DATA_BAR_OPACITY, y, 0.1, 1.0, 0.05, function() return ns.db.detailDisplay.barAlpha or 0.92 end, function(v) ns.db.detailDisplay.barAlpha=v; if ns.DetailView then ns.DetailView:Refresh() end end)
-    y = self:Dropdown(inner, L.CONFIG_DATA_BAR_MATERIAL, y, textures, function() return ns.db.detailDisplay.barTexture or "Interface\\Buttons\\WHITE8X8" end, function(v) ns.db.detailDisplay.barTexture=v; if ns.DetailView then ns.DetailView:Refresh() end end)
-    y = self:Dropdown(inner, L.CONFIG_SPELL_DETAILS_FONT, y, fonts, function() return ns.db.detailDisplay.font or STANDARD_TEXT_FONT end, function(v) ns.db.detailDisplay.font=v; if ns.DetailView then ns.DetailView:Refresh() end end)
-    y = self:Slider(inner, L.CONFIG_FONT_BASE_SIZE, y, 8, 20, 1, function() return ns.db.detailDisplay.fontSizeBase or 10 end, function(v) ns.db.detailDisplay.fontSizeBase=v; if ns.DetailView then ns.DetailView:Refresh() end end)
-    y = self:Dropdown(inner, L.CONFIG_FONT_OUTLINE, y, outlines, function() return ns.db.detailDisplay.fontOutline or "OUTLINE" end, function(v) ns.db.detailDisplay.fontOutline=v; if ns.DetailView then ns.DetailView:Refresh() end end)
-    y = self:Check(inner, L.CONFIG_ENABLE_TEXT_SHADOW, y, function() return ns.db.detailDisplay.fontShadow end, function(v) ns.db.detailDisplay.fontShadow=v; if ns.DetailView then ns.DetailView:Refresh() end end)
-
-    y = y - 12
-    local foldContainer = CreateFrame("Frame", nil, inner); foldContainer:SetWidth(inner:GetWidth()); foldContainer:SetPoint("TOPLEFT", inner, "TOPLEFT", 0, y)
-    self._foldContainer = foldContainer; self._foldContainerBaseY = y
+    page = NewSubPage("behavior")
+    local foldContainer = CreateFrame("Frame", nil, page)
+    foldContainer:SetWidth(page:GetWidth())
+    foldContainer:SetPoint("TOPLEFT", page, "TOPLEFT", 0, 0)
+    self._foldContainer = foldContainer
     self:RebuildFoldAndHide()
-    y = y - (self._foldContainer:GetHeight() or 0)
-    inner:SetHeight(math.abs(y) + 20)
+    page:SetHeight(self._foldContainer:GetHeight() + 8)
+
+    self:ShowLookSubPage(self.activeLookSubPage or "general")
 end
 
 function Config:RebuildFoldAndHide()
@@ -306,10 +476,9 @@ function Config:RebuildFoldAndHide()
 end
 
 function Config:UpdateLookPageHeight()
-    if not self._foldContainer or not self._foldContainerBaseY then return end
-    local inner = self.pages["look"].inner; if not inner then return end
-    local totalY = math.abs(self._foldContainerBaseY) + self._foldContainer:GetHeight()
-    inner:SetHeight(totalY + 20); self:UpdatePageScroll("look")
+    if not self._foldContainer or not self.lookSubPages or not self.lookSubPages.behavior then return end
+    self.lookSubPages.behavior:SetHeight(self._foldContainer:GetHeight() + 8)
+    self:ShowLookSubPage(self.activeLookSubPage or "behavior")
 end
 
 -- ============================================================

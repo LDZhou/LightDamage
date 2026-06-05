@@ -104,12 +104,12 @@ function UI:Refresh()
     end
 
     if self.splitTab then
-        if isSplitView then self.splitTab.abg:Show(); self.splitTab.text:SetTextColor(0, 0.75, 1)
-        else self.splitTab.abg:Hide(); self.splitTab.text:SetTextColor(0.55, 0.55, 0.55) end
+        if isSplitView then self.splitTab.abg:Show(); self:SetTabTextColor(self.splitTab.text, true)
+        else self.splitTab.abg:Hide(); self:SetTabTextColor(self.splitTab.text, false) end
     end
     for _, t in ipairs(self.tabs) do
-        if mode == t.mode then t.abg:Show(); t.text:SetTextColor(1, 1, 1)
-        else t.abg:Hide(); t.text:SetTextColor(0.55, 0.55, 0.55) end
+        if mode == t.mode then t.abg:Show(); self:SetTabTextColor(t.text, true)
+        else t.abg:Hide(); self:SetTabTextColor(t.text, false) end
     end
 
     local isOverall = segs and segs:IsViewingOverall()
@@ -143,12 +143,15 @@ function UI:Refresh()
             local secLabel = L[ns.MODE_NAMES[sp.secondaryMode] or ""]
             if sp.primaryMode == "damageTaken" and ns.state.damageTakenView == "enemy" then priLabel = L.ENEMY_DAMAGE_TAKEN end
             if sp.secondaryMode == "damageTaken" and ns.state.damageTakenView == "enemy" then secLabel = L.ENEMY_DAMAGE_TAKEN end
-            self.ovrPriHead.label:SetText(string.format(L.COLORED_OVERALL_HEADER_FORMAT, ovrTitleWord, priLabel))
-            self.ovrSecHead.label:SetText(string.format(L.COLORED_OVERALL_HEADER_FORMAT, ovrTitleWord, secLabel))
+            local priColorMode = (sp.primaryMode == "damageTaken" and ns.state.damageTakenView == "enemy") and "enemyDamageTaken" or sp.primaryMode
+            local secColorMode = (sp.secondaryMode == "damageTaken" and ns.state.damageTakenView == "enemy") and "enemyDamageTaken" or sp.secondaryMode
+            self:SetModeHeaderText(self.ovrPriHead.label, string.format("[%s%s]", ovrTitleWord, priLabel), priColorMode)
+            self:SetModeHeaderText(self.ovrSecHead.label, string.format("[%s%s]", ovrTitleWord, secLabel), secColorMode)
         else
             local modeLabel = L[ns.MODE_NAMES[mode] or ""]
             if mode == "damageTaken" and ns.state.damageTakenView == "enemy" then modeLabel = L.ENEMY_DAMAGE_TAKEN end
-            self.ovrPriHead.label:SetText(string.format(L.COLORED_OVERALL_HEADER_FORMAT, ovrTitleWord, modeLabel))
+            local colorMode = (mode == "damageTaken" and ns.state.damageTakenView == "enemy") and "enemyDamageTaken" or mode
+            self:SetModeHeaderText(self.ovrPriHead.label, string.format("[%s%s]", ovrTitleWord, modeLabel), colorMode)
         end
     end
 end
@@ -209,13 +212,18 @@ function UI:RefreshHead(h, mode, seg, dur, apiSessionType, apiSessionID)
             local isEnemy = (ns.state.damageTakenView == "enemy")
             h.dtFriendlyText:SetText(L.ALLY)
             h.dtEnemyText:SetText(L.ENEMY)
+            local tc = ns.db.display.damageTakenToggleColors or {}
+            local fa = tc.friendlyActive or {0.3, 1.0, 0.3, 1}
+            local fi = tc.friendlyInactive or {0.3, 0.5, 0.3, 1}
+            local ea = tc.enemyActive or {1.0, 0.4, 0.4, 1}
+            local ei = tc.enemyInactive or {0.5, 0.3, 0.3, 1}
             if isEnemy then
-                h.dtFriendlyText:SetTextColor(0.3, 0.5, 0.3)
-                h.dtEnemyText:SetTextColor(1.0, 0.4, 0.4)
+                h.dtFriendlyText:SetTextColor(fi[1], fi[2], fi[3], fi[4] or 1)
+                h.dtEnemyText:SetTextColor(ea[1], ea[2], ea[3], ea[4] or 1)
                 mn = L.ENEMY_DAMAGE_TAKEN
             else
-                h.dtFriendlyText:SetTextColor(0.3, 1.0, 0.3)
-                h.dtEnemyText:SetTextColor(0.5, 0.3, 0.3)
+                h.dtFriendlyText:SetTextColor(fa[1], fa[2], fa[3], fa[4] or 1)
+                h.dtEnemyText:SetTextColor(ei[1], ei[2], ei[3], ei[4] or 1)
             end
             h.dtFriendly:Show(); h.dtEnemy:Show()
         else
@@ -223,8 +231,9 @@ function UI:RefreshHead(h, mode, seg, dur, apiSessionType, apiSessionID)
         end
     end
 
-    local ac = mode=="damage" and T.dmgC or mode=="healing" and T.healC or mode=="damageTaken" and T.takenC or T.accent
-    h.label:SetText(string.format("|cff%02x%02x%02x%s|r", ac[1]*255, ac[2]*255, ac[3]*255, mn))
+    local colorMode = (mode == "damageTaken" and ns.state.damageTakenView == "enemy") and "enemyDamageTaken" or mode
+    local ac = { self:GetModeTitleColor(colorMode) }
+    self:SetModeHeaderText(h.label, mn, colorMode)
 
     if mode == "damageTaken" and h.dtFriendly then
         if not h._dtMaxLabelW then

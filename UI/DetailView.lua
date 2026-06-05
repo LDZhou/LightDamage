@@ -36,6 +36,27 @@ function DV:GetBarConfig()
            db.barTexture or "Interface\\Buttons\\WHITE8X8"
 end
 
+function DV:GetFontColor()
+    local db = ns.db and ns.db.detailDisplay or {}
+    local c = db.fontColor or {1, 1, 1, 1}
+    return c[1] or 1, c[2] or 1, c[3] or 1, c[4] or 1
+end
+
+function DV:SetDetailTextColor(fs)
+    if not fs then return end
+    fs:SetTextColor(self:GetFontColor())
+end
+
+function DV:GetDetailBarColor(defaultColor, defaultAlpha)
+    local db = ns.db and ns.db.detailDisplay or {}
+    if db.barColorMode == "custom" then
+        local c = db.barColor or {0, 0.65, 1, defaultAlpha or 1}
+        return c[1] or 0, c[2] or 0.65, c[3] or 1, c[4] or defaultAlpha or 1
+    end
+    defaultColor = defaultColor or {0.5, 0.5, 0.7}
+    return defaultColor[1] or 0.5, defaultColor[2] or 0.5, defaultColor[3] or 0.7, defaultColor[4] or defaultAlpha or 1
+end
+
 -- ============================================================
 -- 面板创建
 -- ============================================================
@@ -246,13 +267,15 @@ function DV:ApplyTheme()
         else fs:SetShadowOffset(0,0) end
     end
     
-    if self.titleText then _applyFont(self.titleText, fSz + 1) end
+    if self.titleText then _applyFont(self.titleText, fSz + 1); self:SetDetailTextColor(self.titleText) end
     if self.backText then _applyFont(self.backText, fSz + 4) end
     if self.closeText then _applyFont(self.closeText, fSz + 2) end
     
     for _, r in ipairs(self.rows) do
         _applyFont(r.name, fSz)
         _applyFont(r.value, fSz)
+        self:SetDetailTextColor(r.name)
+        self:SetDetailTextColor(r.value)
     end
 end
 
@@ -387,6 +410,8 @@ function DV:PlaceRow(idx, yOff, h, bgOverride, thickness, vOffset)
     end
     _applyFont(r.name, fSz)
     _applyFont(r.value, fSz)
+    self:SetDetailTextColor(r.name)
+    self:SetDetailTextColor(r.value)
 
     return r
 end
@@ -473,7 +498,7 @@ function DV:RenderSpellList(name, class, mode, spells, dur, titleSuffix, apiMaxA
         -- ★ 颜色：魔法学派颜色，透明度跟主界面统一
         local sc2 = ns.SCHOOL_COLORS and ns.SCHOOL_COLORS[sp.school] or {0.5, 0.5, 0.7}
         if sp.isPet then sc2 = {0.28, 0.65, 0.28} end
-        r.fill:SetStatusBarColor(sc2[1], sc2[2], sc2[3], alpha)
+        r.fill:SetStatusBarColor(self:GetDetailBarColor(sc2, alpha))
 
         local sn = sp.name or "?"
         local nc = sp.isPet and "|cff55bb55" or "|cffffffff"
@@ -824,7 +849,7 @@ function DV:ShowDeathDetail(death)
     hr.fill:SetStatusBarTexture(texPath)
     hr.fill:SetMinMaxValues(0, 1)
     hr.fill:SetValue(1)
-    hr.fill:SetStatusBarColor(0.70, 0.04, 0.04, 0.55)
+    hr.fill:SetStatusBarColor(self:GetDetailBarColor({0.70, 0.04, 0.04, 0.55}, 0.55))
     setNameWithIcon(hr,
         death.killingAbility ~= "?" and GetSpellIcon(
             (evReversed[1] and not evReversed[1].isHeal) and evReversed[1].spellID or 0
@@ -862,19 +887,19 @@ function DV:ShowDeathDetail(death)
         r.fill:SetValue(hpPct)
 
         if ev.isHeal then
-            r.fill:SetStatusBarColor(0.10, 0.50, 0.10, alpha)
+            r.fill:SetStatusBarColor(self:GetDetailBarColor({0.10, 0.50, 0.10}, alpha))
             r.bg:SetColorTexture(unpack(ROW_BG[(ri % 2) + 1]))
             setNameWithIcon(r, GetSpellIcon(ev.spellID),
                 string.format("|cff44ee44+%s|r %s",
                     ns:FormatNumber(math.abs(ev.amount)), ev.spellName or L.HEALING))
         elseif isFatal then
             r.bg:SetColorTexture(0.20, 0.03, 0.03, 0.96)
-            r.fill:SetStatusBarColor(0.80, 0.04, 0.04, alpha)
+            r.fill:SetStatusBarColor(self:GetDetailBarColor({0.80, 0.04, 0.04}, alpha))
             setNameWithIcon(r, GetSpellIcon(ev.spellID),
                 string.format("|cffff1111-%s|r |cffff7755%s|r",
                     ns:FormatNumber(ev.amount), ev.spellName or "?"))
         else
-            r.fill:SetStatusBarColor(0.60, 0.08, 0.08, alpha)
+            r.fill:SetStatusBarColor(self:GetDetailBarColor({0.60, 0.08, 0.08}, alpha))
             setNameWithIcon(r, GetSpellIcon(ev.spellID),
                 string.format("|cffff9977-%s|r %s",
                     ns:FormatNumber(ev.amount), ev.spellName or "?"))
@@ -936,7 +961,7 @@ function DV:ShowDeathDetail(death)
     tr.fill:SetStatusBarTexture(texPath)
     tr.fill:SetMinMaxValues(0, 1)
     tr.fill:SetValue(1)
-    tr.fill:SetStatusBarColor(0.04, 0.04, 0.08, 0.90)
+    tr.fill:SetStatusBarColor(self:GetDetailBarColor({0.04, 0.04, 0.08, 0.90}, 0.90))
     tr.name:SetText(string.format(
         L.DAMAGE_TAKEN_LINE_FORMAT,
         ns:FormatNumber(death.totalDamageTaken or 0)))
@@ -984,7 +1009,7 @@ function DV:ShowEnemyDamageTakenDetail(enemyName, sources, totalDmg)
         local classKey = type(src.class) == "string" and src.class or "NPC"
         local ok, cc = pcall(ns.GetClassColor, ns, classKey)
         if not ok or not cc then cc = {0.5, 0.5, 0.5} end
-        r.fill:SetStatusBarColor(cc[1], cc[2], cc[3], alpha)
+        r.fill:SetStatusBarColor(self:GetDetailBarColor(cc, alpha))
 
         local nameOk, nameStr = pcall(ns.DisplayName, ns, src.name)
         r.name:SetText((nameOk and nameStr) or tostring(src.name or "?"))
