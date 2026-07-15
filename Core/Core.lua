@@ -50,9 +50,9 @@ ns.defaults = {
         rememberSceneSize = false,
         sceneAnchor = "TOPLEFT",
         sceneSizes = {},
-        themeColor = {0, 0.85, 0.85, 0.05},
-        bgColor    = {0, 0.7, 0.7, 0},
-        ovrBgColor = {1, 1, 1, 0.05},
+        themeColor = {0, 0, 0, 1},
+        bgColor    = {0.02, 0.02, 0.025, 0.58},
+        ovrBgColor = {0.025, 0.035, 0.05, 0.62},
     },
     detailWindow = {
         width = 380, height = 420,
@@ -73,7 +73,8 @@ ns.defaults = {
         barColor      = {0.0, 0.65, 1.0, 0.92},
     },
     display = {
-        mode          = "split",
+        mode          = "overview",
+        language      = "auto",
         showPerSecond = true,
         showPercent   = true,
         showRank      = true,
@@ -118,20 +119,24 @@ ns.defaults = {
             damage           = {1.0, 0.82, 0.0, 1},
             healing          = {0.4, 1.0, 0.4, 1},
             damageTaken      = {1.0, 0.3, 0.3, 1},
-            enemyDamageTaken = {1.0, 0.3, 0.3, 1},
+            enemyDamageTaken = {0.78, 0.08, 0.10, 1},
             deaths           = {0.0, 0.65, 1.0, 1},
             interrupts       = {0.0, 0.65, 1.0, 1},
             dispels          = {0.0, 0.65, 1.0, 1},
         },
-        damageTakenToggleColors = {
-            friendlyActive = {0.3, 1.0, 0.3, 1},
-            friendlyInactive = {0.3, 0.5, 0.3, 1},
-            enemyActive = {1.0, 0.4, 0.4, 1},
-            enemyInactive = {0.5, 0.3, 0.3, 1},
-        },
         alwaysShowSelf = false,
         useShortTabs   = false,
-        damageTakenView = "friendly",
+        tabLabelStyle  = "full",
+        bottomBarModes = {
+            damage = true,
+            healing = true,
+            damageTaken = false,
+            deaths = true,
+            enemyDamageTaken = true,
+            interrupts = false,
+            dispels = false,
+        },
+        bottomBarSchema = 1,
     },
     split = {
         enabled           = true,
@@ -158,24 +163,53 @@ ns.defaults = {
         autoSegment       = true,
         autoCleanTrash    = true,
         genOverallMPlus   = true,
-        genOverallRaid    = true,
+        genOverallRaid    = false,
         genOverallDungeon = true,
-        cleanTrashMPlus   = true,
+        cleanTrashMPlus   = false,
         cleanTrashRaid    = true,
-        cleanTrashDungeon = true,
+        cleanTrashDungeon = false,
     },
     tracking = {
         mergePlayerPets = true,
         autoReset       = false,
-        minCombatTime   = 2,
         deathLogSize    = 15,
         maxSegments     = 20,
+        historyDisplayLimit = 20,
     },
     smartRefresh = {
         combatInterval = 0.3,
         idleInterval   = 2.0,
     },
+    layoutSchema = 3,
+    layoutDefs = {},
+    sceneWorkspaces = {
+        mplus={layoutId="preset2",windowWidth=420,windowHeight=300,point="CENTER",relPoint="CENTER",x=320,y=-170},
+        raid={layoutId="preset2",windowWidth=420,windowHeight=300,point="CENTER",relPoint="CENTER",x=320,y=-170},
+        dungeon={layoutId="preset2",windowWidth=420,windowHeight=300,point="CENTER",relPoint="CENTER",x=320,y=-170},
+        arena={layoutId="preset2",windowWidth=420,windowHeight=300,point="CENTER",relPoint="CENTER",x=320,y=-170},
+        battleground={layoutId="preset2",windowWidth=420,windowHeight=300,point="CENTER",relPoint="CENTER",x=320,y=-170},
+        outdoor={layoutId="preset2",windowWidth=420,windowHeight=300,point="CENTER",relPoint="CENTER",x=320,y=-170},
+    },
+    fullRunSettings = {
+        mplus=true, raid=false, dungeon=true,
+        arena=false, battleground=false, outdoor=false,
+    },
+    cleanTrashSettings = {
+        mplus=false, raid=true, dungeon=false,
+        arena=false, battleground=false, outdoor=false,
+    },
+    profileSchema = 2,
     useBlizzMeter = true,
+}
+
+-- Profile-owned keys are declared once so migration, the ns.db proxy and
+-- profile switching cannot silently disagree about where a setting lives.
+local PROFILE_CONFIG_KEYS = {
+    window=true, display=true, split=true, mythicPlus=true, tracking=true,
+    smartRefresh=true, useBlizzMeter=true, detailWindow=true,
+    detailDisplay=true, collapse=true, fade=true, profileSchema=true,
+    layoutSchema=true, layoutDefs=true, sceneWorkspaces=true,
+    fullRunSettings=true, cleanTrashSettings=true,
 }
 
 -- ============================================================
@@ -190,9 +224,13 @@ ns.state = {
     instanceType     = nil,
     inMythicPlus     = false,
     mythicPlusLevel  = 0,
+    mythicPlusMapID  = nil,
+    mythicPlusMapName= nil,
+    mplusRuntimeLatch= false,
+    mplusResetLatch  = false,
+    sceneKey         = "outdoor",
     playerGUID       = nil,
     playerName       = nil,
-    damageTakenView  = nil,
     playerClass      = nil,
 }
 
@@ -221,26 +259,34 @@ function Core:OnInitialize()
             LDCombatStatsDB = nil
         end
 
-        -- 1. 初始化全局配置库
+        -- 1. 初始化全局配置库。旧角色级配置按 key additive 搬入，任何
+        -- 新版未知字段都原样保留，迁移失败也绝不清空玩家布局。
         if not LightDamageGlobal then LightDamageGlobal = { profiles = {} } end
+        LightDamageGlobal.profiles = type(LightDamageGlobal.profiles) == "table" and LightDamageGlobal.profiles or {}
         if not LightDamageGlobal.profiles["默认"] then
-            if LightDamageDB and LightDamageDB.window then
-                LightDamageGlobal.profiles["默认"] = {
-                    window = CopyTable(LightDamageDB.window),
-                    display = CopyTable(LightDamageDB.display),
-                    split = CopyTable(LightDamageDB.split),
-                    mythicPlus = CopyTable(LightDamageDB.mythicPlus),
-                    tracking = CopyTable(LightDamageDB.tracking),
-                    smartRefresh = CopyTable(LightDamageDB.smartRefresh),
-                    useBlizzMeter = LightDamageDB.useBlizzMeter
-                }
-            else
-                LightDamageGlobal.profiles["默认"] = CopyTable(ns.defaults)
+            local migrated = {}
+            for key in pairs(PROFILE_CONFIG_KEYS) do
+                local value = LightDamageDB and LightDamageDB[key]
+                if value ~= nil then
+                    migrated[key] = type(value) == "table" and CopyTable(value) or value
+                end
             end
+            LightDamageGlobal.profiles["默认"] = next(migrated) and migrated or CopyTable(ns.defaults)
         end
 
         -- 版本配置自动平滑迁移 (旧版 -> 四宫格新版)
         for pName, profile in pairs(LightDamageGlobal.profiles) do
+            profile.display = type(profile.display) == "table" and profile.display or {}
+            if profile.display.tabLabelStyle ~= "full" and profile.display.tabLabelStyle ~= "short" then
+                profile.display.tabLabelStyle = profile.display.useShortTabs == true and "short" or "full"
+            end
+            -- Bottom-bar schema 1 intentionally gives every upgrading player
+            -- the new curated arrangement once.  The marker prevents future
+            -- logins from overwriting changes made afterwards.
+            if (tonumber(profile.display.bottomBarSchema) or 0) < 1 then
+                profile.display.bottomBarModes = CopyTable(ns.defaults.display.bottomBarModes)
+                profile.display.bottomBarSchema = 1
+            end
             local sp = profile.split
             local mp = profile.mythicPlus
             if sp and mp then
@@ -262,6 +308,11 @@ function Core:OnInitialize()
                     end
                 end
             end
+            profile.tracking = type(profile.tracking) == "table" and profile.tracking or {}
+            if profile.tracking.historyDisplayLimit == nil then
+                profile.tracking.historyDisplayLimit = tonumber(profile.tracking.maxSegments) or 20
+            end
+            profile.profileSchema = math.max(tonumber(profile.profileSchema) or 0, 2)
         end
 
         -- 2. 初始化角色数据
@@ -270,23 +321,37 @@ function Core:OnInitialize()
             LightDamageDB.activeProfile = "默认"
         end
 
-        -- 3. 清理旧的角色级配置数据
-        local CONFIG_KEYS = { window=true, display=true, split=true, mythicPlus=true, tracking=true, smartRefresh=true, useBlizzMeter=true, detailWindow=true, detailDisplay=true, collapse=true, fade=true }
-        for k in pairs(CONFIG_KEYS) do
-            if LightDamageDB[k] then LightDamageDB[k] = nil end
+        -- 3. 将尚未迁移的角色级设置补入当前 profile 后再清理旧副本。
+        local activeProfile = LightDamageGlobal.profiles[LightDamageDB.activeProfile]
+        for k in pairs(PROFILE_CONFIG_KEYS) do
+            local value = LightDamageDB[k]
+            if value ~= nil then
+                if activeProfile[k] == nil then
+                    activeProfile[k] = type(value) == "table" and CopyTable(value) or value
+                elseif type(value) == "table" and type(activeProfile[k]) == "table" then
+                    ns:MergeDefaults(activeProfile[k], value)
+                end
+            end
+        end
+        for k in pairs(PROFILE_CONFIG_KEYS) do
+            if LightDamageDB[k] ~= nil then LightDamageDB[k] = nil end
+        end
+        activeProfile.tracking = type(activeProfile.tracking) == "table" and activeProfile.tracking or {}
+        if activeProfile.tracking.historyDisplayLimit == nil then
+            activeProfile.tracking.historyDisplayLimit = tonumber(activeProfile.tracking.maxSegments) or 20
         end
 
         -- 4. 建立智能代理数据指针 ns.db
         ns.db = setmetatable({}, {
             __index = function(t, k)
-                if CONFIG_KEYS[k] then
+                if PROFILE_CONFIG_KEYS[k] then
                     return LightDamageGlobal.profiles[LightDamageDB.activeProfile][k]
                 else
                     return LightDamageDB[k]
                 end
             end,
             __newindex = function(t, k, v)
-                if CONFIG_KEYS[k] then
+                if PROFILE_CONFIG_KEYS[k] then
                     LightDamageGlobal.profiles[LightDamageDB.activeProfile][k] = v
                 else
                     LightDamageDB[k] = v
@@ -294,13 +359,18 @@ function Core:OnInitialize()
             end
         })
 
+        if ns.Layouts then
+            ns.Layouts:MigrateAllProfiles()
+            local active=LightDamageGlobal.profiles[LightDamageDB.activeProfile]
+            pcall(ns.Layouts.MigrateProfile,ns.Layouts,active)
+        end
         ns:MergeDefaults(LightDamageGlobal.profiles[LightDamageDB.activeProfile], ns.defaults)
 
         ns.state.playerGUID = UnitGUID("player")
         ns.state.playerName = UnitName("player")
         local _, classEng   = UnitClass("player")
         ns.state.playerClass = classEng
-        ns.state.damageTakenView = ns.db.display.damageTakenView or "friendly"
+        ns.state.mplusResetLatch = ns.db.mplusResetLatch == true
 
         ns:BuildIconToSpecIDMap()
 
@@ -315,32 +385,6 @@ function Core:OnInitialize()
         if ns.MythicPlus   then ns.MythicPlus:Init()   end
         if ns.DeathTracker then ns.DeathTracker:Init()  end
         if ns.Analysis     then ns.Analysis:Init()     end
-
-        C_Timer.After(3, function()
-            if ns.CombatTracker and not ns.state.isInInstance then
-                local ss  = C_DamageMeter.GetAvailableCombatSessions()
-                local cnt = ss and #ss or 0
-                if cnt > 0 and ns.CombatTracker._baselineSessionCount == 0 then
-                    local latestSess = ss[cnt]
-                    local isStale = (latestSess.durationSeconds or 0) == 0
-                                and (latestSess.name == nil or latestSess.name == "")
-                    if not isStale then
-                        local offset = ns.state.inCombat and 1 or 0
-                        ns.CombatTracker._baselineSessionCount = math.max(0, cnt - offset)
-                        ns.CombatTracker._lastProcessedCount   = math.max(0, cnt - offset)
-                        ns.CombatTracker._initialBaselineSet   = true
-                    end
-                    
-                    if ns.Segments and ns.Segments.overall then
-                        local hasData = ns.Segments.overall.totalDamage > 0
-                                     or ns.Segments.overall.totalHealing > 0
-                        if not hasData then
-                            ns.Segments.overall.players = {}
-                        end
-                    end
-                end
-            end
-        end)
 
         ns:StartSmartRefresh()
         
@@ -376,7 +420,11 @@ function Core:OnInitialize()
     ns:InvalidateGUIDCache()
 
     C_Timer.After(0.1, function()
-        if ns.UI then ns.UI:EnsureCreated() end
+        if ns.UI then
+            ns.UI:EnsureCreated()
+            ns:AttachRefreshVisibilityHooks()
+            ns:RequestRefresh("ui-created", true)
+        end
     end)
 end
 
@@ -396,10 +444,9 @@ function Core:OnEvent(event, ...)
     elseif event == "PLAYER_ENTERING_WORLD" then
         ns:InvalidateGUIDCache()
         C_Timer.After(0.3, function()
-            ns:UpdateInstanceStatus()
+            ns:UpdateInstanceStatus("PLAYER_ENTERING_WORLD")
             ns:InvalidateGUIDCache()
             if ns.UI and ns.UI:IsVisible() then
-                ns.UI:Layout()
                 if ns.UI.CheckAutoCollapse then
                     ns.UI:CheckAutoCollapse(true)
                 end
@@ -407,41 +454,48 @@ function Core:OnEvent(event, ...)
         end)
     elseif event == "ZONE_CHANGED_NEW_AREA" then
         local wasInInstance = ns.state.isInInstance
-        ns:UpdateInstanceStatus()
+        ns:UpdateInstanceStatus("ZONE_CHANGED_NEW_AREA")
         ns:InvalidateGUIDCache()
 
         if wasInInstance and not ns.state.isInInstance then
             if ns.MythicPlus and ns.MythicPlus:IsActive() then
                 ns.MythicPlus:OnLeaveInstance()
             end
-            if ns.UI then
-                C_Timer.After(0.1, function() ns.UI:Layout() end)
-            end
         end
 
-        if not wasInInstance and ns.state.isInInstance then
-            if not ns.state.inMythicPlus then
-                if ns.CombatTracker then
-                    ns.CombatTracker:ResetBaselineToCurrentCount()
-                end
-                if ns.Segments then
-                    local name = GetInstanceInfo() or L.INSTANCE
-                    ns.Segments.overall = ns.Segments:NewSegment("overall", string.format(L.OVERALL_SEGMENT_NAME_FORMAT, name))
-                end
-            end
-        end
+        -- CombatTracker is the single owner of instance-edge archive/reset.
+        -- Core only updates scene/UI state here.
     elseif event == "GROUP_ROSTER_UPDATE" then
         ns:InvalidateGUIDCache()
     elseif event == "CHALLENGE_MODE_START" then
+        -- The event itself is authoritative even when map metadata is one or
+        -- more frames late.  This makes the first scene frame Mythic+.
+        ns.state.mplusRuntimeLatch = true
+        ns.state.mplusResetLatch = false
+        ns.db.mplusResetLatch = nil
+        ns:UpdateInstanceStatus("CHALLENGE_MODE_START", true)
+        ns:ScheduleMythicMetadataRetry("CHALLENGE_MODE_START")
         if ns.MythicPlus then ns.MythicPlus:OnStart(...) end
     elseif event == "CHALLENGE_MODE_COMPLETED" then
+        -- Keep the runtime latch until leaving or an explicit reset; Blizzard
+        -- can report the challenge inactive immediately after completion.
+        ns.state.mplusRuntimeLatch = true
+        ns.state.mplusResetLatch = false
+        ns.db.mplusResetLatch = nil
         if ns.MythicPlus then ns.MythicPlus:OnCompleted(...) end
+        ns:UpdateInstanceStatus("CHALLENGE_MODE_COMPLETED", true)
     elseif event == "CHALLENGE_MODE_RESET" then
         if ns.MythicPlus then ns.MythicPlus:OnReset() end
+        ns.state.mplusRuntimeLatch = false
+        ns.state.mplusResetLatch = true
+        ns.db.mplusResetLatch = true
+        ns.state._mythicMetadataToken = (ns.state._mythicMetadataToken or 0) + 1
+        ns:UpdateInstanceStatus("CHALLENGE_MODE_RESET", true)
     elseif event == "PLAYER_DEAD" then
         if ns.DeathTracker then ns.DeathTracker:OnPlayerDead() end
     elseif event == "PLAYER_LOGOUT" then
-        ns:SaveSessionHistory()
+        local saved = ns:SaveSessionHistory()
+        if saved ~= false and ns.db then ns.db.savedHistorySchema = 2 end
     end
 end
 
@@ -456,7 +510,9 @@ function ns:EnterCombat()
     ns.state.inCombat        = true
     ns.state.combatStartTime = GetTime()
     if ns.Segments then ns.Segments:OnCombatStart() end
+    if ns.Config and ns.Config._previewActive then ns.Config:ClosePreview(true) end
     if ns.UI       then ns.UI:OnCombatStateChanged(true) end
+    ns:RequestRefresh("combat-start", true)
 end
 
 function ns:LeaveCombat()
@@ -465,6 +521,7 @@ function ns:LeaveCombat()
     ns.state.combatEndTime   = GetTime()
     if ns.Segments then ns.Segments:OnCombatEnd() end
     if ns.UI       then ns.UI:OnCombatStateChanged(false) end
+    ns:RequestRefresh("combat-end", true)
 end
 
 function ns:OnEncounterStart(encounterID, name, difficultyID, groupSize)
@@ -483,33 +540,168 @@ end
 -- ============================================================
 -- 智能刷新系统
 -- ============================================================
+local refreshTimer
+local refreshDirty = true
+
+local function RefreshInterval()
+    local settings = ns.db and ns.db.smartRefresh or ns.defaults.smartRefresh
+    local value = ns.state.inCombat and settings.combatInterval or settings.idleInterval
+    return math.max(0.1, tonumber(value) or (ns.state.inCombat and 0.3 or 2.0))
+end
+
+local function CancelRefreshTimer()
+    if refreshTimer then
+        refreshTimer:Cancel()
+        refreshTimer = nil
+    end
+end
+
+local function RunScheduledRefresh()
+    refreshTimer = nil
+    if not ns.UI or not ns.UI.frame or not ns.UI.frame:IsShown() then return end
+
+    refreshDirty = false
+    if ns.CombatTracker then ns.CombatTracker:PullCurrentData() end
+    if ns.DetailView and ns.DetailView:IsVisible() then
+        pcall(function() ns.DetailView:Refresh() end)
+    end
+
+    -- Live combat data has no reliable public dirty event.  Preserve the
+    -- configured cadence while visible, but keep no high-frequency ticker
+    -- alive for a hidden window.
+    refreshTimer = C_Timer.NewTimer(RefreshInterval(), RunScheduledRefresh)
+end
+
+function ns:RequestRefresh(reason, immediate)
+    refreshDirty = true
+    if ns.DamageMeterGateway and ns.DamageMeterGateway.MarkDirty then
+        ns.DamageMeterGateway:MarkDirty(reason or "ui")
+    end
+    if not ns.UI or not ns.UI.frame or not ns.UI.frame:IsShown() then
+        CancelRefreshTimer()
+        return
+    end
+    if immediate then
+        CancelRefreshTimer()
+        refreshTimer = C_Timer.NewTimer(0, RunScheduledRefresh)
+    elseif not refreshTimer then
+        refreshTimer = C_Timer.NewTimer(RefreshInterval(), RunScheduledRefresh)
+    end
+end
+
+-- Alias used by data gateway/history-store style modules.
+ns.MarkRefreshDirty = ns.RequestRefresh
+
+function ns:AttachRefreshVisibilityHooks()
+    local frame = ns.UI and ns.UI.frame
+    if not frame or frame._lightDamageRefreshHooks then return false end
+    frame._lightDamageRefreshHooks = true
+    frame:HookScript("OnShow", function() ns:RequestRefresh("window-show", true) end)
+    frame:HookScript("OnHide", function() CancelRefreshTimer() end)
+    return true
+end
+
 function ns:StartSmartRefresh()
-    local elapsed      = 0
-    local refreshFrame = CreateFrame("Frame")
-
-    refreshFrame:SetScript("OnUpdate", function(self, delta)
-        elapsed = elapsed + delta
-        local interval = ns.state.inCombat
-            and ns.db.smartRefresh.combatInterval
-            or  ns.db.smartRefresh.idleInterval
-        if interval < 0.1 then interval = 0.1 end
-
-        if elapsed >= interval then
-            elapsed = 0
-            if ns.CombatTracker then
-                ns.CombatTracker:PullCurrentData()
-            end
-            if ns.DetailView and ns.DetailView:IsVisible() then
-                pcall(function() ns.DetailView:Refresh() end)
-            end
-        end
+    C_Timer.After(0.2, function()
+        ns:AttachRefreshVisibilityHooks()
+        ns:RequestRefresh("startup", true)
     end)
 end
 
 -- ============================================================
 -- 副本状态检测
 -- ============================================================
-function ns:UpdateInstanceStatus()
+local function GetChallengeMetadata()
+    local mapID, level, mapName
+    if C_ChallengeMode then
+        if C_ChallengeMode.GetActiveChallengeMapID then
+            local ok, value = pcall(C_ChallengeMode.GetActiveChallengeMapID)
+            if ok then mapID = value end
+        end
+        if C_ChallengeMode.GetActiveKeystoneInfo then
+            local ok, value = pcall(C_ChallengeMode.GetActiveKeystoneInfo)
+            if ok and type(value) == "number" then level = value end
+        end
+        if mapID and C_ChallengeMode.GetMapUIInfo then
+            local ok, value = pcall(C_ChallengeMode.GetMapUIInfo, mapID)
+            if ok then mapName = value end
+        end
+    end
+    return mapID, level or 0, mapName
+end
+
+function ns:ResolveSceneKey(inInstance, instanceType, difficultyID)
+    local mapID = GetChallengeMetadata()
+    local apiActive = false
+    if C_ChallengeMode and C_ChallengeMode.IsChallengeModeActive then
+        local ok, value = pcall(C_ChallengeMode.IsChallengeModeActive)
+        apiActive = ok and value == true
+    end
+
+    local isMPlus = not ns.state.mplusResetLatch and
+        (ns.state.mplusRuntimeLatch or apiActive or mapID ~= nil or difficultyID == 8)
+    if isMPlus then return "mplus", true end
+    if inInstance and instanceType == "arena" then return "arena", false end
+    if inInstance and instanceType == "pvp" then return "battleground", false end
+    if inInstance and instanceType == "raid" then return "raid", false end
+    -- Blizzard can introduce new PvE instanceType values (followers, delves,
+    -- scenarios, etc.).  Once PvP and raids have been handled explicitly,
+    -- every remaining real instance shares the normal-dungeon workspace.
+    if inInstance then return "dungeon", false end
+    return "outdoor", false
+end
+
+function ns:ApplySceneWorkspace(scene, reason, force)
+    scene = scene or "outdoor"
+    local oldScene = ns.state.sceneKey
+    if oldScene == scene and not force then return false end
+
+    if oldScene and oldScene ~= scene and ns.UI and ns.UI.frame
+        and ns.UI.PersistWorkspaceGeometry and not ns.UI._previewContext then
+        ns.UI:PersistWorkspaceGeometry()
+    end
+    ns.state.sceneKey = scene
+
+    if ns.UI and ns.UI.frame and not ns.UI._previewContext then
+        if ns.UI.ApplySceneWorkspace then ns.UI:ApplySceneWorkspace(scene)
+        elseif ns.UI.Layout then ns.UI:Layout() end
+    end
+    ns:RequestRefresh("scene:" .. tostring(reason or scene), true)
+    return true
+end
+
+function ns:ScheduleMythicMetadataRetry(reason)
+    ns.state._mythicMetadataToken = (ns.state._mythicMetadataToken or 0) + 1
+    local token = ns.state._mythicMetadataToken
+    local delays = { 0, 0.15, 0.35, 0.7, 1.2, 2.0, 3.0 }
+
+    local function probe(index)
+        if token ~= ns.state._mythicMetadataToken then return end
+        if not ns.state.mplusRuntimeLatch and ns.state.sceneKey ~= "mplus" then return end
+        local mapID, level, mapName = GetChallengeMetadata()
+        if mapID then
+            ns.state.mythicPlusMapID = mapID
+            ns.state.mythicPlusMapName = mapName
+            ns.state.mythicPlusLevel = level or 0
+            if ns.MythicPlus then
+                ns.MythicPlus._mapID = mapID
+                ns.MythicPlus._mapName = mapName or ns.MythicPlus._mapName
+                ns.MythicPlus._level = (level and level > 0) and level or ns.MythicPlus._level
+            end
+            if ns.CombatTracker then
+                ns.CombatTracker._currentMythicLevel = level or 0
+                ns.CombatTracker._currentMythicMapName = mapName
+            end
+            ns:RequestRefresh("mplus-metadata", true)
+            return
+        end
+        index = index + 1
+        if index <= #delays then C_Timer.After(delays[index], function() probe(index) end) end
+    end
+    probe(1)
+end
+
+function ns:UpdateInstanceStatus(reason, skipMPlusEnter)
     local inInstance, instanceType = IsInInstance()
 
     if instanceType == "scenario" or instanceType == "party" or instanceType == "raid" or instanceType == "arena" or instanceType == "pvp" then
@@ -522,29 +714,23 @@ function ns:UpdateInstanceStatus()
     ns.state.wasInInstance = ns.state.isInInstance
     ns.state.isInInstance = inInstance
     ns.state.instanceType = instanceType
+    local _, _, difficultyID = GetInstanceInfo()
 
-    local wasInMPlus      = ns.state.inMythicPlus
-    ns.state.inMythicPlus = false
-
-    if C_ChallengeMode and C_ChallengeMode.GetActiveChallengeMapID then
-        local mapID = C_ChallengeMode.GetActiveChallengeMapID()
-        ns.state.inMythicPlus = (mapID ~= nil)
-
-        if mapID and C_ChallengeMode.GetActiveKeystoneInfo then
-            local ok, level = pcall(function()
-                local info = { C_ChallengeMode.GetActiveKeystoneInfo() }
-                local lv = info[1]
-                if type(lv) ~= "number" or lv <= 0 then lv = info[8] end
-                return type(lv) == "number" and lv or 0
-            end)
-            ns.state.mythicPlusLevel = ok and level or 0
-        end
-    else
-        local _, _, difficultyID = GetInstanceInfo()
-        ns.state.inMythicPlus = (difficultyID == 8)
+    if not inInstance and not ns.state.mplusRuntimeLatch then
+        ns.state.mplusResetLatch = false
+        ns.db.mplusResetLatch = nil
+    elseif not inInstance and ns.state.mplusRuntimeLatch and reason ~= "CHALLENGE_MODE_START" then
+        ns.state.mplusRuntimeLatch = false
+        ns.state.mplusResetLatch = false
+        ns.db.mplusResetLatch = nil
+        ns.state._mythicMetadataToken = (ns.state._mythicMetadataToken or 0) + 1
     end
 
-    -- 场景分类器
+    local wasInMPlus = ns.state.inMythicPlus
+    local scene, isMPlus = ns:ResolveSceneKey(inInstance, instanceType, difficultyID)
+    ns.state.inMythicPlus = isMPlus
+
+    -- 兼容旧代码的四场景分类器
     local cat = "outdoor"
     if inInstance then
         if instanceType == "raid" then
@@ -553,35 +739,18 @@ function ns:UpdateInstanceStatus()
             cat = "dungeon"
         end
     end
-    if ns.state.inMythicPlus then
+    if isMPlus then
         cat = "mplus"
     end
-    
+
     local oldCat = ns.state.instanceCategory
     ns.state.instanceCategory = cat
 
-    -- 跨越场景时自动恢复或降级双栏模式
-    if oldCat ~= cat and ns.db and ns.db.split then
-        local isActive = false
-        if cat == "mplus" and ns.db.split.splitShowMPlus then isActive = true end
-        if cat == "raid" and ns.db.split.splitShowRaid then isActive = true end
-        if cat == "dungeon" and ns.db.split.splitShowDungeon then isActive = true end
-        if cat == "outdoor" and ns.db.split.splitShowOutdoor then isActive = true end
+    ns:ApplySceneWorkspace(scene, reason)
 
-        if isActive and ns.db.split.enabled then
-            ns.db.display.mode = "split"
-        elseif not isActive and ns.db.display.mode == "split" then
-            ns.db.display.mode = ns.db.split.primaryMode or "damage"
-        end
-    end
-
-    if ns.state.inMythicPlus and not wasInMPlus then
+    if isMPlus and not wasInMPlus and not skipMPlusEnter
+        and reason ~= nil and reason ~= "PLAYER_ENTERING_WORLD" then
         if ns.MythicPlus then ns.MythicPlus:OnEnterDungeon() end
-    end
-
-    -- 按场景记忆窗口尺寸
-    if oldCat ~= cat and ns.UI and ns.UI.frame and ns.UI.frame:IsShown() then
-        if ns.UI.ApplySceneSize then ns.UI:ApplySceneSize(cat) end
     end
 
     -- 进出副本时刷新渐隐状态（修复"副本中永不隐藏"不即时生效）
@@ -610,8 +779,14 @@ function ns:HandleSlashCommand(msg)
         if ns.UI then ns.UI:Toggle() end
 
     elseif msg == "reset" then
-        if ns.Segments then ns.Segments:ResetAll() end
-        print(L.MSG_LIGHT_DAMAGE_DATA_RESET)
+        if ns.Segments then
+            local _, status = ns.Segments:ResetAll(function()
+                print(L.MSG_LIGHT_DAMAGE_DATA_RESET)
+            end)
+            if status == "queued" and ns.state.inCombat then
+                print(L.MSG_LIGHT_DAMAGE_RESET_QUEUED)
+            end
+        end
 
     elseif msg == "config" then
         if ns.Config then ns.Config:Toggle() end
@@ -669,20 +844,33 @@ function ns:HandleSlashCommand(msg)
     elseif msg == "deathdebug" then
         ns:DebugDeathRecapIDs()
     elseif msg == "overheal" then
-        local sessions = C_DamageMeter.GetAvailableCombatSessions()
-        local s = sessions and sessions[#sessions]
-        if not s then print(L.DEBUG_NO_HISTORY_SESSION); return end
-        local ok, src = pcall(C_DamageMeter.GetCombatSessionSourceFromID,
-            s.sessionID, Enum.DamageMeterType.HealingDone, UnitGUID("player"))
-        if not ok or not src or not src.combatSpells then
+        local gateway = ns.DamageMeterGateway
+        if not gateway or ns.state.inCombat then print(L.COMBAT_DATA_LOCKED); return end
+        local sessions, sessionState = gateway:GetAvailableSessionsRaw()
+        if sessionState ~= gateway.ACCESSIBLE then print(L.COMBAT_DATA_LOCKED); return end
+        local s, sState = gateway:ReadField(sessions, sessions and #sessions or 0)
+        if sState ~= gateway.ACCESSIBLE then print(L.DEBUG_NO_HISTORY_SESSION); return end
+        local sessionID, idState = gateway:ReadField(s, "sessionID")
+        if idState ~= gateway.ACCESSIBLE or type(sessionID) ~= "number" then print(L.COMBAT_DATA_LOCKED); return end
+        local src, sourceState = gateway:GetRawSource(nil, sessionID,
+            Enum.DamageMeterType.HealingDone, UnitGUID("player"))
+        local spells, spellsState = gateway:ReadTableField(src, "combatSpells")
+        if sourceState ~= gateway.ACCESSIBLE or spellsState ~= gateway.ACCESSIBLE then
             print(L.NO_HEALING_DATA); return
         end
         local totalOH = 0
-        for _, sp in ipairs(src.combatSpells) do
-            local name = C_Spell and C_Spell.GetSpellName(sp.spellID) or sp.spellID
-            print(string.format("  [%s] heal=%d  overkill=%d",
-                name, sp.totalAmount, sp.overkillAmount or 0))
-            totalOH = totalOH + (sp.overkillAmount or 0)
+        for _, sp in ipairs(spells) do
+            local spellID, spellState = gateway:ReadField(sp, "spellID")
+            local amount, amountState = gateway:ReadField(sp, "totalAmount")
+            local overkill, overkillState = gateway:ReadField(sp, "overkillAmount")
+            if spellState == gateway.ACCESSIBLE and amountState == gateway.ACCESSIBLE
+                and (overkillState == gateway.ACCESSIBLE or overkillState == gateway.MISSING) then
+                local name = C_Spell and C_Spell.GetSpellName(spellID) or spellID
+                overkill = type(overkill) == "number" and overkill or 0
+                amount = type(amount) == "number" and amount or 0
+                print(string.format("  [%s] heal=%d  overkill=%d", tostring(name), amount, overkill))
+                totalOH = totalOH + overkill
+            end
         end
         print(string.format(L.DEBUG_TOTAL_OVERKILL_FORMAT, totalOH))
     end
@@ -728,21 +916,35 @@ end
 
 function ns:DebugDeathRecapIDs()
     print(L.DEBUG_LIGHT_DAMAGE_DEATH_RECAPID_DIAGNOSTICS)
-    local sessions = C_DamageMeter.GetAvailableCombatSessions()
+    local gateway = ns.DamageMeterGateway
+    if not gateway or ns.state.inCombat then print(L.COMBAT_DATA_LOCKED); return end
+    local sessions, sessionState = gateway:GetAvailableSessionsRaw()
+    if sessionState ~= gateway.ACCESSIBLE then print(L.COMBAT_DATA_LOCKED); return end
     local n = sessions and #sessions or 0
     print(string.format(L.DEBUG_TOTAL_SESSIONS_FORMAT, n))
 
     for i, s in ipairs(sessions or {}) do
-        local ok, deathSess = pcall(C_DamageMeter.GetCombatSessionFromID,
-            s.sessionID, Enum.DamageMeterType.Deaths)
-        if ok and deathSess and deathSess.combatSources and #deathSess.combatSources > 0 then
-            print(string.format("  [Session %d] dur=%.0fs name=%s",
-                i, s.durationSeconds or 0, tostring(s.name)))
-            for _, src in ipairs(deathSess.combatSources) do
-                print(string.format("    name=%-20s deaths=%s recapID=%s",
-                    tostring(src.name),
-                    tostring(src.totalAmount),
-                    tostring(src.deathRecapID)))
+        local sessionID, idState = gateway:ReadField(s, "sessionID")
+        local duration, durationState = gateway:ReadField(s, "durationSeconds")
+        local sessionName, nameState = gateway:ReadField(s, "name")
+        if idState == gateway.ACCESSIBLE and type(sessionID) == "number"
+            and (durationState == gateway.ACCESSIBLE or durationState == gateway.MISSING)
+            and (nameState == gateway.ACCESSIBLE or nameState == gateway.MISSING) then
+            local deathSess, state = gateway:GetRawSession(nil, sessionID, Enum.DamageMeterType.Deaths)
+            local sources, sourcesState = gateway:ReadTableField(deathSess, "combatSources")
+            if state == gateway.ACCESSIBLE and sourcesState == gateway.ACCESSIBLE and #sources > 0 then
+                print(string.format("  [Session %d] dur=%.0fs name=%s",
+                    i, duration or 0, tostring(sessionName)))
+                for _, src in ipairs(sources) do
+                    local sourceName, sourceNameState = gateway:ReadField(src, "name")
+                    local totalAmount, totalState = gateway:ReadField(src, "totalAmount")
+                    local recapID, recapState = gateway:ReadField(src, "deathRecapID")
+                    if sourceNameState == gateway.ACCESSIBLE and totalState == gateway.ACCESSIBLE
+                        and (recapState == gateway.ACCESSIBLE or recapState == gateway.MISSING) then
+                        print(string.format("    name=%-20s deaths=%s recapID=%s",
+                            tostring(sourceName), tostring(totalAmount), tostring(recapID)))
+                    end
+                end
             end
         end
     end

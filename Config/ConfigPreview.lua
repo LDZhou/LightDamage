@@ -1,127 +1,108 @@
---[[
-    Light Damage - ConfigPreview.lua
-    预览系统
-]]
-local addonName, ns = ...
-local L = ns.L
-local Config = ns.Config
+-- Full-screen, hard-isolated preview controller.
+local addonName,ns=...
+local L=ns.L
+local Config=ns.Config
 
-local PREVIEW_MOCK = {
-    {name="Arcsmith",    class="MAGE",        damage=14200000, dps=21300, healing= 320000, hps=  480, damageTaken=2800000, deaths=0, interrupts=8, dispels=3},
-    {name="Ironhide",    class="WARRIOR",     damage=12800000, dps=19200, healing= 180000, hps=  270, damageTaken=3200000, deaths=1, interrupts=5, dispels=0},
-    {name="Thornwood",   class="DRUID",       damage=11500000, dps=17250, healing=9800000, hps=14700, damageTaken=1200000, deaths=0, interrupts=2, dispels=4},
-    {name="Voidweaver",  class="WARLOCK",     damage=10900000, dps=16350, healing= 420000, hps=  630, damageTaken=1900000, deaths=0, interrupts=0, dispels=1},
-    {name="Swiftbolt",   class="HUNTER",      damage= 9800000, dps=14700, healing= 280000, hps=  420, damageTaken=2100000, deaths=2, interrupts=3, dispels=0},
-    {name="Dawnstrike",  class="PALADIN",     damage= 8600000, dps=12900, healing=8200000, hps=12300, damageTaken=1800000, deaths=0, interrupts=6, dispels=5},
-    {name="Frostmantle", class="DEATHKNIGHT", damage= 7900000, dps=11850, healing= 150000, hps=  225, damageTaken=4100000, deaths=1, interrupts=0, dispels=0},
-    {name="Embercrest",  class="ROGUE",       damage= 7200000, dps=10800, healing= 200000, hps=  300, damageTaken=1600000, deaths=0, interrupts=9, dispels=0},
-    {name="Silvermist",  class="PRIEST",      damage= 5100000, dps= 7650, healing=12400000,hps=18600, damageTaken= 900000, deaths=4, interrupts=1, dispels=8},
-    {name="Stonehowl",   class="SHAMAN",      damage= 5800000, dps= 8700, healing=6800000, hps=10200, damageTaken=1500000, deaths=0, interrupts=4, dispels=2},
+local SCENES={
+ {id="mplus",key="SCENE_MPLUS"},{id="raid",key="SCENE_RAID"},{id="dungeon",key="SCENE_DUNGEON"},
+ {id="arena",key="SCENE_ARENA"},{id="battleground",key="SCENE_BATTLEGROUND"},{id="outdoor",key="SCENE_OUTDOOR"},
 }
+local DATASETS={{id="normal",key="PREVIEW_NORMAL"},{id="empty",key="PREVIEW_EMPTY"},{id="single",key="PREVIEW_SINGLE"},{id="long",key="PREVIEW_LONG"}}
 
-local PREVIEW_SCENES = {
-    { id="mplus",    labelKey="MYTHIC_PLUS" },
-    { id="raid",     labelKey="RAID_INSTANCE" },
-    { id="dungeon",  labelKey="OTHER_INSTANCES" },
-    { id="outdoor",  labelKey="NON_INSTANCE" },
-}
+local function button(self,parent,w,text,click)
+ local b=CreateFrame("Button",nil,parent); b:SetSize(w,24); self:FillBg(b,.08,.12,.18,1); self:CreateBorder(b,.2,.45,.7,1)
+ local t=b:CreateFontString(nil,"OVERLAY"); t:SetFont(STANDARD_TEXT_FONT,10,"OUTLINE"); t:SetPoint("LEFT",3,0); t:SetPoint("RIGHT",-3,0); t:SetJustifyH("CENTER"); t:SetWordWrap(false); t:SetText(text); b._text=t
+ b:SetScript("OnClick",click); return b
+end
 
 function Config:BuildSceneSwitcher()
-    if self._pvSwitcher then return end
-    local sw = CreateFrame("Frame", "LightDamagePreviewSwitcher", UIParent, "BackdropTemplate")
-    sw:SetSize(430, 36); sw:SetFrameStrata("DIALOG"); sw:SetFrameLevel(110)
-    sw:SetScale(ns.db and ns.db.window and ns.db.window.configScale or 1.0)
-    sw:SetBackdrop({ bgFile="Interface\\Buttons\\WHITE8X8", edgeFile=nil, edgeSize=0 }); sw:SetBackdropColor(0.05, 0.05, 0.06, 0.98)
-    self:CreateBorder(sw, 0.15, 0.15, 0.2, 1); sw:Hide(); self._pvSwitcher = sw
-    local hint = sw:CreateFontString(nil, "OVERLAY"); hint:SetFont(STANDARD_TEXT_FONT, 11, "OUTLINE"); hint:SetPoint("LEFT", 14, 0); hint:SetText(L.COLORED_PREVIEW_LABEL)
-    local btnW, btnGap, rightOffset = 76, 6, -12
-    self._pvSceneBtns = {}
-    for i = #PREVIEW_SCENES, 1, -1 do
-        local sc = PREVIEW_SCENES[i]
-        local btn = CreateFrame("Button", nil, sw); btn:SetSize(btnW, 22); btn:SetPoint("RIGHT", sw, "RIGHT", rightOffset - (btnW + btnGap) * (#PREVIEW_SCENES - i), 0)
-        self:FillBg(btn, 0.1, 0.1, 0.15, 1); self:CreateBorder(btn, 0.3, 0.3, 0.4, 1)
-        local bt = btn:CreateFontString(nil, "OVERLAY"); bt:SetFont(STANDARD_TEXT_FONT, 10, ""); bt:SetPoint("CENTER"); bt:SetText(L[sc.labelKey]); bt:SetTextColor(0.6, 0.6, 0.6)
-        btn._label = bt; btn._sceneId = sc.id
-        btn:SetScript("OnClick", function() self:ApplyPreviewScene(sc.id) end)
-        btn:SetScript("OnEnter", function() if self._previewSceneId ~= sc.id then bt:SetTextColor(1, 1, 1) end end)
-        btn:SetScript("OnLeave", function() if self._previewSceneId ~= sc.id then bt:SetTextColor(0.6, 0.6, 0.6) end end)
-        self._pvSceneBtns[i] = btn; self._pvSceneBtns[sc.id] = btn
-    end
+ if self._previewOverlay then return end
+ local mask=CreateFrame("Frame","LightDamagePreviewOverlay",UIParent,"BackdropTemplate")
+ mask:SetAllPoints(); mask:SetFrameStrata("FULLSCREEN"); mask:SetFrameLevel(500); mask:SetBackdrop({bgFile="Interface\\Buttons\\WHITE8X8"}); mask:SetBackdropColor(0,0,0,.55); mask:EnableMouse(true); mask:EnableKeyboard(true); mask:SetPropagateKeyboardInput(true); mask:Hide()
+ mask:SetScript("OnKeyDown",function(frame,key) if key=="ESCAPE" then frame:SetPropagateKeyboardInput(false); self:ClosePreview(); C_Timer.After(0,function() frame:SetPropagateKeyboardInput(true) end) end end); self._previewOverlay=mask
+ local bar=CreateFrame("Frame",nil,mask,"BackdropTemplate"); bar:SetSize(730,60); bar:SetPoint("TOP",UIParent,"TOP",0,-24); bar:SetFrameStrata("FULLSCREEN_DIALOG"); bar:SetFrameLevel(900); bar:SetScale(ns.db and ns.db.window and ns.db.window.configScale or 1); bar:SetBackdrop({bgFile="Interface\\Buttons\\WHITE8X8"}); bar:SetBackdropColor(.04,.04,.06,.98); self:CreateBorder(bar,.2,.5,.8,1); self._pvSwitcher=bar
+ local title=bar:CreateFontString(nil,"OVERLAY"); title:SetFont(STANDARD_TEXT_FONT,11,"OUTLINE"); title:SetPoint("LEFT",10,0); title:SetWidth(112); title:SetJustifyH("LEFT"); self._pvTitle=title
+ self._pvSceneBtns={}; local x=124
+ for _,s in ipairs(SCENES) do local sceneId=s.id; local b=button(self,bar,66,L[s.key],function() self:ApplyPreviewScene(sceneId) end); b:SetPoint("LEFT",bar,"LEFT",x,0); b._scene=sceneId; b._sceneKey=s.key; self._pvSceneBtns[#self._pvSceneBtns+1]=b; x=x+69 end
+ local sceneNote=bar:CreateFontString(nil,"OVERLAY"); sceneNote:SetFont(STANDARD_TEXT_FONT,9); sceneNote:SetPoint("BOTTOMLEFT",bar,"BOTTOMLEFT",124,5); sceneNote:SetWidth(414); sceneNote:SetJustifyH("CENTER"); sceneNote:SetWordWrap(false); sceneNote:SetText(L.PREVIEW_SCENE_GEOMETRY_DESC); sceneNote:SetTextColor(.58,.65,.72); self._pvSceneNote=sceneNote
+ self._pvDataBtn=button(self,bar,84,L.PREVIEW_NORMAL,function() self:CyclePreviewDataset() end); self._pvDataBtn:SetPoint("RIGHT",bar,"RIGHT",-76,0)
+ local exit=button(self,bar,62,L.EXIT_PREVIEW,function() self:ClosePreview() end); exit:SetPoint("RIGHT",bar,"RIGHT",-8,0)
+end
+
+function Config:SetPreviewAuxiliaryLayers(active)
+ if ns.DetailView and ns.DetailView.SetPreviewLayer then ns.DetailView:SetPreviewLayer(active) end
+ if ns.HistoryList and ns.HistoryList.SetPreviewLayer then ns.HistoryList:SetPreviewLayer(active) end
 end
 
 function Config:TogglePreview()
-    if self._previewActive then self:ClosePreview() else self:OpenPreview() end
+ if self._previewActive then self:ClosePreview() else self:OpenPreview() end
 end
 
 function Config:OpenPreview()
-    if not ns.UI or not ns.Segments then return end; ns.UI:EnsureCreated()
-    self._pvSave = {
-        inCombat = ns.state.inCombat, isInInstance = ns.state.isInInstance, inMythicPlus = ns.state.inMythicPlus,
-        instanceCategory = ns.state.instanceCategory, viewIndex = ns.Segments.viewIndex,
-        current = ns.Segments.current, overall = ns.Segments.overall, history = ns.Segments.history,
-        locked = ns.Segments._locked, uiPoint = ns.db.window.point, uiRelPoint = ns.db.window.relPoint,
-        uiX = ns.db.window.x, uiY = ns.db.window.y,
-    }
-    self._pvRefreshBlocked = true; ns.Segments._locked = false; self._previewActive = true; self._previewSceneId = "mplus"
-    if self._previewBtnT then self._previewBtnT:SetText(L.CANCEL_PREVIEW) end
-    ns.UI.frame:ClearAllPoints(); ns.UI.frame:SetPoint("TOPLEFT", self.panel, "TOPRIGHT", 8, 0); ns.UI.frame:Show()
-    if self._pvSwitcher then self._pvSwitcher:ClearAllPoints(); self._pvSwitcher:SetPoint("BOTTOM", ns.UI.frame, "TOP", 0, 8); self._pvSwitcher:Show() end
-    self:ApplyPreviewScene("mplus")
+ if self._previewActive then return end
+ if ns.state.inCombat or InCombatLockdown() then print("|cff00ccff[Light Damage]|r "..(L.PREVIEW_DISABLED_IN_COMBAT or "Preview is unavailable during combat.")); return end
+ if not ns.UI then return end; ns.UI:EnsureCreated(); self:BuildSceneSwitcher()
+ self._previewActive=true; self._previewDataset="normal"; self._previewModel=ns.PreviewModel:New("normal")
+ self._previewActualScene=ns.state.sceneKey or "outdoor"; self._previewWasConfigShown=self.panel and self.panel:IsShown(); self._previewWasUIShown=ns.UI.frame:IsShown(); self._previewWasCollapsed=ns.UI._collapsed
+ self._previewOldStrata=ns.UI.frame:GetFrameStrata(); self._previewOldLevel=ns.UI.frame:GetFrameLevel()
+ self._previewOldResizeLevel=ns.UI.resizeHandle and ns.UI.resizeHandle:GetFrameLevel() or nil
+ if self.panel then self._previewOldConfigStrata=self.panel:GetFrameStrata(); self._previewOldConfigLevel=self.panel:GetFrameLevel() end
+ if ns.HistoryList then ns.HistoryList:Hide() end
+ if ns.DetailView and ns.DetailView.frame then ns.DetailView.frame:Hide(); ns.DetailView._lastRenderArgs=nil end
+ if ns.UI._collapsed then ns.UI:ToggleCollapse(false,true) end
+ ns.UI.frame:SetFrameStrata("FULLSCREEN"); ns.UI.frame:SetFrameLevel(650); ns.UI.frame:SetAlpha(ns.db.window.alpha or .92); ns.UI.frame:Show()
+ if ns.UI.resizeHandle then ns.UI.resizeHandle:SetFrameLevel(665) end
+ ns.UI._previewNoFade=true
+ self._previewOverlay:Show()
+ -- Keep settings usable above the preview mask so every change can be
+ -- observed immediately without entering or leaving preview again.
+ if self.panel then self.panel:SetFrameStrata("FULLSCREEN_DIALOG"); self.panel:SetFrameLevel(800); self.panel:Show() end
+ self:SetPreviewAuxiliaryLayers(true)
+    ns.UI._previewContext={sceneKey=self._previewActualScene,model=self._previewModel,displayMode="overview"}
+ self._pvTitle:SetWidth(112)
+ self._pvTitle:SetText(L.PREVIEW)
+ for _,b in ipairs(self._pvSceneBtns) do b._text:SetText(L[b._sceneKey]); b:Show() end
+ self:ApplyPreviewScene(self._previewActualScene)
+ self:RefreshPreviewDatasetButton(); ns.UI:ApplyFadeAlpha(false,false)
 end
 
-function Config:ClosePreview()
-    if not self._pvSave then return end
-    ns.state.inCombat = self._pvSave.inCombat; ns.state.isInInstance = self._pvSave.isInInstance; ns.state.inMythicPlus = self._pvSave.inMythicPlus
-    ns.state.instanceCategory = self._pvSave.instanceCategory; ns.Segments.viewIndex = self._pvSave.viewIndex
-    ns.Segments.current = self._pvSave.current; ns.Segments.overall = self._pvSave.overall; ns.Segments.history = self._pvSave.history; ns.Segments._locked = self._pvSave.locked
-    ns.UI.frame:ClearAllPoints(); ns.UI.frame:SetPoint(self._pvSave.uiPoint, UIParent, self._pvSave.uiRelPoint, self._pvSave.uiX, self._pvSave.uiY)
-    if self._pvSwitcher then self._pvSwitcher:Hide() end
-    self._pvSave = nil; self._previewActive = false; self._pvRefreshBlocked = false
-    if self._previewBtnT then self._previewBtnT:SetText(L.PREVIEW) end
-    if ns.Analysis then ns.Analysis:InvalidateCache() end; ns.UI:Layout()
+function Config:ClosePreview(fromCombat)
+ if not self._previewActive then return end
+ if ns.UI and ns.UI.CloseOtherTabMenu then ns.UI:CloseOtherTabMenu() end
+ if ns.HistoryList then ns.HistoryList:Hide() end
+ if ns.DetailView and ns.DetailView.frame then ns.DetailView.frame:Hide(); ns.DetailView._lastRenderArgs=nil end
+ self:SetPreviewAuxiliaryLayers(false)
+ ns.UI._previewContext=nil; ns.UI._previewNoFade=nil; self._previewActive=false
+ self._previewOverlay:Hide(); ns.UI.frame:SetFrameStrata(self._previewOldStrata or "MEDIUM"); ns.UI.frame:SetFrameLevel(self._previewOldLevel or 10); ns.UI.frame:SetAlpha(ns.db.window.alpha or .92)
+ if self.panel then self.panel:SetFrameStrata(self._previewOldConfigStrata or "DIALOG"); self.panel:SetFrameLevel(self._previewOldConfigLevel or 100) end
+ if ns.UI.resizeHandle then ns.UI.resizeHandle:SetFrameLevel(self._previewOldResizeLevel or ((self._previewOldLevel or 10)+15)) end
+ ns.UI:ApplySceneWorkspace(ns.state.sceneKey or self._previewActualScene or "outdoor")
+ if not self._previewWasUIShown then ns.UI.frame:Hide() end
+ if self._previewWasCollapsed and not fromCombat then ns.UI:ToggleCollapse(true,true) end
+ if not self._previewWasConfigShown and self.panel and self.panel:IsShown() then self.panel:Hide() end
+ self._previewModel=nil
+ if ns.Analysis then ns.Analysis:InvalidateCache() end
+ ns.UI:CheckAutoFade(true)
+ if fromCombat then print("|cff00ccff[Light Damage]|r "..(L.PREVIEW_EXITED_FOR_COMBAT or "Preview closed because combat started.")) end
 end
 
-function Config:ApplyPreviewScene(sceneId)
-    if not self._previewActive then return end; self._previewSceneId = sceneId
-    for id, btn in pairs(self._pvSceneBtns) do
-        if type(id) == "string" then local active = (id == sceneId); btn._label:SetTextColor(active and 0 or 0.6, active and 0.75 or 0.6, active and 1 or 0.6) end
-    end
-    ns.state.inCombat = false; ns.state.isInInstance = (sceneId ~= "outdoor"); ns.state.inMythicPlus = (sceneId == "mplus"); ns.state.instanceCategory = sceneId
-    local mockCurrent = self:BuildMockSegment(false); local mockOverall = self:BuildMockSegment(true)
-    ns.Segments.current = nil; ns.Segments.history = { mockCurrent }; ns.Segments.viewIndex = 1; ns.Segments.overall = mockOverall
-    if ns.Analysis then ns.Analysis:InvalidateCache() end
-    -- 预览模式：只应用场景尺寸，不改变位置
-    if ns.db.window.rememberSceneSize and ns.db.window.sceneSizes then
-        local s = ns.db.window.sceneSizes[sceneId]
-        if s then ns.UI.frame:SetSize(ns.UI:ClampSize(s.width, s.height)) end
-    end
-    ns.UI:Layout()
+function Config:ApplyPreviewScene(scene)
+ if not self._previewActive then return end
+ ns.UI._previewContext.sceneKey=scene
+ for _,b in ipairs(self._pvSceneBtns) do b._text:SetTextColor(b._scene==scene and 0 or .7,b._scene==scene and .85 or .7,b._scene==scene and 1 or .7) end
+ ns.UI:ApplySceneWorkspace(scene)
 end
 
-function Config:BuildMockSegment(isOverall)
-    local seg = ns.Segments:NewSegment("history", isOverall and L.MOCK_OVERALL or L.MOCK_COMBAT)
-    seg.isActive = false; seg.duration = isOverall and 330 or 225
-    local totalDmg, totalHeal, totalTaken = 0, 0, 0
-    for i, mock in ipairs(PREVIEW_MOCK) do
-        local guid = "pvGUID_" .. i; local pd = ns.Segments:NewPlayerData(guid, mock.name, mock.class)
-        pd.damage = isOverall and math.floor(mock.damage * 1.45) or mock.damage; pd.healing = isOverall and math.floor(mock.healing * 1.45) or mock.healing
-        pd.damageTaken = mock.damageTaken; pd.deaths = mock.deaths; pd.interrupts = mock.interrupts; pd.dispels = mock.dispels
-        pd.damagePerSec = mock.dps; pd.healingPerSec = mock.hps; pd.damageTakenPerSec = 0; pd.pets = {}
-        seg.players[guid] = pd; totalDmg = totalDmg + pd.damage; totalHeal = totalHeal + pd.healing; totalTaken = totalTaken + pd.damageTaken
-    end
-    seg.totalDamage = totalDmg; seg.totalHealing = totalHeal; seg.totalDamageTaken = totalTaken
-    seg.deathLog = {
-        { playerName="Ironhide", playerGUID="pvGUID_2", playerClass="WARRIOR", isSelf=false, killingAbility="Shadow Bolt", killerName="Big Boss", events={}, totalDamageTaken=450000, totalHealingReceived=0, timeSpan=3.2, timestamp=time(), gameTime=GetTime() },
-        { playerName="Frostmantle", playerGUID="pvGUID_7", playerClass="DEATHKNIGHT", isSelf=false, killingAbility="Cleave", killerName="Big Boss", events={}, totalDamageTaken=380000, totalHealingReceived=0, timeSpan=2.1, timestamp=time(), gameTime=GetTime() },
-    }
-    return seg
+function Config:CyclePreviewDataset()
+ local order={"normal","empty","single","long"}; local i=1; for n,v in ipairs(order) do if v==self._previewDataset then i=n break end end
+ self._previewDataset=order[(i%#order)+1]; self._previewModel:SetDataset(self._previewDataset); if ns.DetailView and ns.DetailView.frame then ns.DetailView.frame:Hide() end
+ self:RefreshPreviewDatasetButton(); ns.UI:Refresh()
 end
 
-function Config:RefreshPreviewTheme()
-    -- 预览时同步主题
-    if ns.UI and ns.UI.ApplyTheme then ns.UI:ApplyTheme() end
+function Config:RefreshPreviewDatasetButton()
+ if not self._pvDataBtn then return end
+ for _,d in ipairs(DATASETS) do if d.id==self._previewDataset then self._pvDataBtn._text:SetText(L[d.key]); break end end
 end
 
-function Config:UpdatePreviewScene(sceneId)
-    self:ApplyPreviewScene(sceneId)
-end
+function Config:RefreshPreviewTheme() if ns.UI then ns.UI:ApplyTheme() end end
+function Config:UpdatePreviewScene(scene) self:ApplyPreviewScene(scene) end

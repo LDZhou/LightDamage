@@ -12,28 +12,46 @@
 local addonName, ns = ...
 local L = ns.L
 
+local function MigrateProfileAdditive(profile)
+    if type(profile) ~= "table" then return end
+    profile.tracking = type(profile.tracking) == "table" and profile.tracking or {}
+    if profile.tracking.historyDisplayLimit == nil then
+        profile.tracking.historyDisplayLimit = tonumber(profile.tracking.maxSegments) or 20
+    end
+    profile.profileSchema = math.max(tonumber(profile.profileSchema) or 0, 2)
+    if ns.Layouts then pcall(ns.Layouts.MigrateProfile, ns.Layouts, profile) end
+    ns:MergeDefaults(profile, ns.defaults)
+end
+
+function ns:GetHistoryDisplayLimit()
+    local tracking = ns.db and ns.db.tracking
+    return math.max(1, math.floor(tonumber(tracking and (tracking.historyDisplayLimit or tracking.maxSegments)) or 20))
+end
+
 -- ============================================================
 -- 配置切换
 -- ============================================================
 function ns:SwitchProfile(name)
     if not LightDamageGlobal.profiles[name] then return end
+    if ns.Config and ns.Config._previewActive then ns.Config:ClosePreview() end
 
     local oldLang = ns.db.display and ns.db.display.language or "auto"
 
     LightDamageDB.activeProfile = name
-    ns:MergeDefaults(LightDamageGlobal.profiles[name], ns.defaults)
+    MigrateProfileAdditive(LightDamageGlobal.profiles[name])
 
     local newLang = ns.db.display and ns.db.display.language or "auto"
-
     if ns.UI and ns.UI.frame then
         local w = ns.db.window
-        ns.UI.frame:SetSize(ns.UI:ClampSize(w.width, w.height))
-        ns.UI.frame:ClearAllPoints()
-        ns.UI.frame:SetPoint(w.point, UIParent, w.relPoint, w.x, w.y)
         ns.UI.frame:SetScale(w.scale or 1.0)
         ns.UI.frame:SetAlpha(w.alpha or 0.92)
+        ns.UI.frame:SetShown(w.visible ~= false)
         ns.UI:ApplyTheme()
-        ns.UI:Layout()
+        if ns.ApplySceneWorkspace then
+            ns:ApplySceneWorkspace(ns.state.sceneKey or "outdoor", "profile-switch", true)
+        else
+            ns.UI:Layout()
+        end
     end
     if ns.Config then
         if ns.Config.panel then
@@ -41,6 +59,7 @@ function ns:SwitchProfile(name)
             local cScale = ns.db.window and ns.db.window.configScale or 1.0
             ns.Config.panel:SetScale(cScale)
             if ns.Config._pvSwitcher then ns.Config._pvSwitcher:SetScale(cScale) end
+            if ns.Config.RefreshSettingsVisuals then ns.Config:RefreshSettingsVisuals() end
         end
         if ns.Config.RefreshTitle then ns.Config:RefreshTitle() end
     end
@@ -50,6 +69,8 @@ function ns:SwitchProfile(name)
 
     if oldLang ~= newLang then
         ReloadUI()
+    elseif ns.RequestRefresh then
+        ns:RequestRefresh("profile-switch", true)
     end
 end
 
@@ -88,19 +109,12 @@ end
 -- ============================================================
 function ns:SaveSessionHistory()
     if not ns.Segments then return end
-    local maxSeg = ns.db and ns.db.tracking and ns.db.tracking.maxSegments or 30
 
     local historyToSave = ns.Segments.history
     local overallToSave = ns.Segments.overall
 
-    if ns.Config and ns.Config._previewActive and ns.Config._pvSave then
-        historyToSave = ns.Config._pvSave.history or {}
-        overallToSave = ns.Config._pvSave.overall
-    end
-
     local toSave = {}
-    for i, seg in ipairs(historyToSave) do
-        if i > maxSeg then break end
+    for _, seg in ipairs(historyToSave) do
         local compact = {
             type             = seg.type,
             name             = seg.name,
@@ -165,10 +179,12 @@ function ns:SaveSessionHistory()
         table.insert(toSave, compact)
     end
     ns.db.savedHistory = toSave
+    ns.db.savedHistorySchema = 2
 
     -- 保存 overall
     local ovr = overallToSave
-    if ovr and (ovr.totalDamage > 0 or ovr.totalHealing > 0) then
+    if ovr and (ovr.totalDamage > 0 or ovr.totalHealing > 0 or ovr.totalDamageTaken > 0
+        or next(ovr.players or {}) ~= nil or next(ovr.deathLog or {}) ~= nil) then
         local compactOvr = {
             name             = ovr.name,
             duration         = ovr.duration,
@@ -179,13 +195,15 @@ function ns:SaveSessionHistory()
             enemyDamageTakenList = ovr.enemyDamageTakenList or {},
         }
         for guid, pd in pairs(ovr.players) do
+            local cache = ns.PlayerInfoCache and ns.PlayerInfoCache[guid]
             compactOvr.players[guid] = {
                 guid            = pd.guid,
                 name            = pd.name,
                 class           = pd.class,
-                specID          = pd.specID or (ns.PlayerInfoCache[guid] and ns.PlayerInfoCache[guid].specID),
-                ilvl            = pd.ilvl or (ns.PlayerInfoCache[guid] and ns.PlayerInfoCache[guid].ilvl) or 0,
-                score           = pd.score or (ns.PlayerInfoCache[guid] and ns.PlayerInfoCache[guid].score) or 0,
+                specID          = pd.specID or (cache and cache.specID),
+                specIconID      = pd.specIconID or (cache and cache.specIconID),
+                ilvl            = ((pd.ilvl or 0) > 0 and pd.ilvl) or (cache and cache.ilvl) or 0,
+                score           = ((pd.score or 0) > 0 and pd.score) or (cache and cache.score) or 0,
                 damage          = pd.damage,
                 healing         = pd.healing,
                 damageTaken     = pd.damageTaken,
@@ -217,6 +235,9 @@ function ns:SaveSessionHistory()
     if ns.CombatTracker then
         ns.db.savedBaseline = ns.CombatTracker._baselineSessionCount or 0
         ns.db.savedLastProcessed = ns.CombatTracker._lastProcessedCount or 0
+        if ns.CombatTracker.PersistLifecycleState then
+            ns.CombatTracker:PersistLifecycleState()
+        end
     end
 end
 
@@ -225,9 +246,8 @@ end
 -- ============================================================
 function ns:LoadSessionHistory()
     if not ns.Segments then return end
-    if not ns.db.savedHistory or #ns.db.savedHistory == 0 then return end
     ns.Segments.history = {}
-    for _, seg in ipairs(ns.db.savedHistory) do
+    for _, seg in ipairs(ns.db.savedHistory or {}) do
         seg._dataLoaded = (seg._dataLoaded == nil) and true or seg._dataLoaded
         -- ★ 老存档迁移:没 _localID 就分配一个
         if not seg._localID then
@@ -239,13 +259,16 @@ function ns:LoadSessionHistory()
 
     -- 恢复 overall
     local saved = ns.db.savedOverall
-    if saved and (saved.totalDamage or 0) > 0 then
+    if saved and ((saved.totalDamage or 0) > 0 or (saved.totalHealing or 0) > 0
+        or (saved.totalDamageTaken or 0) > 0 or next(saved.players or {}) ~= nil
+        or next(saved.deathLog or {}) ~= nil) then
         ns.Segments.overall = ns.Segments:NewSegment("overall", saved.name or L.OVERALL)
         ns.Segments.overall.isActive         = false
         ns.Segments.overall.duration         = saved.duration         or 0
         ns.Segments.overall.totalDamage      = saved.totalDamage      or 0
         ns.Segments.overall.totalHealing     = saved.totalHealing     or 0
         ns.Segments.overall.totalDamageTaken = saved.totalDamageTaken or 0
+        ns.Segments.overall.enemyDamageTakenList = CopyTable(saved.enemyDamageTakenList or {})
         for guid, pd in pairs(saved.players or {}) do
             pd.specID = pd.specID or nil
             pd.ilvl   = pd.ilvl or 0
@@ -272,4 +295,10 @@ function ns:LoadSessionHistory()
         ns.CombatTracker._baselineSessionCount = ns.db.savedBaseline or 0
         ns.CombatTracker._lastProcessedCount = ns.db.savedLastProcessed or 0
     end
+
+    -- A generated full-run remains the selected History entry across reload;
+    -- Current and Total therefore continue to display the same run until the
+    -- next combat clears the override.
+    local fullRun = ns.Segments:GetFullRunOverride()
+    if fullRun then ns.Segments:ViewArchived(fullRun._localID) end
 end

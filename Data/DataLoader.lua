@@ -1,533 +1,204 @@
 --[[
     Light Damage - DataLoader.lua
-    按需加载段落数据 (LoadSegmentData) + 重建 Overall (RebuildOverall)
-    方法挂载到 ns.CombatTracker (CT) 上
+
+    Archive materialization and local aggregation.  All C_DamageMeter reads go
+    through DamageMeterGateway.  Existing segments are never cleared until a
+    complete accessible candidate has been built.
 ]]
-
 local addonName, ns = ...
-local L = ns.L
+local CT = ns.CombatTracker
+local G = ns.DamageMeterGateway
 
-local function getAmount(val)
-    if issecretvalue and issecretvalue(val) then return 0 end
-    if type(val) == "number" then return val end
-    return 0
+local function candidateMeta(seg, options)
+    options = options or {}
+    return {
+        type = seg.type, name = seg.name, duration = seg.duration,
+        startTime = seg.startTime, endTime = seg.endTime,
+        sessionIdx = seg._sessionIdx, instanceTag = seg._instanceTag,
+        instanceDisplayName = seg._instanceDisplayName, isBoss = seg._isBoss,
+        encounterName = seg.encounterName, encounterID = seg.encounterID,
+        difficultyID = seg.difficultyID, success = seg.success,
+        combatGeneration = seg._combatGeneration,
+        completedWallTime = seg._completedWallTime,
+        -- Secret/error data never has a time-based fail-open.  The option is
+        -- retained only for call compatibility and intentionally ignored.
+        allowIncomplete = false,
+    }
 end
-
--- ============================================================
--- 按需加载段落数据
--- ============================================================
-function ns.CombatTracker:LoadSegmentData(seg)
-    if not seg or not seg._sessionID then return end
-    local sid  = seg._sessionID
-    local segs = ns.Segments
-    if not segs then return end
-
-    local sessions = C_DamageMeter.GetAvailableCombatSessions()
-    local sessionAvailable = false
-    for _, s in ipairs(sessions or {}) do
-        if s.sessionID == sid then sessionAvailable = true; seg.duration = s.durationSeconds or seg.duration; break end
+function CT:LoadSegmentData(seg, options)
+    if not seg or not seg._sessionID or not G then return false, "missing" end
+    local candidate, status = G:BuildSessionCandidate(seg._sessionID, candidateMeta(seg, options))
+    if not candidate then
+        seg._dataLoaded = false
+        seg._archiveStatus = status
+        return false, status
     end
-    if not sessionAvailable then return end
-
-    local snapshotCache = {}
-    for guid, pd in pairs(seg.players) do
-        snapshotCache[guid] = { specID = pd.specID, ilvl = pd.ilvl, score = pd.score }
-    end
-
-    seg.players = {}; seg.totalDamage = 0; seg.totalHealing = 0; seg.totalDamageTaken = 0
-
-    local function checkSecret(val) return issecretvalue and issecretvalue(val) end
-
-    for dmType, field in pairs({
-        [Enum.DamageMeterType.DamageDone]  = "damage",
-        [Enum.DamageMeterType.HealingDone] = "healing",
-        [Enum.DamageMeterType.DamageTaken] = "damageTaken",
-    }) do
-        local spellField = field == "damageTaken" and "damageTakenSpells" or "spells"
-        local ok, dmSession = pcall(C_DamageMeter.GetCombatSessionFromID, sid, dmType)
-        if ok and dmSession then
-            if checkSecret(dmSession.totalAmount) then seg._dataLoaded = false; return end
-            local segField = field == "damage" and "totalDamage" or field == "healing" and "totalHealing" or "totalDamageTaken"
-            seg[segField] = dmSession.totalAmount or 0
-            if dmSession.combatSources then
-                for _, src in ipairs(dmSession.combatSources) do
-                    if checkSecret(src.totalAmount) then seg._dataLoaded = false; return end
-                    local guid, creatureID, total = src.sourceGUID, src.sourceCreatureID, src.totalAmount or 0
-                    if guid and total > 0 then
-                        local hasValidClass = src.classFilename and src.classFilename ~= ""
-                        local isPet = (creatureID ~= nil and creatureID > 0) and not hasValidClass
-                        local pd = segs:GetPlayer(seg, guid, isPet and nil or src.name, nil)
-                        if pd then
-                            if not isPet then 
-                                pd.class = src.classFilename or pd.class;
-                                if src.specIconID and src.specIconID > 0 then  -- ★ 新增
-                                    pd.specIconID = src.specIconID
-                                end 
-                                local aps = getAmount(src.amountPerSecond); 
-                                if aps > 0 then 
-                                    pd[field.."PerSec"] = aps 
-                                end 
-                            end
-                            pd[field] = (pd[field] or 0) + total
-                            if isPet then
-                                pd.pets = pd.pets or {}
-                                pd.pets[creatureID] = pd.pets[creatureID] or { name = src.name, spells = {}, damageTakenSpells = {}, damage = 0, healing = 0 }
-                                pd.pets[creatureID][field] = (pd.pets[creatureID][field] or 0) + total
-                            end
-                            local ok3, srcData = pcall(C_DamageMeter.GetCombatSessionSourceFromID, sid, dmType, guid, creatureID)
-                            if ok3 and srcData and srcData.combatSpells then
-                                local baseSpells = isPet and pd.pets[creatureID][spellField] or pd[spellField]
-                                for _, sp in ipairs(srcData.combatSpells) do
-                                    local spellID = getAmount(sp.spellID)
-                                    if spellID > 0 then
-                                        local amt = getAmount(sp.totalAmount)
-                                        if amt > 0 then
-                                            local targetSpells = baseSpells
-                                            if not isPet then
-                                                local petName = sp.creatureName
-                                                if petName and petName ~= "" and not (issecretvalue and issecretvalue(pd.name)) and petName ~= pd.name and not (issecretvalue and issecretvalue(srcData.name)) and petName ~= srcData.name then
-                                                    local fallbackKey = "pet_"..petName
-                                                    pd.pets = pd.pets or {}
-                                                    if not pd.pets[fallbackKey] then pd.pets[fallbackKey] = { name = petName, spells = {}, damageTakenSpells = {}, damage = 0, healing = 0 } end
-                                                    targetSpells = pd.pets[fallbackKey][spellField]
-                                                    if dmType == Enum.DamageMeterType.HealingDone then pd.pets[fallbackKey].healing = (pd.pets[fallbackKey].healing or 0) + amt
-                                                    elseif dmType == Enum.DamageMeterType.DamageDone then pd.pets[fallbackKey].damage = (pd.pets[fallbackKey].damage or 0) + amt end
-                                                end
-                                            end
-                                            if not targetSpells[spellID] then
-                                                local spellName = (C_Spell and C_Spell.GetSpellName and C_Spell.GetSpellName(spellID)) or ("spell:"..spellID)
-                                                targetSpells[spellID] = segs:NewSpellData(spellID, spellName, nil)
-                                            end
-                                            local sd = targetSpells[spellID]
-                                            if dmType == Enum.DamageMeterType.HealingDone then sd.healing = (sd.healing or 0) + amt else sd.damage = (sd.damage or 0) + amt end
-                                            sd.hits = (sd.hits or 0) + 1
-                                            if sp.isAvoidable then sd.isAvoidable = true end
-                                        end
-                                    end
-                                end
-                            end
-                        end
-                    end
-                end
-            end
-        end
-    end
-
-    -- 可规避伤害标记（交叉查询 AvoidableDamageTaken）
-    for guid, pd in pairs(seg.players) do
-        if pd.damageTakenSpells and next(pd.damageTakenSpells) then
-            local okAv, avoidSrc = pcall(
-                C_DamageMeter.GetCombatSessionSourceFromID,
-                sid, Enum.DamageMeterType.AvoidableDamageTaken, guid)
-            if okAv and avoidSrc and avoidSrc.combatSpells then
-                for _, sp in ipairs(avoidSrc.combatSpells) do
-                    local spellID = getAmount(sp.spellID)
-                    if spellID > 0 and pd.damageTakenSpells[spellID] then
-                        pd.damageTakenSpells[spellID].isAvoidable = true
-                    end
-                end
-            end
-        end
-    end
-
-    -- 敌人承伤（EnemyDamageTaken type 10）
-    do
-        seg.enemyDamageTakenList = {}
-        local okET, etSession = pcall(C_DamageMeter.GetCombatSessionFromID, sid, Enum.DamageMeterType.EnemyDamageTaken)
-        if okET and etSession and etSession.combatSources then
-            for _, enemy in ipairs(etSession.combatSources) do
-                local creatureID = enemy.sourceCreatureID
-                -- ★ 修复：去掉 issecretvalue 拦截，secret string 也是 string，直接给 UI 能正常渲染
-                local enemyName = "?"
-                local hasName = false
-                if type(enemy.name) == "string" then
-                    enemyName = enemy.name
-                    hasName = true
-                end
-                if creatureID or hasName then
-                    local total = getAmount(enemy.totalAmount)
-                    if total > 0 then
-                        local perSec = getAmount(enemy.amountPerSecond)
-                        local entry = { creatureID = creatureID, name = enemyName, total = total, perSec = perSec, sources = {} }
-                        local okSrc, srcData = pcall(C_DamageMeter.GetCombatSessionSourceFromID,
-                            sid, Enum.DamageMeterType.EnemyDamageTaken, nil, creatureID)
-                        if okSrc and srcData and srcData.combatSpells then
-                            -- 整个循环用一个 pcall 包住，内部直接读字段。任何 secret value 会让 pcall 失败，跳过这条敌人即可
-                            pcall(function()
-                                for _, sp in ipairs(srcData.combatSpells) do
-                                    local details = sp.combatSpellDetails
-                                    if details then
-                                        local playerName = details.unitName
-                                        local playerClass = details.unitClassFilename
-                                        if not playerClass or playerClass == "" then playerClass = "NPC" end
-                                        local amt = getAmount(details.amount)
-                                        if amt == 0 then amt = getAmount(sp.totalAmount) end
-                                        if playerName and type(playerName) == "string" and amt > 0
-                                        and not (issecretvalue and issecretvalue(playerName)) then
-                                            local found = false
-                                            for _, s in ipairs(entry.sources) do
-                                                if s.name == playerName then s.amount = s.amount + amt; found = true; break end
-                                            end
-                                            if not found then
-                                                table.insert(entry.sources, { name = playerName, class = playerClass, amount = amt })
-                                            end
-                                        end
-                                    end
-                                end
-                            end)
-                        end
-                        table.sort(entry.sources, function(a, b) return a.amount > b.amount end)
-                        table.insert(seg.enemyDamageTakenList, entry)
-                    end
-                end
-            end
-            table.sort(seg.enemyDamageTakenList, function(a, b) return a.total > b.total end)
-        end
-    end
-
-    -- 打断 / 驱散
-    for dmType, field in pairs({ [Enum.DamageMeterType.Interrupts] = "interrupts", [Enum.DamageMeterType.Dispels] = "dispels" }) do
-        local spellField = field == "interrupts" and "interruptSpells" or "dispelSpells"
-        local ok, dmSession = pcall(C_DamageMeter.GetCombatSessionFromID, sid, dmType)
-        if ok and dmSession and dmSession.combatSources then
-            for _, src in ipairs(dmSession.combatSources) do
-                local guid, creatureID, total = src.sourceGUID, src.sourceCreatureID, getAmount(src.totalAmount)
-                if guid and total > 0 then
-                    local hasValidClass = src.classFilename and src.classFilename ~= ""
-                    local isPet = (creatureID ~= nil and creatureID > 0) and not hasValidClass
-                    local pd = segs:GetPlayer(seg, guid, isPet and nil or src.name, nil)
-                    if pd then
-                        if not isPet then 
-                            pd.class = src.classFilename or pd.class 
-                            if src.specIconID and src.specIconID > 0 then  -- ★ 新增
-                                pd.specIconID = src.specIconID
-                            end
-                        end
-                        pd[field] = (pd[field] or 0) + total
-                        local ok3, srcData = pcall(C_DamageMeter.GetCombatSessionSourceFromID, sid, dmType, guid, creatureID)
-                        if ok3 and srcData and srcData.combatSpells then
-                            for _, sp in ipairs(srcData.combatSpells) do
-                                local spellID = getAmount(sp.spellID)
-                                if spellID > 0 then
-                                    local amt = getAmount(sp.totalAmount); if amt == 0 then amt = getAmount(sp.casts) end; if amt == 0 then amt = 1 end
-                                    if amt > 0 then
-                                        if not pd[spellField][spellID] then local spellName = (C_Spell and C_Spell.GetSpellName and C_Spell.GetSpellName(spellID)) or ("spell:"..spellID); pd[spellField][spellID] = segs:NewSpellData(spellID, spellName, nil) end
-                                        pd[spellField][spellID].hits = pd[spellField][spellID].hits + amt; pd[spellField][spellID].damage = pd[spellField][spellID].damage + amt
-                                    end
-                                end
-                            end
-                        end
-                    end
-                end
-            end
-        end
-    end
-
-    -- 死亡次数
-    local ok2, deathSession = pcall(C_DamageMeter.GetCombatSessionFromID, sid, Enum.DamageMeterType.Deaths)
-    if ok2 and deathSession and deathSession.combatSources then
-        for _, src in ipairs(deathSession.combatSources) do
-            local guid, creatureID, deaths = src.sourceGUID, src.sourceCreatureID, getAmount(src.totalAmount)
-            if guid and deaths > 0 and not (creatureID ~= nil and creatureID > 0) then
-                local pd = segs:GetPlayer(seg, guid, src.name, nil)
-                if pd then pd.class = src.classFilename or pd.class; pd.deaths = (pd.deaths or 0) + deaths end
-            end
-        end
-    end
-
-    for guid, pd in pairs(seg.players) do
-        local snap = snapshotCache[guid]
-        if snap then pd.specID = snap.specID or pd.specID; pd.ilvl = snap.ilvl or pd.ilvl; pd.score = snap.score or pd.score end
-    end
+    local localID = seg._localID
+    G:ApplyCandidateToSegment(candidate, seg)
+    seg._localID = localID or seg._localID or ns.Segments:GenLocalID("arch")
     seg._dataLoaded = true
+    seg._archiveStatus = nil
+    if ns.HistoryStore then ns.HistoryStore:Invalidate(seg) end
+    if ns.Analysis then ns.Analysis:InvalidateCache() end
+    return true, G.ACCESSIBLE
 end
 
--- ============================================================
--- 重建 Overall 段
--- ============================================================
-function ns.CombatTracker:RebuildOverall(sessions, sessionCount)
-    local CT = ns.CombatTracker
-    local segs = ns.Segments
-    if not segs then return end
-    sessions = sessions or C_DamageMeter.GetAvailableCombatSessions()
-    sessionCount = sessionCount or (sessions and #sessions or 0)
+function CT:BuildSessionCandidate(sessionID, meta)
+    if not G then return nil, "gateway-missing" end
+    return G:BuildSessionCandidate(sessionID, meta)
+end
 
-    local newPlayers, newTotalDamage, newTotalHealing, newTotalDTaken, totalDur = {}, 0, 0, 0, 0
-    local snap = segs._preReloadOverallData
-    if snap then
-        newTotalDamage = snap.totalDamage; newTotalHealing = snap.totalHealing; newTotalDTaken = snap.totalDamageTaken; totalDur = snap.duration
-        for guid, pd in pairs(snap.players) do newPlayers[guid] = CopyTable(pd) end
-    end
+function CT:BuildOverallCandidate(meta)
+    if not G then return nil, "gateway-missing" end
+    return G:BuildOverallCandidate(meta)
+end
 
-    local function getOrCreatePlayer(guid, name)
-        if not newPlayers[guid] then
-            local classEng
-            if ns:IsNPCGUID(guid) then
-                classEng = "NPC"
-            else
-                local ok, _, ce = pcall(GetPlayerInfoByGUID, guid)
-                classEng = (ok and ce) or "WARRIOR"
-            end
-            newPlayers[guid] = segs:NewPlayerData(guid, name, classEng)
+function CT:CommitArchiveCandidate(candidate, opts)
+    if not candidate or not ns.Segments then return nil, "invalid-candidate" end
+    opts = opts or {}
+    local seg = ns.Segments:NewSegment(candidate.type or "history", candidate.name)
+    seg._localID = opts.localID or ns.Segments:GenLocalID(opts.prefix or "arch")
+    G:ApplyCandidateToSegment(candidate, seg)
+    seg._localID = opts.localID or seg._localID
+    seg._dataLoaded = true
+    if opts.insert ~= false then table.insert(ns.Segments.history, opts.index or 1, seg) end
+    if ns.Segments.MigrateHideOnArchive then ns.Segments:MigrateHideOnArchive(seg) end
+    if ns.Analysis then ns.Analysis:InvalidateCache() end
+    return seg
+end
+
+local function mergeSpellMap(target, source)
+    for storageKey, spell in pairs(source or {}) do
+        local spellID = spell.spellID or spell.id or storageKey
+        local out = target[storageKey]
+        if not out then
+            out = ns.Segments:NewSpellData(spellID, spell.name, spell.school)
+            out.spellID = type(spellID) == "number" and spellID or nil
+            target[storageKey] = out
         end
-        if name and not (issecretvalue and issecretvalue(name)) and name ~= "" then newPlayers[guid].name = ns:ShortName(name) end
-        return newPlayers[guid]
+        out.damage = (out.damage or 0) + (spell.damage or 0)
+        out.healing = (out.healing or 0) + (spell.healing or 0)
+        out.absorbed = (out.absorbed or 0) + (spell.absorbed or 0)
+        out.hits = (out.hits or 0) + (spell.hits or 0)
+        out.crits = (out.crits or 0) + (spell.crits or 0)
+        out.maxHit = math.max(out.maxHit or 0, spell.maxHit or 0)
+        out.maxCrit = math.max(out.maxCrit or 0, spell.maxCrit or 0)
+        if spell.isAvoidable then out.isAvoidable = true end
+        if spell.isPet then out.isPet = true end
+        if spell.petName and spell.petName ~= "" then out.petName = spell.petName end
     end
+end
 
-    for i = CT._baselineSessionCount + 1, sessionCount do
-        local s = sessions[i]; local sid = s.sessionID; local dur = s.durationSeconds or 0
-        if dur > 0 then
-            totalDur = totalDur + dur
-            for dmType, field in pairs({ [Enum.DamageMeterType.DamageDone] = "damage", [Enum.DamageMeterType.HealingDone] = "healing", [Enum.DamageMeterType.DamageTaken] = "damageTaken" }) do
-                local spellField = field == "damageTaken" and "damageTakenSpells" or "spells"
-                local ok2, dmSession = pcall(C_DamageMeter.GetCombatSessionFromID, sid, dmType)
-                if ok2 and dmSession and dmSession.combatSources then
-                    for _, src in ipairs(dmSession.combatSources) do
-                        local guid, creatureID, total = src.sourceGUID, src.sourceCreatureID, getAmount(src.totalAmount)
-                        if guid and total > 0 then
-                            local hasValidClass = src.classFilename and src.classFilename ~= ""
-                            local isPet = (creatureID ~= nil and creatureID > 0) and not hasValidClass
-                            local pd = getOrCreatePlayer(guid, isPet and nil or src.name)
-                            if not isPet then 
-                                pd.class = src.classFilename or pd.class 
-                                if src.specIconID and src.specIconID > 0 then
-                                    pd.specIconID = src.specIconID
-                                end
-                            end
-                            pd[field] = (pd[field] or 0) + total
-                            if field == "damage" then newTotalDamage = newTotalDamage + total
-                            elseif field == "healing" then newTotalHealing = newTotalHealing + total
-                            else newTotalDTaken = newTotalDTaken + total end
-                            if isPet then
-                                pd.pets = pd.pets or {}; pd.pets[creatureID] = pd.pets[creatureID] or { name = src.name, spells = {}, damageTakenSpells = {}, damage = 0, healing = 0 }
-                                pd.pets[creatureID][field] = (pd.pets[creatureID][field] or 0) + total
-                            end
-                            local ok3, srcData = pcall(C_DamageMeter.GetCombatSessionSourceFromID, sid, dmType, guid, creatureID)
-                            if ok3 and srcData and srcData.combatSpells then
-                                local baseSpells = isPet and pd.pets[creatureID][spellField] or pd[spellField]
-                                for _, sp in ipairs(srcData.combatSpells) do
-                                    local spellID = getAmount(sp.spellID)
-                                    if spellID > 0 then
-                                        local amt = getAmount(sp.totalAmount)
-                                        if amt > 0 then
-                                            local targetSpells = baseSpells
-                                            if not isPet then
-                                                local petName = sp.creatureName
-                                                if petName and petName ~= "" and not (issecretvalue and issecretvalue(pd.name)) and petName ~= pd.name and not (issecretvalue and issecretvalue(srcData.name)) and petName ~= srcData.name then
-                                                    local fk = "pet_"..petName; pd.pets = pd.pets or {}
-                                                    if not pd.pets[fk] then pd.pets[fk] = { name = petName, spells = {}, damageTakenSpells = {}, damage = 0, healing = 0 } end
-                                                    targetSpells = pd.pets[fk][spellField]
-                                                    if dmType == Enum.DamageMeterType.HealingDone then pd.pets[fk].healing = (pd.pets[fk].healing or 0) + amt
-                                                    elseif dmType == Enum.DamageMeterType.DamageDone then pd.pets[fk].damage = (pd.pets[fk].damage or 0) + amt end
-                                                end
-                                            end
-                                            if not targetSpells[spellID] then local sn = (C_Spell and C_Spell.GetSpellName and C_Spell.GetSpellName(spellID)) or ("spell:"..spellID); targetSpells[spellID] = segs:NewSpellData(spellID, sn, nil) end
-                                            local sd = targetSpells[spellID]
-                                            if dmType == Enum.DamageMeterType.HealingDone then sd.healing = (sd.healing or 0) + amt else sd.damage = (sd.damage or 0) + amt end
-                                            sd.hits = (sd.hits or 0) + 1; if sp.isAvoidable then sd.isAvoidable = true end
-                                        end
-                                    end
-                                end
-                            end
-                        end
-                    end
-                end
-            end
+local function mergePet(target, source)
+    target.name = source.name or target.name
+    for _, field in ipairs({"damage", "healing", "damageTaken", "interrupts", "dispels"}) do
+        target[field] = (target[field] or 0) + (source[field] or 0)
+    end
+    mergeSpellMap(target.spells, source.spells)
+    mergeSpellMap(target.damageTakenSpells, source.damageTakenSpells)
+    mergeSpellMap(target.interruptSpells, source.interruptSpells)
+    mergeSpellMap(target.dispelSpells, source.dispelSpells)
+    if source._detailsIncomplete then target._detailsIncomplete = true end
+end
 
-            -- 可规避伤害标记（交叉查询 AvoidableDamageTaken）
-            for guid, pd in pairs(newPlayers) do
-                if pd.damageTakenSpells and next(pd.damageTakenSpells) then
-                    local okAv, avoidSrc = pcall(
-                        C_DamageMeter.GetCombatSessionSourceFromID,
-                        sid, Enum.DamageMeterType.AvoidableDamageTaken, guid)
-                    if okAv and avoidSrc and avoidSrc.combatSpells then
-                        for _, sp in ipairs(avoidSrc.combatSpells) do
-                            local spellID = getAmount(sp.spellID)
-                            if spellID > 0 and pd.damageTakenSpells[spellID] then
-                                pd.damageTakenSpells[spellID].isAvoidable = true
-                            end
-                        end
-                    end
-                end
-            end
+local function mergePlayer(target, source)
+    target.name = source.name or target.name
+    target.class = source.class or target.class
+    target.specID = source.specID or target.specID
+    target.specIconID = source.specIconID or target.specIconID
+    target.ilvl = math.max(target.ilvl or 0, source.ilvl or 0)
+    target.score = math.max(target.score or 0, source.score or 0)
+    for _, field in ipairs({"damage", "healing", "overhealing", "absorbed", "damageTaken", "deaths", "interrupts", "dispels", "activeTime"}) do
+        target[field] = (target[field] or 0) + (source[field] or 0)
+    end
+    mergeSpellMap(target.spells, source.spells)
+    mergeSpellMap(target.damageTakenSpells, source.damageTakenSpells)
+    mergeSpellMap(target.interruptSpells, source.interruptSpells)
+    mergeSpellMap(target.dispelSpells, source.dispelSpells)
+    for petKey, pet in pairs(source.pets or {}) do
+        local out = target.pets[petKey]
+        if not out then
+            out = {name = pet.name or "Pet", damage = 0, healing = 0, damageTaken = 0,
+                interrupts = 0, dispels = 0, spells = {}, damageTakenSpells = {},
+                interruptSpells = {}, dispelSpells = {}}
+            target.pets[petKey] = out
+        end
+        mergePet(out, pet)
+    end
+    if source._detailsIncomplete then target._detailsIncomplete = true end
+end
 
-            -- 敌人承伤聚合
-            do
-                local okET, etSession = pcall(C_DamageMeter.GetCombatSessionFromID, sid, Enum.DamageMeterType.EnemyDamageTaken)
-                if okET and etSession and etSession.combatSources then
-                    if not segs.overall.enemyDamageTakenList then segs.overall.enemyDamageTakenList = {} end
-                    local edtMap = {}
-                    -- 建索引时也过滤 secret name
-                    for _, existing in ipairs(segs.overall.enemyDamageTakenList) do 
-                        local existingKey = existing.creatureID
-                        if not existingKey and type(existing.name) == "string" 
-                           and not (issecretvalue and issecretvalue(existing.name)) then
-                            existingKey = existing.name
-                        end
-                        if existingKey then edtMap[existingKey] = existing end
-                    end
-                    for _, enemy in ipairs(etSession.combatSources) do
-                        -- ★ 计算 key:优先 creatureID,无则用 name(必须是非 secret 字符串)
-                        local key = enemy.sourceCreatureID
-                        if not key then
-                            local nm = enemy.name
-                            if type(nm) == "string" and not (issecretvalue and issecretvalue(nm)) then
-                                key = nm
-                            end
-                        end
-                        -- key 仍然为 nil(name 还是 secret)→ 跳过这条敌人,下次 RebuildOverall 再处理
-                        if key then
-                            local total = getAmount(enemy.totalAmount)
-                            if total > 0 then
-                                if not edtMap[key] then
-                                    -- ★ 修复：去掉 issecretvalue 拦截
-                                    local safeName = "?"
-                                    if type(enemy.name) == "string" then
-                                        safeName = enemy.name
-                                    end
-                                    edtMap[key] = { creatureID = enemy.sourceCreatureID, name = safeName, total = 0, sources = {} }
-                                    table.insert(segs.overall.enemyDamageTakenList, edtMap[key])
-                                end
-                                edtMap[key].total = edtMap[key].total + total
-                                local okSrc, srcData = pcall(C_DamageMeter.GetCombatSessionSourceFromID,
-                                    sid, Enum.DamageMeterType.EnemyDamageTaken, nil, enemy.sourceCreatureID)
-                                if okSrc and srcData and srcData.combatSpells then
-                                    pcall(function()
-                                        for _, sp in ipairs(srcData.combatSpells) do
-                                            local details = sp.combatSpellDetails
-                                            if details then
-                                                local pName = details.unitName
-                                                local pClass = details.unitClassFilename
-                                                if not pClass or pClass == "" then pClass = "NPC" end
-                                                local amt = getAmount(details.amount)
-                                                if amt == 0 then amt = getAmount(sp.totalAmount) end
-                                                if pName and type(pName) == "string" and amt > 0
-                                                   and not (issecretvalue and issecretvalue(pName)) then
-                                                    local found = false
-                                                    for _, s in ipairs(edtMap[key].sources) do
-                                                        if s.name == pName then s.amount = s.amount + amt; found = true; break end
-                                                    end
-                                                    if not found then
-                                                        table.insert(edtMap[key].sources, { name = pName, class = pClass, amount = amt })
-                                                    end
-                                                end
-                                            end
-                                        end
-                                    end)
-                                end
-                            end
-                        end
-                    end
-                    table.sort(segs.overall.enemyDamageTakenList, function(a, b) return a.total > b.total end)
-                end
+local function mergeEnemyList(target, source)
+    local byKey = {}
+    for _, entry in ipairs(target) do byKey[entry.creatureID or entry.name] = entry end
+    for _, entry in ipairs(source or {}) do
+        local key = entry.creatureID or entry.name
+        local out = byKey[key]
+        if not out then
+            out = {creatureID = entry.creatureID, name = entry.name, total = 0, perSec = nil, sources = {}}
+            byKey[key] = out; table.insert(target, out)
+        end
+        out.total = out.total + (entry.total or 0)
+        if entry._detailsIncomplete then out._detailsIncomplete = true end
+        local sourceMap = {}
+        for _, row in ipairs(out.sources) do sourceMap[row.name] = row end
+        for _, row in ipairs(entry.sources or {}) do
+            local merged = sourceMap[row.name]
+            if not merged then
+                merged = {name = row.name, class = row.class, amount = 0}
+                sourceMap[row.name] = merged; table.insert(out.sources, merged)
             end
+            merged.amount = merged.amount + (row.amount or 0)
+        end
+        table.sort(out.sources, function(a, b) return a.amount > b.amount end)
+    end
+    table.sort(target, function(a, b) return a.total > b.total end)
+end
 
-            -- 死亡
-            local ok2, dmSession = pcall(C_DamageMeter.GetCombatSessionFromID, sid, Enum.DamageMeterType.Deaths)
-            if ok2 and dmSession and dmSession.combatSources then
-                for _, src in ipairs(dmSession.combatSources) do
-                    local guid, creatureID, total = src.sourceGUID, src.sourceCreatureID, getAmount(src.totalAmount)
-                    if guid and total > 0 and not (creatureID ~= nil and creatureID > 0) then
-                        local pd = getOrCreatePlayer(guid, src.name)
-                        pd.class = src.classFilename or pd.class
-                        if src.specIconID and src.specIconID > 0 then pd.specIconID = src.specIconID end
-                        pd.deaths = (pd.deaths or 0) + total
-                    end
-                end
-            end
-            -- 打断/驱散
-            for dmType, field in pairs({ [Enum.DamageMeterType.Interrupts] = "interrupts", [Enum.DamageMeterType.Dispels] = "dispels" }) do
-                local spellField = field == "interrupts" and "interruptSpells" or "dispelSpells"
-                local ok2, dmSession = pcall(C_DamageMeter.GetCombatSessionFromID, sid, dmType)
-                if ok2 and dmSession and dmSession.combatSources then
-                    for _, src in ipairs(dmSession.combatSources) do
-                        local guid, creatureID, total = src.sourceGUID, src.sourceCreatureID, getAmount(src.totalAmount)
-                        if guid and total > 0 then
-                            local hasValidClass = src.classFilename and src.classFilename ~= ""
-                            local isPet = (creatureID ~= nil and creatureID > 0) and not hasValidClass
-                            local pd = getOrCreatePlayer(guid, isPet and nil or src.name)
-                            if not isPet then 
-                                pd.class = src.classFilename or pd.class
-                                if src.specIconID and src.specIconID > 0 then pd.specIconID = src.specIconID end
-                            end
-                            pd[field] = (pd[field] or 0) + total
-                            local ok3, srcData = pcall(C_DamageMeter.GetCombatSessionSourceFromID, sid, dmType, guid, creatureID)
-                            if ok3 and srcData and srcData.combatSpells then
-                                for _, sp in ipairs(srcData.combatSpells) do
-                                    local spellID = getAmount(sp.spellID); if spellID > 0 then
-                                        local amt = getAmount(sp.totalAmount); if amt == 0 then amt = getAmount(sp.casts) end; if amt == 0 then amt = 1 end
-                                        if amt > 0 then
-                                            if not pd[spellField][spellID] then local sn = (C_Spell and C_Spell.GetSpellName and C_Spell.GetSpellName(spellID)) or ("spell:"..spellID); pd[spellField][spellID] = segs:NewSpellData(spellID, sn, nil) end
-                                            pd[spellField][spellID].hits = pd[spellField][spellID].hits + amt; pd[spellField][spellID].damage = pd[spellField][spellID].damage + amt
-                                        end
-                                    end
-                                end
-                            end
-                        end
-                    end
-                end
-            end
+function CT:MergeLocalSegments(segments, meta)
+    meta = meta or {}
+    local merged = ns.Segments:NewSegment(meta.type or "history", meta.name or ns.L.OVERALL)
+    merged.isActive = false; merged._dataLoaded = true; merged._isMerged = meta.isMerged ~= false
+    merged._localID = meta.localID or ns.Segments:GenLocalID(meta.prefix or "merged")
+    merged._instanceTag = meta.instanceTag
+    for _, seg in ipairs(segments or {}) do
+        merged.duration = (merged.duration or 0) + (seg.duration or 0)
+        merged.totalDamage = merged.totalDamage + (seg.totalDamage or 0)
+        merged.totalHealing = merged.totalHealing + (seg.totalHealing or 0)
+        merged.totalDamageTaken = merged.totalDamageTaken + (seg.totalDamageTaken or 0)
+        for guid, player in pairs(seg.players or {}) do
+            local out = merged.players[guid]
+            if not out then out = ns.Segments:NewPlayerData(guid, player.name, player.class); merged.players[guid] = out end
+            mergePlayer(out, player)
+        end
+        for _, death in ipairs(seg.deathLog or {}) do table.insert(merged.deathLog, CopyTable(death)) end
+        mergeEnemyList(merged.enemyDamageTakenList, seg.enemyDamageTakenList)
+        for _, flag in ipairs({"_detailsIncomplete", "_spellDetailsIncomplete",
+            "_deathDetailsIncomplete", "_enemySourceDetailsIncomplete",
+            "_playerAttributionIncomplete", "_rateDetailsIncomplete",
+            "_durationIncomplete"}) do
+            if seg[flag] then merged[flag] = true end
         end
     end
+    table.sort(merged.deathLog, function(a, b)
+        if a.isSelf ~= b.isSelf then return a.isSelf end
+        return (a.timestamp or 0) > (b.timestamp or 0)
+    end)
+    return merged
+end
 
-    segs.overall.players = newPlayers; segs.overall.totalDamage = newTotalDamage; segs.overall.totalHealing = newTotalHealing; segs.overall.totalDamageTaken = newTotalDTaken
-    if CT._baselineSessionCount == 0 then segs.overall.duration = C_DamageMeter.GetSessionDurationSeconds(Enum.DamageMeterSessionType.Overall) or totalDur
-    else segs.overall.duration = totalDur end
-    segs.overall.isActive = false
-    -- 敌人承伤：直接查 Overall session type，不手动累加
-    do
-        segs.overall.enemyDamageTakenList = {}
-        local okET, etSession = pcall(C_DamageMeter.GetCombatSessionFromType,
-            Enum.DamageMeterSessionType.Overall, Enum.DamageMeterType.EnemyDamageTaken)
-        if okET and etSession and etSession.combatSources then
-            for _, enemy in ipairs(etSession.combatSources) do
-                local creatureID = enemy.sourceCreatureID
-                -- ★ 修复：去掉 issecretvalue 拦截
-                local enemyName = "?"
-                local hasName = false
-                if type(enemy.name) == "string" then
-                    enemyName = enemy.name
-                    hasName = true
-                end
-                if creatureID or hasName then
-                    local total = getAmount(enemy.totalAmount)
-                    if total > 0 then
-                        local perSec = getAmount(enemy.amountPerSecond)
-                        local entry = { creatureID = creatureID, name = enemyName, total = total, perSec = perSec, sources = {} }
-                        local okSrc, srcData = pcall(C_DamageMeter.GetCombatSessionSourceFromType,
-                            Enum.DamageMeterSessionType.Overall, Enum.DamageMeterType.EnemyDamageTaken,
-                            nil, creatureID)
-                        if okSrc and srcData and srcData.combatSpells then
-                            pcall(function()
-                                for _, sp in ipairs(srcData.combatSpells) do
-                                    local details = sp.combatSpellDetails
-                                    if details then
-                                        local playerName = details.unitName
-                                        local playerClass = details.unitClassFilename
-                                        if not playerClass or playerClass == "" then playerClass = "NPC" end
-                                        local amt = getAmount(details.amount)
-                                        if amt == 0 then amt = getAmount(sp.totalAmount) end
-                                        if playerName and type(playerName) == "string" and amt > 0
-                                        and not (issecretvalue and issecretvalue(playerName)) then
-                                            local found = false
-                                            for _, s in ipairs(entry.sources) do
-                                                if s.name == playerName then s.amount = s.amount + amt; found = true; break end
-                                            end
-                                            if not found then
-                                                table.insert(entry.sources, { name = playerName, class = playerClass, amount = amt })
-                                            end
-                                        end
-                                    end
-                                end
-                            end)
-                        end
-                        table.sort(entry.sources, function(a, b) return a.amount > b.amount end)
-                        table.insert(segs.overall.enemyDamageTakenList, entry)
-                    end
-                end
-            end
-            table.sort(segs.overall.enemyDamageTakenList, function(a, b) return a.total > b.total end)
-        end
-    end
-    if snap and snap.deathLog then segs.overall.deathLog = CopyTable(snap.deathLog) elseif not segs.overall.deathLog then segs.overall.deathLog = {} end
+-- Overall is always a fixed local semantic item.  It is refreshed atomically
+-- from Blizzard's official Overall session; failure leaves the previous value.
+function CT:RebuildOverall(sessions, sessionCount)
+    if not ns.Segments or not G then return false, "not-ready" end
+    local old = ns.Segments.overall
+    local meta = {type = "overall", name = old and old.name or ns.L.OVERALL}
+    local candidate, status = G:BuildOverallCandidate(meta)
+    if not candidate then return false, status end
+    local replacement = ns.Segments:NewSegment("overall", candidate.name)
+    G:ApplyCandidateToSegment(candidate, replacement)
+    replacement.type = "overall"; replacement._localID = nil; replacement._isMerged = false
+    ns.Segments.overall = replacement
+    if ns.Analysis then ns.Analysis:InvalidateCache() end
+    return true, G.ACCESSIBLE
 end

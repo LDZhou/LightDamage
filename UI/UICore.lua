@@ -63,21 +63,39 @@ function UI:Btn(p, lbl, sz, fn)
     local b = CreateFrame("Button", nil, p); b:SetSize(18, TITLE_H)
     b.text = self:FS(b, sz, "OUTLINE"); b.text:SetPoint("CENTER")
     b.text:SetText(lbl); b.text:SetTextColor(0.55, 0.55, 0.55)
-    b:SetScript("OnClick", fn)
+    b:SetScript("OnClick", function(...)
+        if GameTooltip then GameTooltip:Hide() end
+        if fn then fn(...) end
+    end)
     b:SetScript("OnEnter", function() b.text:SetTextColor(1,1,1) end)
     b:SetScript("OnLeave", function() b.text:SetTextColor(0.55,0.55,0.55) end)
     return b
 end
 
-function UI:IconBtn(p, texNormal, texHover, btnW, fn)
+function UI:IconBtn(p, texNormal, texHover, btnW, fn, tooltipText)
     local iconSize = TITLE_H - 6
     local b = CreateFrame("Button", nil, p); b:SetSize(btnW or 20, TITLE_H); b:EnableMouse(true)
     local t = b:CreateTexture(nil, "ARTWORK"); t:SetSize(iconSize, iconSize); t:SetPoint("CENTER")
     t:SetTexture(texNormal); t:SetVertexColor(0.65, 0.65, 0.65, 1)
     b.iconTex = t; b.texNormal = texNormal; b.texHover = texHover or texNormal
-    b:SetScript("OnEnter", function() t:SetTexture(b.texHover); t:SetVertexColor(1, 1, 1, 1) end)
-    b:SetScript("OnLeave", function() t:SetTexture(b.texNormal); t:SetVertexColor(0.65, 0.65, 0.65, 1) end)
-    b:SetScript("OnClick", fn)
+    b:SetScript("OnEnter", function()
+        t:SetTexture(b.texHover); t:SetVertexColor(1, 1, 1, 1)
+        local resolvedTooltip = type(tooltipText) == "function" and tooltipText()
+            or (tooltipText and (L[tooltipText] or tooltipText))
+        if resolvedTooltip and GameTooltip then
+            GameTooltip:SetOwner(b, "ANCHOR_BOTTOM")
+            GameTooltip:SetText(resolvedTooltip, 1, 1, 1)
+            GameTooltip:Show()
+        end
+    end)
+    b:SetScript("OnLeave", function()
+        t:SetTexture(b.texNormal); t:SetVertexColor(0.65, 0.65, 0.65, 1)
+        if tooltipText and GameTooltip then GameTooltip:Hide() end
+    end)
+    b:SetScript("OnClick", function(...)
+        if GameTooltip then GameTooltip:Hide() end
+        if fn then fn(...) end
+    end)
     return b
 end
 
@@ -105,8 +123,8 @@ end
 
 function UI:ApplyTheme()
     local dbw = ns.db.window
-    local tc = dbw.themeColor or {0.08, 0.08, 0.12, 1}
-    local bc = dbw.bgColor    or {0.04, 0.04, 0.05, 0.90}
+    local tc = dbw.themeColor or {0, 0, 0, 1}
+    local bc = dbw.bgColor    or {0.02, 0.02, 0.025, 0.58}
     if self.frame    then self.frame:SetBackdropColor(unpack(bc)) end
     if self.titleBg  then self.titleBg:SetColorTexture(unpack(tc)) end
     if self.tabBg    then self.tabBg:SetColorTexture(unpack(tc)) end
@@ -117,7 +135,7 @@ function UI:ApplyTheme()
     if self.ovrPriHead then self.ovrPriHead.bg:SetColorTexture(unpack(sc)) end
     if self.ovrSecHead then self.ovrSecHead.bg:SetColorTexture(unpack(sc)) end
     if self.ovrContainer then
-        local c = dbw.ovrBgColor or {0.02, 0.04, 0.08, 0.95}
+    local c = dbw.ovrBgColor or {0.025, 0.035, 0.05, 0.62}
         self.ovrContainer:SetBackdropColor(unpack(c))
     end
 end
@@ -201,13 +219,32 @@ function UI:SetTabTextColor(tabText, active)
 end
 
 function UI:ApplyFont(fs, font, size, outline, shadow)
+    if not fs then return false end
+    font = font or STANDARD_TEXT_FONT
+    size = tonumber(size) or 10
     outline = ns.NormalizeFontOutline and ns:NormalizeFontOutline(outline) or outline
-    local hash = font .. "|" .. size .. "|" .. (outline or "") .. "|" .. (shadow and "1" or "0")
-    if fs._fontHash == hash then return end
-    fs._fontHash = hash
-    fs:SetFont(font, size, outline)
+    shadow = shadow and true or false
+    if fs._ldFontValid and fs._ldFont == font and fs._ldFontSize == size
+        and fs._ldFontOutline == outline and fs._ldFontShadow == shadow then
+        return true
+    end
+    local ok, applied = pcall(fs.SetFont, fs, font, size, outline)
+    if not ok or applied == false then
+        -- Keep the configured path untouched, make the text readable, and do
+        -- not cache the failed request so a later media registration retries.
+        pcall(fs.SetFont, fs, STANDARD_TEXT_FONT, size, outline)
+        fs._ldFontValid = nil
+        fs._ldFont = nil; fs._ldFontSize = nil
+        fs._ldFontOutline = nil; fs._ldFontShadow = nil
+        self._lastFontHash = nil
+    else
+        fs._ldFontValid = true
+        fs._ldFont = font; fs._ldFontSize = size
+        fs._ldFontOutline = outline; fs._ldFontShadow = shadow
+    end
     if shadow then fs:SetShadowColor(0,0,0,1); fs:SetShadowOffset(1,-1)
     else fs:SetShadowOffset(0,0) end
+    return ok and applied ~= false
 end
 
 function UI:ClampSize(w, h)
@@ -244,9 +281,9 @@ function UI:ApplyAllFonts()
         local hFont, hSz, hOut, hShad = self:GetDisplayFontConfig("header")
         self:ApplyFont(h.label, hFont, hSz, hOut, hShad)
         self:ApplyFont(h.info, hFont, hSz, hOut, hShad)
-        if h.dtFriendlyText then self:ApplyFont(h.dtFriendlyText, hFont, math.max(8, hSz - 1), hOut, hShad) end
-        if h.dtEnemyText then self:ApplyFont(h.dtEnemyText, hFont, math.max(8, hSz - 1), hOut, hShad) end
+        if h.rawInfo then self:ApplyFont(h.rawInfo, hFont, hSz, hOut, hShad) end
         self:SetFontStringColor(h.info, "headerFontColor", {0.55, 0.55, 0.55, 0.9})
+        if h.rawInfo then self:SetFontStringColor(h.rawInfo, "headerFontColor", {0.55, 0.55, 0.55, 0.9}) end
     end
     applyHead(self.priHead); applyHead(self.secHead); applyHead(self.ovrPriHead); applyHead(self.ovrSecHead)
     local tFont, tSz, tOut, tShad = self:GetDisplayFontConfig("tab")
@@ -263,7 +300,8 @@ function UI:GetCachedSession(sessionType, dmType)
     end
     local v = sub[dmType]
     if v == nil then
-        v = C_DamageMeter.GetCombatSessionFromType(sessionType, dmType) or false
+        local gateway = ns.DamageMeterGateway
+        v = gateway and select(1, gateway:GetRawSession(sessionType, nil, dmType)) or false
         sub[dmType] = v
     end
     if v == false then return nil end
@@ -323,16 +361,35 @@ function UI:Build()
         end
         self._wasMouseOver = isOver
     end)
+    fadeHoverFrame:Hide()
+    f:HookScript("OnShow", function() fadeHoverFrame._timer = 0; self:UpdateFadeHoverDriver() end)
+    f:HookScript("OnHide", function() fadeHoverFrame:Hide() end)
     self._fadeHoverFrame = fadeHoverFrame
+    self:UpdateFadeHoverDriver()
     C_Timer.After(0.5, function()
         if self.frame and self.frame:IsShown() and not ns.state.inCombat then self:CheckAutoFade(true) end
     end)
 end
 
+function UI:UpdateFadeHoverDriver()
+    local driver=self._fadeHoverFrame
+    if not driver then return end
+    local fade=ns.db and ns.db.fade
+    local enabled=self.frame and self.frame:IsShown() and fade
+        and (fade.fadeBars or fade.fadeBody) and fade.unfadeOnHover
+    if enabled then
+        driver._timer=0
+        driver:Show()
+    else
+        driver:Hide()
+        self._wasMouseOver=false
+    end
+end
+
 function UI:BuildTitle()
     local b = CreateFrame("Frame", nil, self.frame)
     b:SetHeight(TITLE_H); b:SetPoint("TOPLEFT",0,0); b:SetPoint("TOPRIGHT",0,0)
-    self.titleBg = self:FillBg(b, {0.08, 0.08, 0.12, 1})
+    self.titleBg = self:FillBg(b, {0, 0, 0, 1})
     self.titleBar = b
 
     local listBtn = self:Btn(b, "[=]", 12, function() if ns.HistoryList then ns.HistoryList:Toggle(b) end end)
@@ -350,20 +407,22 @@ function UI:BuildTitle()
     titleBtn:SetScript("OnDragStart", function() if not ns.db.window.locked then self.frame:StartMoving() end end)
     titleBtn:SetScript("OnDragStop", function()
         self.frame:StopMovingOrSizing()
-        local db = ns.db.window
-        local point, relativeTo, relPoint, x, y = self.frame:GetPoint()
-        db.point = point; db.relPoint = relPoint; db.x = x; db.y = y
-        if self._collapsed then self._savedAnchor = { point, relativeTo, relPoint, x, y } end
+        if self.PersistWorkspaceGeometry then self:PersistWorkspaceGeometry() else
+            local db = ns.db.window
+            local point, relativeTo, relPoint, x, y = self.frame:GetPoint()
+            db.point = point; db.relPoint = relPoint; db.x = x; db.y = y
+            if self._collapsed then self._savedAnchor = { point, relativeTo, relPoint, x, y } end
+        end
     end)
 
     self._collapsed = false
-    local colBtn = self:IconBtn(b, TEX.."btn_collapse", TEX.."btn_collapse", 20, function() self:ToggleCollapse(not self._collapsed) end)
+    local colBtn = self:IconBtn(b, TEX.."btn_collapse", TEX.."btn_collapse", 20, function() if not self._previewContext then self:ToggleCollapse(not self._collapsed) end end, "TOOLTIP_EXPAND_COLLAPSE")
     colBtn:SetPoint("RIGHT", -4, 0); self.collapseBtn = colBtn
 
-    local cfgBtn = self:IconBtn(b, TEX.."btn_settings", TEX.."btn_settings", 20, function() if ns.Config then ns.Config:Toggle() end end)
+    local cfgBtn = self:IconBtn(b, TEX.."btn_settings", TEX.."btn_settings", 20, function() if not self._previewContext and ns.Config then ns.Config:Toggle() end end, "TOOLTIP_SETTINGS")
     cfgBtn:SetPoint("RIGHT", colBtn, "LEFT", -2, 0); self.cfgBtn = cfgBtn
 
-    local rstBtn = self:IconBtn(b, TEX.."btn_reset", TEX.."btn_reset", 20, function() if ns.Segments then ns.Segments:ResetAll() end end)
+    local rstBtn = self:IconBtn(b, TEX.."btn_reset", TEX.."btn_reset", 20, function() if not self._previewContext and ns.Segments then ns.Segments:ResetAll() end end, "TOOLTIP_CLEAR_ALL_DATA")
     rstBtn:SetPoint("RIGHT", cfgBtn, "LEFT", -2, 0); self.rstBtn = rstBtn
 
     self.titleTime = self:FS(b, 10, "OUTLINE")
@@ -385,6 +444,7 @@ end
 
 function UI:MakeScrollArea(parent)
     local sf = CreateFrame("ScrollFrame", nil, parent)
+    sf:EnableMouse(true); sf:EnableMouseWheel(true)
     local child = CreateFrame("Frame", nil, sf); sf:SetScrollChild(child)
     local sb = CreateFrame("Slider", nil, sf)
     sb:SetWidth(3); sb:SetPoint("TOPRIGHT", sf, "TOPRIGHT", 0, 0); sb:SetPoint("BOTTOMRIGHT", sf, "BOTTOMRIGHT", 0, 0)
@@ -397,7 +457,69 @@ function UI:MakeScrollArea(parent)
         sb:SetValue(math.max(0, math.min(mx, cur - delta * (BAR_H * 2))))
     end)
     sb:SetScript("OnValueChanged", function(_, val) sf:SetVerticalScroll(val) end)
-    return { sf = sf, child = child, sb = sb }
+    local area = { sf = sf, child = child, sb = sb, _hasOverflow = false, _mouseInside = false, _extraHoverFrames = {} }
+    sf._ldScrollArea = area
+
+    function area:RefreshScrollBarVisibility()
+        self.sb:SetShown(self._hasOverflow and (self._mouseInside or self._scrollbarDragging))
+    end
+
+    sb:SetScript("OnMouseDown", function()
+        area._scrollbarDragging = true
+        area:RefreshScrollBarVisibility()
+    end)
+    sb:SetScript("OnMouseUp", function()
+        area._scrollbarDragging = nil
+        area._mouseInside = sf:IsMouseOver() or sb:IsMouseOver()
+        area:RefreshScrollBarVisibility()
+    end)
+    sb:SetScript("OnHide", function() area._scrollbarDragging = nil end)
+
+    self._hoverScrollAreas = self._hoverScrollAreas or {}
+    self._hoverScrollAreas[#self._hoverScrollAreas + 1] = area
+    if not self._scrollHoverDriver then
+        local driver = CreateFrame("Frame", nil, self.frame)
+        driver._elapsed = 0
+        driver:SetScript("OnUpdate", function(_, elapsed)
+            driver._elapsed = driver._elapsed + elapsed
+            if driver._elapsed < .06 then return end
+            driver._elapsed = 0
+            for _, item in ipairs(self._hoverScrollAreas or {}) do
+                local inside=false
+                if item._hasOverflow then
+                    inside=item.sf:IsVisible() and (item.sf:IsMouseOver() or item.sb:IsMouseOver()) or false
+                end
+                if item._hasOverflow and not inside then
+                    for _, hoverFrame in ipairs(item._extraHoverFrames) do
+                        if hoverFrame:IsVisible() and hoverFrame:IsMouseOver() then
+                            inside = true
+                            break
+                        end
+                    end
+                end
+                if inside ~= item._mouseInside then
+                    item._mouseInside = inside
+                    item:RefreshScrollBarVisibility()
+                end
+            end
+        end)
+        driver:Hide()
+        self._scrollHoverDriver = driver
+    end
+    sb:Hide()
+    return area
+end
+
+function UI:UpdateScrollHoverDriver()
+    local driver=self._scrollHoverDriver
+    if not driver then return end
+    local active=false
+    if self.frame and self.frame:IsShown() then
+        for _,area in ipairs(self._hoverScrollAreas or {}) do
+            if area._hasOverflow and area.sf:IsVisible() then active=true; break end
+        end
+    end
+    driver:SetShown(active)
 end
 
 function UI:MakeSectHead(parent)
@@ -405,33 +527,11 @@ function UI:MakeSectHead(parent)
     h.bg = self:FillBg(h, {0.06, 0.06, 0.08, 0.9})
     h.label = self:FS(h, 9, "OUTLINE"); h.label:SetPoint("LEFT",6,0); h.label:SetJustifyH("LEFT")
     h.info = self:FS(h, 9, "OUTLINE"); h.info:SetJustifyH("RIGHT"); h.info:SetTextColor(0.55, 0.55, 0.55, 0.9)
+    h.info:SetPoint("LEFT", h.label, "RIGHT", 4, 0); h.info:SetPoint("RIGHT", h, "RIGHT", -6, 0)
+    h.rawInfo = self:FS(h, 9, "OUTLINE"); h.rawInfo:SetJustifyH("RIGHT"); h.rawInfo:SetTextColor(0.55, 0.55, 0.55, 0.9)
+    h.rawInfo:SetPoint("LEFT", h.label, "RIGHT", 4, 0); h.rawInfo:SetPoint("RIGHT", h, "RIGHT", -6, 0); h.rawInfo:Hide()
     local line = h:CreateTexture(nil,"ARTWORK"); line:SetHeight(1)
     line:SetPoint("BOTTOMLEFT",0,0); line:SetPoint("BOTTOMRIGHT",0,0); line:SetColorTexture(0.3,0.3,0.35,0.4)
-
-    local dtFriendly = CreateFrame("Button", nil, h)
-    dtFriendly:SetSize(32, SECTH_H - 4); dtFriendly:SetPoint("LEFT", h, "LEFT", 60, 0)
-    local dtFriendlyText = self:FS(dtFriendly, 8, "OUTLINE"); dtFriendlyText:SetPoint("CENTER")
-    dtFriendly:SetScript("OnClick", function()
-        ns.state.damageTakenView = "friendly"
-        if ns.db and ns.db.display then ns.db.display.damageTakenView = "friendly" end
-        if ns.Analysis then ns.Analysis:InvalidateCache() end
-        if ns.UI then ns.UI:Refresh() end
-    end)
-    dtFriendly:Hide()
-
-    local dtEnemy = CreateFrame("Button", nil, h)
-    dtEnemy:SetSize(32, SECTH_H - 4); dtEnemy:SetPoint("LEFT", dtFriendly, "RIGHT", 2, 0)
-    local dtEnemyText = self:FS(dtEnemy, 8, "OUTLINE"); dtEnemyText:SetPoint("CENTER")
-    dtEnemy:SetScript("OnClick", function()
-        ns.state.damageTakenView = "enemy"
-        if ns.db and ns.db.display then ns.db.display.damageTakenView = "enemy" end
-        if ns.Analysis then ns.Analysis:InvalidateCache() end
-        if ns.UI then ns.UI:Refresh() end
-    end)
-    dtEnemy:Hide()
-
-    h.dtFriendly = dtFriendly; h.dtFriendlyText = dtFriendlyText
-    h.dtEnemy = dtEnemy; h.dtEnemyText = dtEnemyText
 
     return h
 end
@@ -443,7 +543,7 @@ function UI:BuildBody()
     self.leftContainer = CreateFrame("Frame", nil, self.bodyFrame); self.leftContainer:SetClipsChildren(true)
     self.ovrContainer = CreateFrame("Frame", nil, self.bodyFrame, "BackdropTemplate"); self.ovrContainer:SetClipsChildren(true)
     self.ovrContainer:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8X8", edgeFile = nil, edgeSize = 0 })
-    local c = ns.db.window.ovrBgColor or {0.02, 0.04, 0.08, 0.95}; self.ovrContainer:SetBackdropColor(unpack(c)); self.ovrContainer:Hide()
+    local c = ns.db.window.ovrBgColor or {0.025, 0.035, 0.05, 0.62}; self.ovrContainer:SetBackdropColor(unpack(c)); self.ovrContainer:Hide()
 
     self.priHead = self:MakeSectHead(self.leftContainer)
     self.priList = self:MakeScrollArea(self.leftContainer)
@@ -532,7 +632,7 @@ function UI:Toggle()
     end
 end
 function UI:IsVisible() return self.frame and self.frame:IsShown() end
-function UI:UpdateLock() end
+function UI:UpdateLock() self:UpdateLockState() end
 function UI:UpdateLockState()
     if not self.resizeHandle then return end
     if ns.db.window.locked then self.resizeHandle:Hide() else self.resizeHandle:Show() end
@@ -540,11 +640,25 @@ end
 
 function UI:UpdateScrollState(listObj, dataCount)
     local bh, gap = self:GetBarConfig()
+    local viewH,viewW=listObj.sf:GetHeight(),listObj.sf:GetWidth()
+    dataCount=math.max(0,tonumber(dataCount) or 0)
+    if listObj._scrollDataCount==dataCount and listObj._scrollBarHeight==bh
+        and listObj._scrollBarGap==gap and listObj._scrollViewH==viewH
+        and listObj._scrollViewW==viewW then
+        listObj:RefreshScrollBarVisibility()
+        self:UpdateScrollHoverDriver()
+        return
+    end
+    listObj._scrollDataCount=dataCount; listObj._scrollBarHeight=bh; listObj._scrollBarGap=gap
+    listObj._scrollViewH=viewH; listObj._scrollViewW=viewW
     local totalH = dataCount * (bh + gap); listObj.child:SetHeight(math.max(10, totalH))
-    local viewH = listObj.sf:GetHeight(); local maxScroll = math.max(0, totalH - viewH)
+    local maxScroll = math.max(0, totalH - viewH)
     listObj.sb:SetMinMaxValues(0, maxScroll)
-    if maxScroll > 0 then listObj.sb:Show(); listObj.child:SetWidth(listObj.sf:GetWidth() - 4)
-    else listObj.sb:Hide(); listObj.sb:SetValue(0); listObj.child:SetWidth(listObj.sf:GetWidth()) end
+    listObj._hasOverflow = maxScroll > 0
+    if listObj._hasOverflow then listObj.child:SetWidth(listObj.sf:GetWidth() - 4)
+    else listObj.sb:SetValue(0); listObj.child:SetWidth(listObj.sf:GetWidth()) end
+    listObj:RefreshScrollBarVisibility()
+    self:UpdateScrollHoverDriver()
 end
 
 function UI:ApplySceneSize(cat)

@@ -10,11 +10,23 @@
 
 local addonName, ns = ...
 local L = ns.L
+local G = ns.DamageMeterGateway
 
 local DT = {}
 ns.DeathTracker = DT
 
+local function ReadField(container, key)
+    if G then return G:ReadField(container, key) end
+    if type(container) ~= "table" then return nil, "missing" end
+    local ok, value = pcall(function() return container[key] end)
+    if not ok then return nil, "error" end
+    return value, type(value) == "nil" and "missing" or "accessible"
+end
+
 local function IsSecretValue(v)
+    if ns.DamageMeterGateway then
+        return not ns.DamageMeterGateway:IsAccessible(v)
+    end
     if type(issecretvalue) ~= "function" then return false end
     local ok, ret = pcall(issecretvalue, v)
     return ok and ret and true or false
@@ -27,18 +39,28 @@ end
 
 local function SafeString(v, default)
     default = default or "?"
-    if v == nil then return default end
     if IsSecretValue(v) then return default end
+    if type(v) == "nil" then return default end
     local ok, s = pcall(tostring, v)
     if ok and s and s ~= "" then return s end
     return default
 end
 
+local function OptionalNum(v)
+    if IsSecretValue(v) then return nil end
+    return type(v) == "number" and v or nil
+end
+
+local function OptionalString(v)
+    if IsSecretValue(v) then return nil end
+    return type(v) == "string" and v or nil
+end
+
 -- UI 可显示名：如果是 secret string，必须原样保留，不能 tostring / match / gsub。
 local function DisplayNameValue(v, default)
     default = default or "?"
-    if v == nil then return default end
     if IsSecretValue(v) then return v end
+    if type(v) == "nil" then return default end
 
     local ok, s = pcall(ns.ShortName, ns, v)
     if ok and s and s ~= "" then return s end
@@ -50,19 +72,23 @@ local function DisplayNameValue(v, default)
 end
 
 local function GetDeathCount(src)
-    if not src then return 1 end
-    local v = src.totalAmount
-    if IsSecretValue(v) then return 1 end
-    if type(v) == "number" and v > 0 then return v end
-    return 1
+    if type(src) ~= "table" then return nil end
+    local v = ReadField(src, "totalAmount")
+    if IsSecretValue(v) then return nil end
+    if type(v) == "number" then return v end
+    return nil
 end
 
 local function GetDeathSpecIconID(guid, src)
-    if src and src.specIconID and src.specIconID > 0 then
-        return src.specIconID
+    local sourceSpecIconID = 0
+    if type(src) == "table" then
+        sourceSpecIconID = SafeNum(ReadField(src, "specIconID"), 0)
+    end
+    if sourceSpecIconID > 0 then
+        return sourceSpecIconID
     end
 
-    if guid and not IsSecretValue(guid) and guid == ns.state.playerGUID then
+    if not IsSecretValue(guid) and type(guid) == "string" and guid == ns.state.playerGUID then
         local specIdx = GetSpecialization()
         if specIdx then
             local _, _, _, icon = GetSpecializationInfo(specIdx)
@@ -70,7 +96,7 @@ local function GetDeathSpecIconID(guid, src)
         end
     end
 
-    if guid and not IsSecretValue(guid) then
+    if not IsSecretValue(guid) and type(guid) == "string" then
         local cache = ns.PlayerInfoCache and ns.PlayerInfoCache[guid]
         if cache and cache.specID then
             local _, _, _, icon = GetSpecializationInfoByID(cache.specID)
@@ -96,7 +122,10 @@ function DT:OnUnitDied() end
 
 function DT:ParseRecapEvents(recapEvents, maxHP)
     local result = {}
-    maxHP = maxHP or 1
+    if type(maxHP) ~= "number" or maxHP <= 0 then maxHP = nil end
+    if type(recapEvents) ~= "table" or (G and not G:IsTableAccessible(recapEvents)) then
+        return result
+    end
 
     local reversed = {}
     for i = #recapEvents, 1, -1 do
@@ -104,36 +133,38 @@ function DT:ParseRecapEvents(recapEvents, maxHP)
     end
 
     for _, ev in ipairs(reversed) do
-        local spellID   = SafeNum(ev.spellId, 0)
-        local spellName = SafeString(ev.spellName, "")
-        local evType    = SafeString(ev.event, "")
-        local isHeal    = (evType == "SPELL_HEAL" or evType == "SPELL_PERIODIC_HEAL")
-        local amount    = SafeNum(ev.amount, 0)
-        local overkill  = SafeNum(ev.overkill, 0)
-        if overkill < 0 then overkill = 0 end
-
-        if spellName == "" then
-            if isHeal then spellName = L.HEALING
-            elseif evType == "SWING_DAMAGE" then spellName = L.MELEE
-            else spellName = L.UNKNOWN end
+        if type(ev) ~= "table" or (G and not G:IsTableAccessible(ev)) then
+            break
         end
+        local spellID   = OptionalNum(ReadField(ev, "spellId"))
+        local spellName = OptionalString(ReadField(ev, "spellName"))
+        local evType    = OptionalString(ReadField(ev, "event"))
+        -- The event type is required to distinguish healing from damage.
+        -- Without it, omitting the row is safer than inventing a sign/type.
+        if evType then
+            local isHeal = (evType == "SPELL_HEAL" or evType == "SPELL_PERIODIC_HEAL")
+            local amount = OptionalNum(ReadField(ev, "amount"))
+            local overkill = OptionalNum(ReadField(ev, "overkill"))
+            if type(overkill) == "number" and overkill < 0 then overkill = 0 end
+            local hp = OptionalNum(ReadField(ev, "currentHP"))
+            local hpPct = (type(hp) == "number" and maxHP) and (hp / maxHP * 100) or nil
 
-        local hp    = SafeNum(ev.currentHP, 0)
-        local hpPct = maxHP > 0 and (hp / maxHP * 100) or 0
-
-        table.insert(result, {
-            time      = SafeNum(ev.timestamp, GetTime()),
-            spellID   = spellID,
-            spellName = spellName,
-            amount    = isHeal and -math.abs(amount) or math.abs(amount),
-            isHeal    = isHeal,
-            srcName   = SafeString(ev.sourceName, ""),
-            hp        = hp,
-            maxHP     = maxHP,
-            hpPercent = hpPct,
-            overkill  = overkill,
-            school    = SafeNum(ev.school, 1),
-        })
+            table.insert(result, {
+                time      = OptionalNum(ReadField(ev, "timestamp")),
+                spellID   = spellID,
+                spellName = spellName,
+                eventType = evType,
+                amount    = type(amount) == "number"
+                    and (isHeal and -math.abs(amount) or math.abs(amount)) or nil,
+                isHeal    = isHeal,
+                srcName   = OptionalString(ReadField(ev, "sourceName")),
+                hp        = hp,
+                maxHP     = maxHP,
+                hpPercent = hpPct,
+                overkill  = overkill,
+                school    = OptionalNum(ReadField(ev, "school")),
+            })
+        end
     end
 
     return result
@@ -141,25 +172,29 @@ end
 
 local function GetRecapEvents(recapID)
     if not C_DeathRecap or not C_DeathRecap.GetRecapEvents then return nil end
-    if not recapID or recapID <= 0 then return nil end
+    if IsSecretValue(recapID) or type(recapID) ~= "number" or recapID <= 0 then return nil end
 
     local ok, events = pcall(C_DeathRecap.GetRecapEvents, recapID)
-    if ok and events and #events > 0 then return events end
+    if ok and type(events) == "table" and (not G or G:IsTableAccessible(events)) and #events > 0 then
+        return events
+    end
     return nil
 end
 
 local function GetRecapMaxHealth(recapID)
-    if not C_DeathRecap or not C_DeathRecap.GetRecapMaxHealth then return 1 end
+    if not C_DeathRecap or not C_DeathRecap.GetRecapMaxHealth then return nil end
     local ok, hp = pcall(C_DeathRecap.GetRecapMaxHealth, recapID)
-    if ok and hp and hp > 0 then return hp end
-    return 1
+    hp = ok and OptionalNum(hp) or nil
+    if type(hp) == "number" and hp > 0 then return hp end
+    return nil
 end
 
 function DT:BuildDeathRecordFromRecapID(recapID, src)
-    if not recapID or recapID <= 0 then return nil end
+    if IsSecretValue(recapID) or type(recapID) ~= "number" or recapID <= 0 then return nil end
 
-    local guid = src and src.sourceGUID
-    local isSelf = (src and src.isLocalPlayer) and true or false
+    local guid = type(src) == "table" and ReadField(src, "sourceGUID") or nil
+    local rawIsSelf = type(src) == "table" and ReadField(src, "isLocalPlayer") or nil
+    local isSelf = not IsSecretValue(rawIsSelf) and rawIsSelf == true
 
     -- sourceGUID 可能是 secret，不能比较 guid == ns.state.playerGUID。
     if isSelf then
@@ -168,62 +203,53 @@ function DT:BuildDeathRecordFromRecapID(recapID, src)
         guid = nil
     end
 
-    local class = src and src.classFilename
-    if not class or class == "" then
-        if guid and not IsSecretValue(guid) and ns:IsNPCGUID(guid) then
-            class = "NPC"
-        elseif guid and not IsSecretValue(guid) then
-            local ok, _, ce = pcall(GetPlayerInfoByGUID, guid)
-            class = (ok and ce) or "WARRIOR"
-        else
-            class = "WARRIOR"
-        end
-    end
+    local class = OptionalString(type(src) == "table" and ReadField(src, "classFilename") or nil)
 
     -- 关键：src.name 是 ConditionalSecret，secret 时原样保存给 UI，不要替换成“未知”。
-    local playerName = DisplayNameValue(src and src.name, isSelf and (UnitName("player") or L.ME) or L.UNKNOWN)
+    local rawName = type(src) == "table" and ReadField(src, "name") or nil
+    local playerName = DisplayNameValue(rawName, isSelf and (UnitName("player") or L.ME) or L.UNKNOWN)
 
     local maxHP = GetRecapMaxHealth(recapID)
     local recapEvents = GetRecapEvents(recapID)
     local events = recapEvents and self:ParseRecapEvents(recapEvents, maxHP) or {}
 
-    local killingAbility = "?"
-    local killerName = ""
+    local killingAbility, killerName
     for i = #events, 1, -1 do
         if not events[i].isHeal then
-            killingAbility = events[i].spellName or "?"
-            killerName = events[i].srcName or ""
+            killingAbility = events[i].spellName or events[i].eventType
+            killerName = events[i].srcName
             break
         end
     end
 
-    local totalDmg, totalHeal = 0, 0
+    local totalDmg, totalHeal
     for _, ev in ipairs(events) do
-        if ev.isHeal then totalHeal = totalHeal + math.abs(ev.amount or 0)
-        else totalDmg = totalDmg + math.abs(ev.amount or 0) end
+        if type(ev.amount) == "number" then
+            if ev.isHeal then totalHeal = (totalHeal or 0) + math.abs(ev.amount)
+            else totalDmg = (totalDmg or 0) + math.abs(ev.amount) end
+        end
     end
 
-    local timeSpan = 0
-    if #events >= 2 then
-        timeSpan = (events[#events].time or 0) - (events[1].time or 0)
+    local timeSpan
+    if #events >= 2 and type(events[#events].time) == "number"
+        and type(events[1].time) == "number" then
+        timeSpan = events[#events].time - events[1].time
     end
 
-    local ts = time()
-    if #events > 0 and events[#events].time then
-        ts = math.floor(events[#events].time)
-    end
+    local ts = (#events > 0 and type(events[#events].time) == "number")
+        and math.floor(events[#events].time) or nil
 
     return {
         timestamp            = ts,
-        gameTime             = GetTime(),
+        gameTime             = nil,
         playerName           = playerName,
         playerGUID           = guid,
         playerClass          = class,
         isSelf               = isSelf,
-        killingAbility       = (#events == 0) and L.DEATH_RECAP_PENDING or killingAbility,
+        killingAbility       = killingAbility,
         killerName           = killerName,
         events               = events,
-        lastHP               = 0,
+        lastHP               = nil,
         maxHP                = maxHP,
         totalDamageTaken     = totalDmg,
         totalHealingReceived = totalHeal,
@@ -232,26 +258,183 @@ function DT:BuildDeathRecordFromRecapID(recapID, src)
         _recapID             = recapID,
         _specIconID          = GetDeathSpecIconID(guid, src),
         _deathCount          = GetDeathCount(src),
-        _deathTimeSeconds    = SafeNum(src and src.deathTimeSeconds, 0),
+        _deathTimeSeconds    = OptionalNum(type(src) == "table" and ReadField(src, "deathTimeSeconds") or nil),
         _apiGenerated        = true,
         _incomplete          = (#events == 0),
     }
 end
 
-local function GetDeathSession(sessionType, sessionID)
-    if not C_DamageMeter then return nil end
-    local dmType = Enum.DamageMeterType.Deaths
+local function IsAccessible(v)
+    if ns.DamageMeterGateway then return ns.DamageMeterGateway:IsAccessible(v) end
+    if type(v) == "nil" then return true end
+    return not IsSecretValue(v)
+end
 
-    if sessionID then
-        local ok, session = pcall(C_DamageMeter.GetCombatSessionFromID, sessionID, dmType)
-        if ok then return session end
-    else
-        local st = sessionType or Enum.DamageMeterSessionType.Current
-        local ok, session = pcall(C_DamageMeter.GetCombatSessionFromType, st, dmType)
-        if ok then return session end
+local function BuildIncompleteArchiveRecord(recapID, src, reason)
+    local guid, guidState = ReadField(src, "sourceGUID")
+    if guidState ~= (G and G.ACCESSIBLE or "accessible") or type(guid) ~= "string" then guid = nil end
+    local name, nameState = ReadField(src, "name")
+    if nameState ~= (G and G.ACCESSIBLE or "accessible") or type(name) ~= "string" then name = nil end
+    local class, classState = ReadField(src, "classFilename")
+    if classState ~= (G and G.ACCESSIBLE or "accessible") or type(class) ~= "string" then class = nil end
+    local isSelf, selfState = ReadField(src, "isLocalPlayer")
+    isSelf = selfState == (G and G.ACCESSIBLE or "accessible") and isSelf == true
+    if isSelf then
+        guid = ns.state.playerGUID or (UnitGUID and UnitGUID("player")) or guid
+        name = name or ns.state.playerName or (UnitName and UnitName("player"))
+    end
+    return {
+        timestamp = nil, gameTime = nil,
+        playerName = name, playerGUID = guid,
+        playerClass = class, isSelf = isSelf,
+        killingAbility = nil, killerName = nil, events = {},
+        lastHP = nil, maxHP = nil, totalDamageTaken = nil,
+        totalHealingReceived = nil, timeSpan = nil,
+        _fromRecap = type(recapID) == "number" and recapID > 0,
+        _recapID = type(recapID) == "number" and recapID > 0 and recapID or nil,
+        _specIconID = GetDeathSpecIconID(guid, src), _deathCount = GetDeathCount(src),
+        _deathTimeSeconds = OptionalNum(ReadField(src, "deathTimeSeconds")),
+        _apiGenerated = true, _incomplete = true,
+        _incompleteReason = reason or (G and G.MISSING or "missing"),
+    }
+end
+
+-- Archive-only recap builder. Missing recap data is represented explicitly so
+-- it cannot block a valid combat-session archive or fabricate event details.
+-- Secret recap fields return a SECRET status; the gateway decides whether to
+-- retry or accept the incomplete record after its bounded grace window.
+function DT:BuildDeathRecordForArchive(recapID, src)
+    local pending = G and G.SECRET or "secret"
+    local missing = G and G.MISSING or "missing"
+    local failed = G and G.ERROR or "error"
+    local accessible = G and G.ACCESSIBLE or "accessible"
+    local fallback = BuildIncompleteArchiveRecord(recapID, src, missing)
+    if not IsAccessible(recapID) then fallback._incompleteReason = pending; return fallback, pending end
+    if type(recapID) ~= "number" or recapID <= 0 then return fallback, missing end
+    if not C_DeathRecap or not C_DeathRecap.GetRecapEvents then return fallback, missing end
+
+    local ok, recapEvents = pcall(C_DeathRecap.GetRecapEvents, recapID)
+    if not ok then fallback._incompleteReason = failed; return fallback, failed end
+    if type(recapEvents) == "nil" then return fallback, missing end
+    if type(recapEvents) ~= "table" then fallback._incompleteReason = failed; return fallback, failed end
+    if G and not G:IsTableAccessible(recapEvents) then
+        fallback._incompleteReason = pending
+        return fallback, pending
     end
 
-    return nil
+    local detailStatus = accessible
+    local function note(status)
+        if status == pending then return pending end
+        if status == failed then detailStatus = failed
+        elseif status ~= accessible and detailStatus == accessible then detailStatus = missing end
+        return detailStatus
+    end
+
+    local maxHP
+    if C_DeathRecap.GetRecapMaxHealth then
+        local okHP, hp = pcall(C_DeathRecap.GetRecapMaxHealth, recapID)
+        if okHP and not IsAccessible(hp) then fallback._incompleteReason = pending; return fallback, pending end
+        if okHP and type(hp) == "number" and hp > 0 then maxHP = hp
+        else note(okHP and missing or failed) end
+    else
+        note(missing)
+    end
+
+    local events = {}
+    local totalDmg, totalHeal
+    for i = #recapEvents, 1, -1 do
+        local ev = recapEvents[i]
+        if type(ev) ~= "table" then
+            note(failed)
+        elseif G and not G:IsTableAccessible(ev) then
+            fallback._incompleteReason = pending
+            return fallback, pending
+        else
+            local function eventField(key, expectedType, default)
+                local value, state = ReadField(ev, key)
+                if state == pending then return nil, pending end
+                if state ~= accessible then note(state); return default end
+                if type(value) ~= expectedType then note(failed); return default end
+                return value, accessible
+            end
+
+            local spellID, state = eventField("spellId", "number", nil)
+            if state == pending then fallback._incompleteReason = pending; return fallback, pending end
+            local spellName; spellName, state = eventField("spellName", "string", nil)
+            if state == pending then fallback._incompleteReason = pending; return fallback, pending end
+            local eventType; eventType, state = eventField("event", "string", nil)
+            if state == pending then fallback._incompleteReason = pending; return fallback, pending end
+            local amount; amount, state = eventField("amount", "number", nil)
+            if state == pending then fallback._incompleteReason = pending; return fallback, pending end
+            local overkill; overkill, state = eventField("overkill", "number", nil)
+            if state == pending then fallback._incompleteReason = pending; return fallback, pending end
+            local sourceName; sourceName, state = eventField("sourceName", "string", nil)
+            if state == pending then fallback._incompleteReason = pending; return fallback, pending end
+            local currentHP; currentHP, state = eventField("currentHP", "number", nil)
+            if state == pending then fallback._incompleteReason = pending; return fallback, pending end
+            local timestamp; timestamp, state = eventField("timestamp", "number", nil)
+            if state == pending then fallback._incompleteReason = pending; return fallback, pending end
+            local school; school, state = eventField("school", "number", nil)
+            if state == pending then fallback._incompleteReason = pending; return fallback, pending end
+
+            if eventType then
+                local isHeal = eventType == "SPELL_HEAL" or eventType == "SPELL_PERIODIC_HEAL"
+                if type(overkill) == "number" and overkill < 0 then overkill = 0 end
+                local signedAmount = type(amount) == "number"
+                    and (isHeal and -math.abs(amount) or math.abs(amount)) or nil
+                if type(amount) == "number" then
+                    if isHeal then totalHeal = (totalHeal or 0) + math.abs(amount)
+                    else totalDmg = (totalDmg or 0) + math.abs(amount) end
+                end
+                table.insert(events, {
+                    time = timestamp, spellID = spellID, spellName = spellName,
+                    eventType = eventType, amount = signedAmount,
+                    isHeal = isHeal, srcName = sourceName,
+                    hp = currentHP, maxHP = maxHP,
+                    hpPercent = (type(currentHP) == "number" and type(maxHP) == "number" and maxHP > 0)
+                        and (currentHP / maxHP * 100) or nil,
+                    overkill = overkill, school = school,
+                })
+            end
+        end
+    end
+
+    if #events == 0 then note(missing) end
+
+    local killingAbility, killerName
+    for i = #events, 1, -1 do
+        if not events[i].isHeal then
+            killingAbility = events[i].spellName or events[i].eventType
+            killerName = events[i].srcName
+            break
+        end
+    end
+    local span
+    if #events >= 2 and type(events[#events].time) == "number"
+        and type(events[1].time) == "number" then
+        span = events[#events].time - events[1].time
+    end
+    local timestamp = (#events > 0 and type(events[#events].time) == "number")
+        and events[#events].time or nil
+    fallback.timestamp = timestamp and math.floor(timestamp) or nil
+    fallback.killingAbility = killingAbility
+    fallback.killerName = killerName
+    fallback.events = events
+    fallback.maxHP = maxHP
+    fallback.totalDamageTaken = totalDmg
+    fallback.totalHealingReceived = totalHeal
+    fallback.timeSpan = span
+    fallback._fromRecap = true
+    fallback._recapID = recapID
+    fallback._incomplete = detailStatus ~= accessible
+    fallback._incompleteReason = fallback._incomplete and detailStatus or nil
+    return fallback, detailStatus
+end
+
+local function GetDeathSession(sessionType, sessionID)
+    if not G then return nil end
+    local dmType = Enum.DamageMeterType.Deaths
+    return G:GetRawSession(sessionType or Enum.DamageMeterSessionType.Current, sessionID, dmType)
 end
 
 local function InsertOrdered(list, record)
@@ -262,53 +445,60 @@ function DT:GetDeathLogFromAPI(sessionType, sessionID, fallbackSegment)
     local session = GetDeathSession(sessionType, sessionID)
     local result = {}
 
-    if session and session.combatSources then
+    local sources, sourceState
+    if type(session) == "table" and G then
+        sources, sourceState = G:ReadTableField(session, "combatSources")
+    end
+    if sourceState == (G and G.ACCESSIBLE) and type(sources) == "table" then
         local seenRecap = {}
-        for _, src in ipairs(session.combatSources) do
-            local recapID = SafeNum(src.deathRecapID, 0)
-            local deaths  = GetDeathCount(src)
+        for _, src in ipairs(sources) do
+            if type(src) == "table" and (not G or G:IsTableAccessible(src)) then
+                local recapID = SafeNum(ReadField(src, "deathRecapID"), 0)
+                local deaths  = GetDeathCount(src)
 
-            -- deathRecapID 是 NeverSecret，只要有 recapID 就生成死亡记录。
-            if recapID > 0 and not seenRecap[recapID] then
-                seenRecap[recapID] = true
-                local record = self:BuildDeathRecordFromRecapID(recapID, src)
-                if record then
-                    record._deathCount = deaths
-                    InsertOrdered(result, record)
+                -- deathRecapID 是 NeverSecret，只要有 recapID 就生成死亡记录。
+                if recapID > 0 and not seenRecap[recapID] then
+                    seenRecap[recapID] = true
+                    local record = self:BuildDeathRecordFromRecapID(recapID, src)
+                    if record then
+                        record._deathCount = deaths
+                        InsertOrdered(result, record)
+                    end
+                elseif recapID <= 0 then
+                    local guid = ReadField(src, "sourceGUID")
+                    local rawIsSelf = ReadField(src, "isLocalPlayer")
+                    local isSelf = not IsSecretValue(rawIsSelf) and rawIsSelf == true
+
+                    if isSelf then
+                        guid = ns.state.playerGUID or UnitGUID("player")
+                    elseif IsSecretValue(guid) then
+                        guid = nil
+                    end
+
+                    InsertOrdered(result, {
+                        timestamp            = nil,
+                        gameTime             = nil,
+                        playerName           = DisplayNameValue(ReadField(src, "name"), isSelf and (UnitName("player") or L.ME) or L.UNKNOWN),
+                        playerGUID           = guid,
+                        playerClass          = OptionalString(ReadField(src, "classFilename")),
+                        isSelf               = isSelf,
+                        killingAbility       = nil,
+                        killerName           = nil,
+                        events               = {},
+                        lastHP               = nil,
+                        maxHP                = nil,
+                        totalDamageTaken     = nil,
+                        totalHealingReceived = nil,
+                        timeSpan             = nil,
+                        _fromRecap           = false,
+                        _recapID             = nil,
+                        _specIconID          = GetDeathSpecIconID(guid, src),
+                        _deathCount          = deaths,
+                        _deathTimeSeconds    = OptionalNum(ReadField(src, "deathTimeSeconds")),
+                        _apiGenerated        = true,
+                        _incomplete          = true,
+                    })
                 end
-            elseif recapID <= 0 then
-                local guid = src.sourceGUID
-                local isSelf = src.isLocalPlayer and true or false
-
-                if isSelf then
-                    guid = ns.state.playerGUID or UnitGUID("player")
-                elseif IsSecretValue(guid) then
-                    guid = nil
-                end
-
-                InsertOrdered(result, {
-                    timestamp            = time(),
-                    gameTime             = GetTime(),
-                    playerName           = DisplayNameValue(src.name, isSelf and (UnitName("player") or L.ME) or L.UNKNOWN),
-                    playerGUID           = guid,
-                    playerClass          = src.classFilename or "WARRIOR",
-                    isSelf               = isSelf,
-                    killingAbility       = L.DEATH_RECAP_PENDING,
-                    killerName           = "",
-                    events               = {},
-                    lastHP               = 0,
-                    maxHP                = 1,
-                    totalDamageTaken     = 0,
-                    totalHealingReceived = 0,
-                    timeSpan             = 0,
-                    _fromRecap           = false,
-                    _recapID             = nil,
-                    _specIconID          = GetDeathSpecIconID(guid, src),
-                    _deathCount          = deaths,
-                    _deathTimeSeconds    = SafeNum(src.deathTimeSeconds, 0),
-                    _apiGenerated        = true,
-                    _incomplete          = true,
-                })
             end
         end
     end

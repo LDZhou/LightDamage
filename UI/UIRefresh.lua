@@ -14,36 +14,264 @@ local T = UI.T
 local COUNT_MODES = UI.COUNT_MODES
 local MODE_TO_DM = UI.MODE_TO_DM
 
-local function EffMode(m)
-    if m == "damageTaken" and ns.state.damageTakenView == "enemy" then return "enemyDamageTaken" end
-    return m
+local function IsSecret(value)
+    local gateway = ns.DamageMeterGateway
+    if gateway then return not gateway:IsAccessible(value) end
+    return issecretvalue and issecretvalue(value) or false
 end
 
-local function HasAPISession(mode, sessionType, sessionID)
-    local dmType = MODE_TO_DM[EffMode(mode)]
-    if not dmType or not C_DamageMeter then return false end
-
-    if sessionID then
-        local ok, s = pcall(C_DamageMeter.GetCombatSessionFromID, sessionID, dmType)
-        return ok and s and s.combatSources ~= nil
-    end
-
-    if sessionType then
-        local ok, s = pcall(C_DamageMeter.GetCombatSessionFromType, sessionType, dmType)
-        return ok and s and s.combatSources ~= nil
-    end
-
-    return false
+local function SafeSessionDuration(sessionType)
+    local gateway = ns.DamageMeterGateway
+    if not gateway then return 0 end
+    local value, state = gateway:GetSessionDurationRaw(sessionType)
+    if state == gateway.ACCESSIBLE and type(value) == "number" then return value end
+    return 0
 end
 
-function UI:FillModeBars(bars, listObj, head, mode, seg, dur, sessionType, sessionID)
+local function SegmentDuration(seg)
+    return ns.Analysis and ns.Analysis:GetSegmentDuration(seg) or (seg and seg.duration or 0)
+end
+
+local function TooltipNumber(value, isProtected)
+    if isProtected then
+        local formatter = ns.AbbrevProtectedNumber
+        if formatter then
+            local ok, text = pcall(formatter, value)
+            if ok then return text end
+        end
+        return L.COMBAT_DATA_LOCKED
+    end
+    return ns.AbbrevNumber(value)
+end
+
+function UI:BuildLocalPlayerSnapshot()
+    local guid = ns.state and ns.state.playerGUID or UnitGUID("player")
+    local guidAccessible = not IsSecret(guid) and type(guid) == "string"
+    local cache = guidAccessible and ns.PlayerInfoCache and ns.PlayerInfoCache[guid] or {}
+    if not guidAccessible then guid = nil end
+    local specID, specIconID = cache.specID, cache.specIconID
+    local ilvl, score = cache.ilvl or 0, cache.score or 0
+
+    if not specID then
+        local index = GetSpecialization and GetSpecialization()
+        if index then
+            local id, _, _, icon = GetSpecializationInfo(index)
+            specID, specIconID = id or specID, icon or specIconID
+        end
+    end
+    if ilvl <= 0 then
+        local _, equipped = GetAverageItemLevel()
+        ilvl = math.floor(equipped or 0)
+    end
+
+    self._localPlayerSnapshot = {
+        guid = guid, specID = specID, specIconID = specIconID,
+        ilvl = ilvl, score = score,
+    }
+    return self._localPlayerSnapshot
+end
+
+function UI:GetLocalPlayerSnapshot()
+    return self._localPlayerSnapshot or self:BuildLocalPlayerSnapshot()
+end
+
+function UI:BeginDataRefresh()
+    if self._sessionCache then
+        for _, sub in pairs(self._sessionCache) do wipe(sub) end
+    else
+        self._sessionCache = {}
+    end
+    self._rawSessionCache = self._rawSessionCache or {byType = {}, byID = {}}
+    wipe(self._rawSessionCache.byType)
+    wipe(self._rawSessionCache.byID)
+    self._displaySourceCache = self._displaySourceCache or {}
+    wipe(self._displaySourceCache)
+    self._sessionDurationCache = self._sessionDurationCache or {}
+    wipe(self._sessionDurationCache)
+    self._observedSources = self._observedSources or {}
+    wipe(self._observedSources)
+    local gateway = ns.DamageMeterGateway
+    self._refreshRawGeneration = gateway and gateway:GetRawGeneration() or nil
+    -- Built lazily on the first self row/tooltip in this refresh. Collapsed or
+    -- empty windows therefore perform no specialization/item-level calls.
+    self._localPlayerSnapshot = nil
+end
+
+function UI:GetRefreshSessionDuration(sessionType)
+    local cache = self._sessionDurationCache
+    if not cache then cache = {}; self._sessionDurationCache = cache end
+    local duration = cache[sessionType]
+    if duration == nil then
+        duration = SafeSessionDuration(sessionType)
+        cache[sessionType] = duration
+    end
+    return duration
+end
+
+function UI:ObserveDamageMeterSourceOnce(source)
+    if type(source) ~= "table" then return end
+    local gateway = ns.DamageMeterGateway
+    if gateway and not gateway:IsTableAccessible(source) then return end
+    local seen = self._observedSources
+    if not seen then seen = {}; self._observedSources = seen end
+    local key
+    local okLocal, localValue = pcall(function() return source.isLocalPlayer end)
+    if okLocal and (not gateway or gateway:IsAccessible(localValue)) and localValue == true then
+        key = "local"
+    else
+        local okGUID, guid = pcall(function() return source.sourceGUID end)
+        if okGUID and (not gateway or gateway:IsAccessible(guid)) and type(guid) == "string" then
+            key = guid
+        end
+    end
+    if key and seen[key] then return end
+    if key then seen[key] = true end
+    if ns.ObserveDamageMeterSource then ns:ObserveDamageMeterSource(source) end
+end
+
+function UI:GetDisplaySource(range)
+    local cache = self._displaySourceCache
+    if not cache then
+        self:BeginDataRefresh()
+        cache = self._displaySourceCache
+    end
+    local source = cache[range]
+    if not source then
+        source = self:ResolveDisplaySource(range)
+        cache[range] = source
+    end
+    return source
+end
+
+-- One raw C_DamageMeter session lookup per locator/stat in a UI refresh.  The
+-- returned session and its source vector are table-guarded before render code
+-- is allowed to index or iterate either object.
+function UI:GetRefreshRawSession(sessionType, sessionID, dmType)
+    local gateway = ns.DamageMeterGateway
+    if not gateway or dmType == nil or (sessionType == nil and sessionID == nil) then return nil end
+    local cache = self._rawSessionCache
+    if not cache then self:BeginDataRefresh(); cache = self._rawSessionCache end
+    local root, locator
+    if sessionID ~= nil then root, locator = cache.byID, sessionID
+    else root, locator = cache.byType, sessionType end
+    local sub = root[locator]
+    if not sub then sub = {}; root[locator] = sub end
+    local cached = sub[dmType]
+    if type(cached) ~= "nil" then return cached ~= false and cached or nil end
+
+    local session = select(1, gateway:GetRawSession(sessionType, sessionID, dmType))
+    if type(session) ~= "table" or not gateway:IsTableAccessible(session) then
+        sub[dmType] = false
+        return nil
+    end
+    local ok, sources = pcall(function() return session.combatSources end)
+    if not ok or type(sources) ~= "table" or not gateway:IsTableAccessible(sources) then
+        sub[dmType] = false
+        return nil
+    end
+    sub[dmType] = session
+    return session
+end
+
+-- The single display-source resolver for every overview cell.  "current" and
+-- "total" become two views of the same segment during a full-run override;
+-- explicitly selecting Overall likewise makes both ranges use Overall.
+function UI:ResolveDisplaySource(range)
+    local preview = self._previewContext
+    if preview then
+        local model = preview.model
+        local seg = model and (range == "total" and model.overall or model:GetViewSegment())
+        return {kind="local", segment=seg, duration=SegmentDuration(seg), range=range, preview=true}
+    end
+
+    local segs = ns.Segments
+    local gateway = ns.DamageMeterGateway
+    local generation = self._refreshRawGeneration
+    if generation == nil and gateway then generation = gateway:GetRawGeneration() end
+    if not segs then return {kind="local", range=range, duration=0} end
+
+    local override = segs:GetFullRunOverride()
+    if override then
+        -- Leaving an instance selects the generated full-run by default and
+        -- keeps Total on that snapshot until the next combat.  It must not,
+        -- however, swallow an explicit History selection: Current-range cells
+        -- then show the selected archived/virtual segment while Total remains
+        -- the full-run.  Selecting Current/Total, or the full-run itself,
+        -- continues to make both ranges display the full-run as designed.
+        local viewingOverride = segs:IsViewingArchived()
+            and segs.viewIndex and segs.viewIndex.localID == override._localID
+        local useOverride = range == "total" or segs:IsViewingCurrent()
+            or segs:IsViewingOverall() or viewingOverride
+        if useOverride then
+            return {kind="local", segment=override, duration=SegmentDuration(override), range=range, fullRun=true}
+        end
+    end
+
+    if segs:IsViewingOverall() then
+        local seg = segs.overall
+        return {kind="api", segment=seg, duration=self:GetRefreshSessionDuration(Enum.DamageMeterSessionType.Overall),
+            sessionType=Enum.DamageMeterSessionType.Overall, range=range, rawGeneration=generation}
+    end
+
+    if range == "total" then
+        local seg = segs.overall
+        return {kind="api", segment=seg, duration=self:GetRefreshSessionDuration(Enum.DamageMeterSessionType.Overall),
+            sessionType=Enum.DamageMeterSessionType.Overall, range=range, rawGeneration=generation}
+    end
+
+    local seg = segs:GetViewSegment()
+    local source = {kind="local", segment=seg, duration=SegmentDuration(seg), range=range}
+    if segs:IsViewingCurrent() then
+        if ns.state.inCombat then
+            source.kind = "api"
+            source.sessionType = Enum.DamageMeterSessionType.Current
+            source.rawGeneration = generation
+        elseif seg and seg._sessionID and seg._archiveGeneration == generation then
+            source.kind = "api"
+            source.sessionID = seg._sessionID
+            source.rawGeneration = generation
+        end
+        return source
+    end
+
+    if segs:IsViewingVirtual() and seg and seg._isVirtual and seg._sessionID then
+        -- Virtual rows are materialized from the current API generation.  Stamp
+        -- the ephemeral shell so no later reset can reuse its raw handle.
+        if seg._archiveGeneration == nil then seg._archiveGeneration = generation end
+        if seg._archiveGeneration == generation then
+            source.kind = "api"
+            source.sessionID = seg._sessionID
+            source.rawGeneration = generation
+        end
+        return source
+    end
+
+    -- A committed archive is immutable local data even while its old Blizzard
+    -- session ID still happens to exist.  Only an incomplete legacy shell with
+    -- an explicitly matching generation may temporarily use the API.
+    if segs:IsViewingArchived() and seg and not seg._dataLoaded and seg._sessionID
+        and seg._archiveGeneration == generation then
+        source.kind = "api"
+        source.sessionID = seg._sessionID
+        source.rawGeneration = generation
+    end
+    return source
+end
+
+function UI:FillModeBars(bars, listObj, head, mode, seg, dur, sessionType, sessionID, displaySource)
     mode = mode or "damage"
-    local apiOk = (sessionType or sessionID) and HasAPISession(mode, sessionType, sessionID)
+    if displaySource then
+        seg, dur = displaySource.segment, displaySource.duration
+        sessionType, sessionID = displaySource.sessionType, displaySource.sessionID
+    end
+    local dmType = MODE_TO_DM[mode]
+    local rawSession = (sessionType or sessionID) and self:GetRefreshRawSession(sessionType, sessionID, dmType) or nil
+    local apiOk = type(rawSession) ~= "nil"
 
     if mode == "deaths" then
         if apiOk then
             self:RefreshHead(head, mode, nil, 0, sessionType, sessionID)
-            self:FillDeathBars(seg, bars, listObj, sessionType, sessionID)
+            self:FillDeathBars(seg, bars, listObj, sessionType, sessionID, rawSession)
         else
             self:RefreshHead(head, mode, seg, dur)
             self:FillDeathBars(seg, bars, listObj)
@@ -53,7 +281,7 @@ function UI:FillModeBars(bars, listObj, head, mode, seg, dur, sessionType, sessi
 
     if apiOk then
         self:RefreshHead(head, mode, nil, 0, sessionType, sessionID)
-        self:FillBarsFromAPI(bars, listObj, EffMode(mode), sessionType, sessionID)
+        self:FillBarsFromAPI(bars, listObj, mode, sessionType, sessionID, rawSession)
     else
         self:RefreshHead(head, mode, seg, dur)
         self:FillBars(bars, listObj, ns.Analysis and ns.Analysis:GetSorted(seg, mode) or {}, dur, mode)
@@ -62,15 +290,12 @@ end
 
 function UI:Refresh()
     if not self.frame or not self.frame:IsShown() then return end
-    if self._sessionCache then
-        for _, sub in pairs(self._sessionCache) do wipe(sub) end
-    else
-        self._sessionCache = {}
-    end
+    self:BeginDataRefresh()
 
     local segs = ns.Segments
-    local seg  = segs and segs:GetViewSegment()
-    local dur  = ns.Analysis and ns.Analysis:GetSegmentDuration(seg) or 0
+    local currentSource = self:GetDisplaySource("current")
+    local totalSource = self:GetDisplaySource("total")
+    local seg, dur = currentSource.segment, currentSource.duration
     local sp   = ns.db.split
     local mode = ns.db.display.mode
     local useOvr = self:IsOverallColumnActive()
@@ -82,27 +307,6 @@ function UI:Refresh()
         self:RefreshTitle()
     end
 
-    -- Summary 栏：总计仍直读 Overall API。
-    if self.summaryBar:IsShown() then
-        local ovrTitleWord = L.OVERALL
-        local ovrSeg = segs and segs.overall
-        if ovrSeg and ovrSeg._isMerged then ovrTitleWord = L.OVERALL_SEGMENT end
-
-        local durSafe = C_DamageMeter.GetSessionDurationSeconds(Enum.DamageMeterSessionType.Overall) or 0
-        local dmDmg = self:GetCachedSession(Enum.DamageMeterSessionType.Overall, Enum.DamageMeterType.DamageDone)
-        local dmHeal = self:GetCachedSession(Enum.DamageMeterSessionType.Overall, Enum.DamageMeterType.HealingDone)
-
-        local dmgStr, healStr = "0", "0"
-        if dmDmg then local ok, s = pcall(AbbreviateNumbers, dmDmg.totalAmount); if ok and s then dmgStr = s end end
-        if dmHeal then local ok, s = pcall(AbbreviateNumbers, dmHeal.totalAmount); if ok and s then healStr = s end end
-
-        if ns.state.inCombat then
-            self.summText:SetFormattedText(L.OVERALL_SUMMARY_LINE_FORMAT, ns:FormatTime(durSafe), dmgStr, healStr)
-        else
-            self.summText:SetText(string.format(L.SUMMARY_LINE_FORMAT, ovrTitleWord, ns:FormatTime(durSafe), dmgStr, healStr))
-        end
-    end
-
     if self.splitTab then
         if isSplitView then self.splitTab.abg:Show(); self:SetTabTextColor(self.splitTab.text, true)
         else self.splitTab.abg:Hide(); self:SetTabTextColor(self.splitTab.text, false) end
@@ -112,26 +316,12 @@ function UI:Refresh()
         else t.abg:Hide(); self:SetTabTextColor(t.text, false) end
     end
 
-    local isOverall = segs and segs:IsViewingOverall()
-    local isVirtual = segs and segs:IsViewingVirtual()
-    local isArchived = segs and segs:IsViewingArchived()
-    local isCurrent = segs and segs:IsViewingCurrent()
-
-    local apiSessionType, apiSessionID = nil, nil
-    if isOverall then
-        apiSessionType = Enum.DamageMeterSessionType.Overall
-    elseif isCurrent and ns.state.inCombat then
-        apiSessionType = Enum.DamageMeterSessionType.Current
-    elseif (isVirtual or isArchived) and seg and seg._sessionID then
-        apiSessionID = seg._sessionID
-    end
-
     if isSplitView then
-        self:FillModeBars(self.priBars, self.priList, self.priHead, sp.primaryMode, seg, dur, apiSessionType, apiSessionID)
-        self:FillModeBars(self.secBars, self.secList, self.secHead, sp.secondaryMode, seg, dur, apiSessionType, apiSessionID)
+        self:FillModeBars(self.priBars, self.priList, self.priHead, sp.primaryMode, seg, dur, nil, nil, currentSource)
+        self:FillModeBars(self.secBars, self.secList, self.secHead, sp.secondaryMode, seg, dur, nil, nil, currentSource)
         if useOvr then self:FillOvrBars(true, sp, mode) end
     else
-        self:FillModeBars(self.priBars, self.priList, self.priHead, mode, seg, dur, apiSessionType, apiSessionID)
+        self:FillModeBars(self.priBars, self.priList, self.priHead, mode, seg, dur, nil, nil, currentSource)
         if useOvr then self:FillOvrBars(false, sp, mode) end
     end
 
@@ -141,31 +331,24 @@ function UI:Refresh()
         if isSplitView then
             local priLabel = L[ns.MODE_NAMES[sp.primaryMode] or ""]
             local secLabel = L[ns.MODE_NAMES[sp.secondaryMode] or ""]
-            if sp.primaryMode == "damageTaken" and ns.state.damageTakenView == "enemy" then priLabel = L.ENEMY_DAMAGE_TAKEN end
-            if sp.secondaryMode == "damageTaken" and ns.state.damageTakenView == "enemy" then secLabel = L.ENEMY_DAMAGE_TAKEN end
-            local priColorMode = (sp.primaryMode == "damageTaken" and ns.state.damageTakenView == "enemy") and "enemyDamageTaken" or sp.primaryMode
-            local secColorMode = (sp.secondaryMode == "damageTaken" and ns.state.damageTakenView == "enemy") and "enemyDamageTaken" or sp.secondaryMode
-            self:SetModeHeaderText(self.ovrPriHead.label, string.format("[%s%s]", ovrTitleWord, priLabel), priColorMode)
-            self:SetModeHeaderText(self.ovrSecHead.label, string.format("[%s%s]", ovrTitleWord, secLabel), secColorMode)
+            self:SetModeHeaderText(self.ovrPriHead.label, string.format(L.OVERALL_MODE_HEADER_FORMAT, ovrTitleWord, priLabel), sp.primaryMode)
+            self:SetModeHeaderText(self.ovrSecHead.label, string.format(L.OVERALL_MODE_HEADER_FORMAT, ovrTitleWord, secLabel), sp.secondaryMode)
         else
             local modeLabel = L[ns.MODE_NAMES[mode] or ""]
-            if mode == "damageTaken" and ns.state.damageTakenView == "enemy" then modeLabel = L.ENEMY_DAMAGE_TAKEN end
-            local colorMode = (mode == "damageTaken" and ns.state.damageTakenView == "enemy") and "enemyDamageTaken" or mode
-            self:SetModeHeaderText(self.ovrPriHead.label, string.format("[%s%s]", ovrTitleWord, modeLabel), colorMode)
+            self:SetModeHeaderText(self.ovrPriHead.label, string.format(L.OVERALL_MODE_HEADER_FORMAT, ovrTitleWord, modeLabel), mode)
         end
     end
 end
 
 function UI:FillOvrBars(isSplitView, sp, mode)
-    local sType = Enum.DamageMeterSessionType.Overall
-    local seg = ns.Segments and ns.Segments.overall
-    local dur = C_DamageMeter.GetSessionDurationSeconds(sType) or 0
+    local source = self:GetDisplaySource("total")
+    local seg, dur = source.segment, source.duration
 
     if isSplitView then
-        self:FillModeBars(self.ovrPriBars, self.ovrPriList, self.ovrPriHead, sp.primaryMode, seg, dur, sType, nil)
-        self:FillModeBars(self.ovrSecBars, self.ovrSecList, self.ovrSecHead, sp.secondaryMode, seg, dur, sType, nil)
+        self:FillModeBars(self.ovrPriBars, self.ovrPriList, self.ovrPriHead, sp.primaryMode, seg, dur, nil, nil, source)
+        self:FillModeBars(self.ovrSecBars, self.ovrSecList, self.ovrSecHead, sp.secondaryMode, seg, dur, nil, nil, source)
     else
-        self:FillModeBars(self.ovrPriBars, self.ovrPriList, self.ovrPriHead, mode, seg, dur, sType, nil)
+        self:FillModeBars(self.ovrPriBars, self.ovrPriList, self.ovrPriHead, mode, seg, dur, nil, nil, source)
     end
 end
 
@@ -177,11 +360,36 @@ function UI:RefreshTitle()
     local segL = segs and segs:GetViewLabel() or L.NO_DATA
     local dot = ""
     local dur = 0
+    local liveCombatLabel
 
     if ns.state.inCombat and ns.state.combatStartTime and ns.state.combatStartTime > 0 then
         local isViewingOverall = segs and segs:IsViewingOverall()
-        if isViewingOverall then dur = C_DamageMeter.GetSessionDurationSeconds(Enum.DamageMeterSessionType.Overall) or 0
-        else dur = C_DamageMeter.GetSessionDurationSeconds(Enum.DamageMeterSessionType.Current) or 0 end
+        local isViewingCurrent = segs and segs:IsViewingCurrent()
+        if isViewingOverall then
+            dur = SafeSessionDuration(Enum.DamageMeterSessionType.Overall)
+        else
+            dur = SafeSessionDuration(Enum.DamageMeterSessionType.Current)
+        end
+
+        -- The locally-created Current segment starts with the zone name, which
+        -- is useful archive context but is not the live combat title.  Blizzard
+        -- exposes the actual encounter/enemy label on the final available
+        -- combat session; show that name while Current is selected.  Boss event
+        -- metadata is the safe immediate fallback until the live session exists.
+        if isViewingCurrent then
+            local gateway = ns.DamageMeterGateway
+            local name, state
+            if gateway then name, state = gateway:GetLiveSessionName() end
+            if gateway and state == gateway.ACCESSIBLE then
+                liveCombatLabel = name
+            else
+                local current = segs and segs.current
+                if current and current._isBoss then
+                    liveCombatLabel = current.encounterName or current.name
+                end
+                liveCombatLabel = liveCombatLabel or L.COMBAT
+            end
+        end
     else
         local seg = segs and segs:GetViewSegment()
         if seg and seg._keystoneTime and seg._keystoneTime > 0 then dur = seg._keystoneTime else dur = seg and (seg.duration or 0) or 0 end
@@ -189,6 +397,11 @@ function UI:RefreshTitle()
 
     local tStr = dur > 0 and ("|cffaaaaaa" .. ns:FormatTime(dur) .. "|r") or ""
     if self.titleTime then self.titleTime:SetText(tStr) end
+
+    if liveCombatLabel then
+        self.titleText:SetText(liveCombatLabel)
+        return
+    end
 
     if ns.MythicPlus and ns.MythicPlus:IsActive() and ns.state.inMythicPlus then
         local info = ns.MythicPlus:GetHeaderInfo()
@@ -206,127 +419,61 @@ end
 function UI:RefreshHead(h, mode, seg, dur, apiSessionType, apiSessionID)
     if not h:IsShown() then return end
     local mn = L[ns.MODE_NAMES[mode] or mode]
+    self:SetModeHeaderText(h.label, mn, mode)
 
-    if h.dtFriendly then
-        if mode == "damageTaken" then
-            local isEnemy = (ns.state.damageTakenView == "enemy")
-            h.dtFriendlyText:SetText(L.ALLY)
-            h.dtEnemyText:SetText(L.ENEMY)
-            local tc = ns.db.display.damageTakenToggleColors or {}
-            local fa = tc.friendlyActive or {0.3, 1.0, 0.3, 1}
-            local fi = tc.friendlyInactive or {0.3, 0.5, 0.3, 1}
-            local ea = tc.enemyActive or {1.0, 0.4, 0.4, 1}
-            local ei = tc.enemyInactive or {0.5, 0.3, 0.3, 1}
-            if isEnemy then
-                h.dtFriendlyText:SetTextColor(fi[1], fi[2], fi[3], fi[4] or 1)
-                h.dtEnemyText:SetTextColor(ea[1], ea[2], ea[3], ea[4] or 1)
-                mn = L.ENEMY_DAMAGE_TAKEN
-            else
-                h.dtFriendlyText:SetTextColor(fa[1], fa[2], fa[3], fa[4] or 1)
-                h.dtEnemyText:SetTextColor(ei[1], ei[2], ei[3], ei[4] or 1)
-            end
-            h.dtFriendly:Show(); h.dtEnemy:Show()
-        else
-            h.dtFriendly:Hide(); h.dtEnemy:Hide()
-        end
-    end
-
-    local colorMode = (mode == "damageTaken" and ns.state.damageTakenView == "enemy") and "enemyDamageTaken" or mode
-    local ac = { self:GetModeTitleColor(colorMode) }
-    self:SetModeHeaderText(h.label, mn, colorMode)
-
-    if mode == "damageTaken" and h.dtFriendly then
-        if not h._dtMaxLabelW then
-            local savedText = h.label:GetText()
-            h.label:SetWidth(0)
-            local fmt = "|cff%02x%02x%02x%s|r"
-            h.label:SetText(string.format(fmt, ac[1]*255, ac[2]*255, ac[3]*255, L[ns.MODE_NAMES["damageTaken"]]))
-            local w1 = h.label:GetStringWidth()
-            h.label:SetText(string.format(fmt, ac[1]*255, ac[2]*255, ac[3]*255, L.ENEMY_DAMAGE_TAKEN))
-            local w2 = h.label:GetStringWidth()
-            h._dtMaxLabelW = math.max(w1, w2) + 2
-            h.label:SetText(savedText)
-        end
-        h.dtFriendly:ClearAllPoints()
-        h.dtFriendly:SetPoint("LEFT", h, "LEFT", 6 + h._dtMaxLabelW + 4, 0)
-        h.dtEnemy:ClearAllPoints()
-        h.dtEnemy:SetPoint("LEFT", h.dtFriendly, "RIGHT", 2, 0)
-    end
-
-    local function SetFromSession(session)
-        if session and session.totalAmount then
-            if COUNT_MODES[mode] then h.info:SetFormattedText(L.GROUP_TOTAL_COUNT_FORMAT, mn, AbbreviateNumbers(session.totalAmount))
-            else h.info:SetFormattedText(L.GROUP_TOTAL_FORMAT, mn, AbbreviateNumbers(session.totalAmount)) end
-        else
-            h.info:SetText("")
-        end
-    end
-
-    if apiSessionID then
-        local dmType = MODE_TO_DM[EffMode(mode)]
-        if dmType then
-            local ok, session = pcall(C_DamageMeter.GetCombatSessionFromID, apiSessionID, dmType)
-            SetFromSession(ok and session or nil)
-        else h.info:SetText("") end
-    elseif apiSessionType then
-        local dmType = MODE_TO_DM[EffMode(mode)]
-        if dmType then SetFromSession(self:GetCachedSession(apiSessionType, dmType))
-        else h.info:SetText("") end
-    elseif seg then
-        local total = 0
-        if mode == "damageTaken" and ns.state.damageTakenView == "enemy" then
-            for _, entry in ipairs(seg.enemyDamageTakenList or {}) do total = total + (entry.total or 0) end
-        elseif mode == "deaths" and ns.DeathTracker then
-            local dl = ns.DeathTracker:GetDeathLog(seg)
-            total = dl and #dl or 0
-        elseif COUNT_MODES[mode] then
-            for _, p in pairs(seg.players or {}) do total = total + (p[mode] or 0) end
-        else
-            total = mode=="damage" and seg.totalDamage or mode=="healing" and seg.totalHealing or mode=="damageTaken" and seg.totalDamageTaken or 0
-        end
-        local valStr = COUNT_MODES[mode] and (ns:FormatNumber(total)..L.COUNT_SUFFIX) or ns:FormatNumber(total)
-        h.info:SetText(string.format(L.GROUP_TOTAL_FORMAT, mn, valStr))
-    else
-        h.info:SetText("")
-    end
+    -- Cell headers only identify the statistic and range.  Team-wide summary
+    -- text duplicated the bar data and made compact overview cells noisy.
+    h.info:SetText(""); h.info:Hide()
+    h.rawInfo:SetText(""); h.rawInfo:Hide()
 end
 
 -- ============================================================
 -- Tooltip
 -- ============================================================
-function UI:AnchorTooltipToWindow(bar)
+function UI:AnchorTooltipToWindow(bar,tip)
+    tip=tip or GameTooltip
     local f = self.frame
-    if not f then GameTooltip:SetOwner(bar.frame, "ANCHOR_LEFT"); return end
-    GameTooltip:SetOwner(bar.frame, "ANCHOR_NONE")
-    GameTooltip:ClearAllPoints()
+    if not f then tip:SetOwner(bar.frame, "ANCHOR_LEFT"); return end
+    tip:SetOwner(bar.frame, "ANCHOR_NONE")
+    tip:ClearAllPoints()
     local scale = f:GetEffectiveScale()
     local fLeft = (f:GetLeft() or 0) * scale
     local fTop = (f:GetTop() or 0) * scale
     local screenH = GetScreenHeight() * UIParent:GetEffectiveScale()
-    if fLeft > 280 then GameTooltip:SetPoint("TOPRIGHT", f, "TOPLEFT", -4, 0)
-    elseif fTop < screenH * 0.7 then GameTooltip:SetPoint("BOTTOMLEFT", f, "TOPLEFT", 0, 4)
-    else GameTooltip:SetPoint("TOPLEFT", f, "BOTTOMLEFT", 0, -4) end
+    if fLeft > 280 then tip:SetPoint("TOPRIGHT", f, "TOPLEFT", -4, 0)
+    elseif fTop < screenH * 0.7 then tip:SetPoint("BOTTOMLEFT", f, "TOPLEFT", 0, 4)
+    else tip:SetPoint("TOPLEFT", f, "BOTTOMLEFT", 0, -4) end
 end
 
 function UI:ShowTooltip(bar, section)
     local d = bar._data
     if not d then return end
-    self:AnchorTooltipToWindow(bar)
+    -- Live Damage Meter rows can contain opaque names and numbers.  Render them
+    -- through ordinary FontStrings, never GameTooltip:AddLine/AddDoubleLine.
+    if not ns.PrivateTooltip or not ns.PrivateTooltip.GetOpaque then return end
+    local tip=ns.PrivateTooltip:GetOpaque()
+    self:AnchorTooltipToWindow(bar,tip)
 
     local guid = bar._guid
-    local seg = ns.Segments and ns.Segments:GetViewSegment()
+    local seg = bar._detailSegment or (ns.Segments and ns.Segments:GetViewSegment())
     local specID, ilvl, score
 
     if d and d.isAPI then
         specID = d.specID; ilvl = d.ilvl or 0; score = d.score or 0
     elseif seg and seg.isActive then
-        local cache = ns.PlayerInfoCache and ns.PlayerInfoCache[guid] or {}
+        -- Raw combat GUIDs can be secret in 12.x.  Never use one as a normal
+        -- Lua table key or in a conditional comparison; row-carried public
+        -- metadata remains available and is still shown.
+        local guidAccessible = not IsSecret(guid) and type(guid) == "string"
+        local cache = guidAccessible and ns.PlayerInfoCache and ns.PlayerInfoCache[guid] or {}
         specID = (d and d.specID) or cache.specID
         ilvl = (d and d.ilvl) or cache.ilvl or 0
         score = cache.score or 0
-        if guid == ns.state.playerGUID then
-            local specIdx = GetSpecialization()
-            if specIdx then specID = GetSpecializationInfo(specIdx) end
+        if guidAccessible and guid == ns.state.playerGUID then
+            local snapshot = self:GetLocalPlayerSnapshot()
+            specID = snapshot and snapshot.specID or specID
+            ilvl = snapshot and snapshot.ilvl or ilvl
+            score = snapshot and snapshot.score or score
         end
         if d then d.specID = specID; d.ilvl = ilvl; d.score = score end
     else
@@ -340,8 +487,10 @@ function UI:ShowTooltip(bar, section)
         local _, name = GetSpecializationInfoByID(specID)
         if name then specName = name end
     end
-    if specName == "" and d and d.specIconID and d.specIconID > 0 and ns.ICON_TO_SPECID then
-        local sid = ns.ICON_TO_SPECID[d.specIconID]
+    local specIconID = d and d.specIconID
+    if specName == "" and specIconID and not IsSecret(specIconID)
+        and specIconID > 0 and ns.ICON_TO_SPECID then
+        local sid = ns.ICON_TO_SPECID[specIconID]
         if sid then
             local _, name = GetSpecializationInfoByID(sid)
             if name then specName = name end
@@ -350,71 +499,91 @@ function UI:ShowTooltip(bar, section)
 
     local function AddPlayerInfoLines()
         if specName ~= "" or (ilvl and ilvl > 0) or (score and score > 0) then
-            GameTooltip:AddLine(" ")
-            if specName ~= "" then GameTooltip:AddDoubleLine(L.SPEC, specName, 0.7,0.7,0.7, 1,1,1) end
-            if ilvl and ilvl > 0 then GameTooltip:AddDoubleLine(L.AVG_ITEM_LEVEL, tostring(ilvl), 0.7,0.7,0.7, 1,0.85,0) end
+            tip:AddLine(" ")
+            if specName ~= "" then tip:AddDoubleLine(L.SPEC, specName, 0.7,0.7,0.7, 1,1,1) end
+            if ilvl and ilvl > 0 then tip:AddDoubleLine(L.AVG_ITEM_LEVEL, tostring(ilvl), 0.7,0.7,0.7, 1,0.85,0) end
             if score and score > 0 then
                 local color = C_ChallengeMode and C_ChallengeMode.GetDungeonScoreRarityColor and C_ChallengeMode.GetDungeonScoreRarityColor(score)
-                if color then GameTooltip:AddDoubleLine(L.MYTHIC_PLUS_RATING, color:WrapTextInColorCode(tostring(score)), 0.7,0.7,0.7, 1,1,1)
-                else GameTooltip:AddDoubleLine(L.MYTHIC_PLUS_RATING, tostring(score), 0.7,0.7,0.7, 1,0.5,0) end
+                if color then tip:AddDoubleLine(L.MYTHIC_PLUS_RATING, color:WrapTextInColorCode(tostring(score)), 0.7,0.7,0.7, 1,1,1)
+                else tip:AddDoubleLine(L.MYTHIC_PLUS_RATING, tostring(score), 0.7,0.7,0.7, 1,0.5,0) end
             end
         end
     end
 
+    local function AddNameLine(raw,class)
+        if type(raw) == "nil" then return false end
+        local shown
+        if issecretvalue and issecretvalue(raw) then shown=ns:DisplayName(raw) else shown=ns:DisplayName(raw) end
+        if type(shown) == "nil" then return false end
+        if issecretvalue and issecretvalue(shown) then tip:AddLine(shown)
+        else tip:AddLine(ns:GetClassHex(class)..shown.."|r") end
+        return true
+    end
+
     if bar._isDeath then
-        GameTooltip:AddLine(ns:GetClassHex(d.playerClass)..ns:DisplayName(d.playerName)..L.DEATH_TOOLTIP_SUFFIX)
+        AddNameLine(d.playerName,d.playerClass)
         AddPlayerInfoLines()
-        GameTooltip:AddLine(" ")
-        GameTooltip:AddDoubleLine(L.FATAL_SPELL, d.killingAbility or "?", 0.7,0.7,0.7, 1,0.3,0.3)
-        GameTooltip:AddDoubleLine(L.KILLER, ns:DisplayName(d.killerName) or "?", 0.7,0.7,0.7, 1,1,1)
-        if d._incomplete then
-            GameTooltip:AddLine(L.COLORED_DEATH_RECAP_PENDING_DESC)
-        else
-            GameTooltip:AddDoubleLine(L.DAMAGE_BEFORE_DEATH, ns:FormatNumber(d.totalDamageTaken or 0), 0.7,0.7,0.7, 1,0.5,0.5)
-            GameTooltip:AddDoubleLine(L.HEALED_BEFORE_DEATH, ns:FormatNumber(d.totalHealingReceived or 0), 0.7,0.7,0.7, 0.5,1,0.5)
+        tip:AddLine(" ")
+        if type(d.killingAbility) == "string" and d.killingAbility ~= "" then
+            tip:AddDoubleLine(L.FATAL_SPELL, d.killingAbility, 0.7,0.7,0.7, 1,0.3,0.3)
         end
-        GameTooltip:AddLine(" ")
-        GameTooltip:AddLine(L.COLORED_DEATH_LOG_HINT, 0.4,0.4,0.4)
-        GameTooltip:Show()
+        if type(d.killerName) == "string" and d.killerName ~= "" then
+            tip:AddDoubleLine(L.KILLER, ns:DisplayName(d.killerName), 0.7,0.7,0.7, 1,1,1)
+        end
+        if d._incomplete then
+            tip:AddLine(L.COLORED_DEATH_RECAP_PENDING_DESC)
+        end
+        if type(d.totalDamageTaken) == "number" then
+            tip:AddDoubleLine(L.DAMAGE_BEFORE_DEATH, ns:FormatNumber(d.totalDamageTaken), 0.7,0.7,0.7, 1,0.5,0.5)
+        end
+        if type(d.totalHealingReceived) == "number" then
+            tip:AddDoubleLine(L.HEALED_BEFORE_DEATH, ns:FormatNumber(d.totalHealingReceived), 0.7,0.7,0.7, 0.5,1,0.5)
+        end
+        tip:AddLine(" ")
+        tip:AddLine(L.COLORED_DEATH_LOG_HINT, 0.4,0.4,0.4)
+        tip:Show()
         return
     end
 
     if d.isAPI then
-        GameTooltip:AddLine(ns:GetClassHex(bar._classStr)..ns:DisplayName(bar._nameStr or "?").."|r")
+        AddNameLine(bar._nameStr,bar._classStr)
         AddPlayerInfoLines()
-        GameTooltip:AddLine(" ")
-        GameTooltip:AddLine(L.COLORED_API_REALTIME_DATA)
+        tip:AddLine(" ")
+        tip:AddLine(L.COLORED_API_REALTIME_DATA)
+        local amountText = TooltipNumber(d.totalAmount, d.isSecretAmount)
         if COUNT_MODES[bar._mode] then
-            GameTooltip:AddDoubleLine((L[ns.MODE_NAMES[bar._mode] or bar._mode])..L.COUNT_SUFFIX, AbbreviateNumbers(d.totalAmount), 0.7,0.7,0.7, 1,1,1)
+            tip:AddDoubleLine((L[ns.MODE_NAMES[bar._mode] or bar._mode])..L.COUNT_SUFFIX, amountText, 0.7,0.7,0.7, 1,1,1)
         elseif ns.db.display.showPerSecond then
-            GameTooltip:AddDoubleLine(L[ns.MODE_NAMES[bar._mode] or bar._mode], AbbreviateNumbers(d.totalAmount), 0.7,0.7,0.7, 1,1,1)
-            GameTooltip:AddDoubleLine(L.PER_SECONDS, AbbreviateNumbers(d.amountPerSecond), 0.7,0.7,0.7, 1,0.85,0)
+            local rateText = TooltipNumber(d.amountPerSecond, d.isSecretRate)
+            tip:AddDoubleLine(L[ns.MODE_NAMES[bar._mode] or bar._mode], amountText, 0.7,0.7,0.7, 1,1,1)
+            tip:AddDoubleLine(L.PER_SECONDS, rateText, 0.7,0.7,0.7, 1,0.85,0)
         else
-            GameTooltip:AddDoubleLine(L[ns.MODE_NAMES[bar._mode] or bar._mode], AbbreviateNumbers(d.totalAmount), 0.7,0.7,0.7, 1,1,1)
+            tip:AddDoubleLine(L[ns.MODE_NAMES[bar._mode] or bar._mode], amountText, 0.7,0.7,0.7, 1,1,1)
         end
-        GameTooltip:AddLine(" ")
-        GameTooltip:AddLine(L.COLORED_BAR_TOOLTIP_HINT, 0.4,0.4,0.4)
-        GameTooltip:Show()
+        tip:AddLine(" ")
+        tip:AddLine(L.COLORED_BAR_TOOLTIP_HINT, 0.4,0.4,0.4)
+        tip:Show()
         return
     end
 
     local mode = bar._mode or ns.db.display.mode
-    local dur2 = ns.Analysis and ns.Analysis:GetSegmentDuration(seg) or 0
     local mn = L[ns.MODE_NAMES[mode] or mode]
-    GameTooltip:AddLine(ns:GetClassHex(d.class)..ns:DisplayName(d.name or "?").."|r")
+    AddNameLine(d.name,d.class)
     AddPlayerInfoLines()
-    GameTooltip:AddLine(" ")
-    GameTooltip:AddLine(L.SEGMENT)
-    GameTooltip:AddDoubleLine(mn, ns:FormatNumber(d.value), 0.7,0.7,0.7, 1,1,1)
-    if dur2 > 0 and ns.MODE_UNITS[mode] then GameTooltip:AddDoubleLine(ns.MODE_UNITS[mode], string.format("%.1f", d.value/dur2), 0.7,0.7,0.7, 1,0.85,0) end
-    GameTooltip:AddDoubleLine(L.PERCENT, string.format("%.1f%%", d.percent or 0), 0.7,0.7,0.7, 1,1,1)
-    if d.petDamage and d.petDamage > 0 and mode == "damage" then GameTooltip:AddDoubleLine(L.INCL_PET, ns:FormatNumber(d.petDamage), 0.5,0.5,0.5, 0.7,0.7,0.7) end
+    tip:AddLine(" ")
+    tip:AddLine(L.SEGMENT)
+    tip:AddDoubleLine(mn, ns:FormatNumber(d.value), 0.7,0.7,0.7, 1,1,1)
+    if type(d.perSec) == "number" and ns.MODE_UNITS[mode] then
+        tip:AddDoubleLine(ns.MODE_UNITS[mode], ns:FormatNumber(d.perSec), 0.7,0.7,0.7, 1,0.85,0)
+    end
+    tip:AddDoubleLine(L.PERCENT, string.format("%.1f%%", d.percent or 0), 0.7,0.7,0.7, 1,1,1)
+    if d.petDamage and d.petDamage > 0 and mode == "damage" then tip:AddDoubleLine(L.INCL_PET, ns:FormatNumber(d.petDamage), 0.5,0.5,0.5, 0.7,0.7,0.7) end
 
-    GameTooltip:AddLine(" ")
-    if d.deaths and d.deaths > 0 then GameTooltip:AddDoubleLine(L.DEATHS, d.deaths, 0.7,0.7,0.7, 1,0.3,0.3) end
-    if d.interrupts and d.interrupts > 0 then GameTooltip:AddDoubleLine(L.INTERRUPTS, d.interrupts, 0.7,0.7,0.7, 0.3,1,0.3) end
-    if d.dispels and d.dispels > 0 then GameTooltip:AddDoubleLine(L.DISPELS, d.dispels, 0.7,0.7,0.7, 0.3,0.8,1) end
-    GameTooltip:AddLine(" ")
-    GameTooltip:AddLine(L.COLORED_BAR_TOOLTIP_HINT, 0.4,0.4,0.4)
-    GameTooltip:Show()
+    tip:AddLine(" ")
+    if d.deaths and d.deaths > 0 then tip:AddDoubleLine(L.DEATHS, d.deaths, 0.7,0.7,0.7, 1,0.3,0.3) end
+    if d.interrupts and d.interrupts > 0 then tip:AddDoubleLine(L.INTERRUPTS, d.interrupts, 0.7,0.7,0.7, 0.3,1,0.3) end
+    if d.dispels and d.dispels > 0 then tip:AddDoubleLine(L.DISPELS, d.dispels, 0.7,0.7,0.7, 0.3,0.8,1) end
+    tip:AddLine(" ")
+    tip:AddLine(L.COLORED_BAR_TOOLTIP_HINT, 0.4,0.4,0.4)
+    tip:Show()
 end

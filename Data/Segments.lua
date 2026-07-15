@@ -39,6 +39,8 @@ function Segments:NewSegment(segType, name)
         totalDamage      = 0,
         totalHealing     = 0,
         totalDamageTaken = 0,
+        totalDeaths      = 0,
+        totalEnemyDamageTaken = 0,
 
         encounterID   = nil,
         encounterName = nil,
@@ -58,6 +60,10 @@ function Segments:GenLocalID(prefix)
 end
 
 function Segments:NewPlayerData(guid, name, class)
+    local gateway = ns.DamageMeterGateway
+    if gateway and (not gateway:IsAccessible(guid) or not gateway:IsAccessible(name)) then
+        return nil
+    end
     local cache = ns.PlayerInfoCache and ns.PlayerInfoCache[guid] or {}
     local specID = cache.specID
 
@@ -71,8 +77,8 @@ function Segments:NewPlayerData(guid, name, class)
 
     return {
         guid   = guid,
-        name   = ns:ShortName(name) or "?",
-        class  = class or (ns:IsNPCGUID(guid) and "NPC" or "WARRIOR"),
+        name   = type(name) == "string" and name ~= "" and ns:ShortName(name) or nil,
+        class  = type(class) == "string" and class ~= "" and class or nil,
         specID = specID,
         specIconID = nil,
         ilvl   = cache.ilvl or 0,
@@ -94,8 +100,8 @@ end
 function Segments:NewSpellData(spellID, spellName, school)
     return {
         id          = spellID,
-        name        = spellName or "?",
-        school      = school or 1,
+        name        = spellName,
+        school      = school,
         damage      = 0,
         healing     = 0,
         overhealing = 0,
@@ -119,7 +125,9 @@ function Segments:Init()
     self.bossActive  = false
     self.currentBoss = nil
     self._locked     = false
+    self._combatGeneration = self._combatGeneration or 0
     self._preReloadOverallData = nil
+    self._fullRunOverrideSegment = nil
 end
 
 -- ============================================================
@@ -181,8 +189,19 @@ function Segments:ViewLatestHistory()
     return false
 end
 
-function Segments:ResetAll()
+function Segments:ResetAll(onComplete)
+    -- A user reset is an explicit delete transaction.  In combat it is queued
+    -- until the just-finished official session has published, then Blizzard
+    -- Current/Overall and every local/hidden record are cleared atomically.
+    -- The sessions being deleted are deliberately not archived first.
+    if ns.CombatTracker and not self._performingQueuedReset then
+        ns.CombatTracker:QueueUserReset(onComplete)
+        return false, "queued"
+    end
+
     self:Init()
+    if ns.HistoryStore then ns.HistoryStore:Invalidate() end
+    self._combatGeneration = (self._combatGeneration or 0) + 1
     self._preReloadOverallData = nil
 
     if ns.db then
@@ -193,6 +212,7 @@ function Segments:ResetAll()
         -- ★ Reset 时清空黑名单
         ns.db.hiddenSessionIDs   = {}
         ns.db.hiddenLocalIDs     = {}
+        ns.db.fullRunOverrideLocalID = nil
     end
 
     if ns.Analysis then
@@ -204,6 +224,7 @@ function Segments:ResetAll()
     end
 
     wipe(ns.PlayerInfoCache)
+    if ns.PlayerInfo and ns.PlayerInfo.Refresh then ns.PlayerInfo:Refresh(0) end
 
     if ns.DetailView then
         ns.DetailView._lastRenderArgs = nil
@@ -224,25 +245,11 @@ function Segments:ResetAll()
     end
 
     if ns.UI then
-        local function wipeBars(bars)
-            if not bars then return end
-            for _, bar in ipairs(bars) do
-                bar._data     = nil
-                bar._apiData  = nil
-                bar._guid     = nil
-                bar._nameStr  = nil
-                bar._classStr = nil
-                bar._mode     = nil
-                bar._isDeath  = false
-            end
-        end
-        wipeBars(ns.UI.priBars)
-        wipeBars(ns.UI.secBars)
-        wipeBars(ns.UI.ovrPriBars)
-        wipeBars(ns.UI.ovrSecBars)
+        if ns.UI.ResetCellData then ns.UI:ResetCellData() end
         ns.UI._sessionCache = {}
         ns.UI:Refresh()
     end
+    return true
 end
 
 -- ============================================================
@@ -251,6 +258,8 @@ end
 function Segments:OnCombatStart()
     if self.current and self.current.isActive then return end
 
+    self._combatGeneration = (self._combatGeneration or 0) + 1
+
     if ns.DeathTracker and ns.DeathTracker.ClearBuffers then
         ns.DeathTracker:ClearBuffers()
     end
@@ -258,17 +267,23 @@ function Segments:OnCombatStart()
     local zone    = GetZoneText() or ""
     local segName = zone
 
-    if ns.state.inMythicPlus and self.bossActive then
+    if self.bossActive then
         segName = self.currentBoss and self.currentBoss.name or "Boss"
     end
 
     self.current   = self:NewSegment("current", segName)
-
-    -- ★ 战斗开始时如果用户停在 archived/virtual 段则不动,
-    --   只在用户没主动选(viewIndex == nil)或选着 overall 时切回 current
-    if self:IsViewingCurrent() or self:IsViewingOverall() then
-        self:ViewCurrent()
+    if self.bossActive then
+        local boss = self.currentBoss or {}
+        self.current.type = "boss"
+        self.current._isBoss = true
+        self.current.encounterID = boss.id
+        self.current.encounterName = boss.name
+        self.current.difficultyID = boss.difficulty
     end
+
+    -- 新战斗是唯一强制全局视图回到“当前”的生命周期节点。
+    self:ClearFullRunOverride()
+    self:ViewCurrent()
 
     self._locked   = true
 end
@@ -286,16 +301,57 @@ function Segments:OnCombatEnd()
     if ns.DeathTracker then ns.DeathTracker:ClearBuffers() end
     if ns.Analysis then ns.Analysis:InvalidateCache() end
 
-    --   延迟一帧，让暴雪 API session 列表先稳定下来
-    C_Timer.After(0, function()
-        if not ns.state.inCombat and ns.Segments then
-            ns.Segments:ViewLatestHistory()
-            if ns.Analysis then ns.Analysis:InvalidateCache() end
-            if ns.UI and ns.UI:IsVisible() then
-                ns.UI:Refresh()
-            end
+    -- 脱战不改变玩家正在查看的段落；归档事务完成后 CombatTracker
+    -- 会把 current 原子替换为刚结束的官方 session。
+    if ns.CombatTracker and ns.CombatTracker.OnCombatEnded then
+        ns.CombatTracker:OnCombatEnded()
+    end
+    if ns.UI and ns.UI:IsVisible() then ns.UI:Refresh() end
+end
+
+-- 离开副本生成全程段落后，段落选择切到全程，“当前”和“总计”都显示它。
+-- 覆盖 ID 存在角色存档中，因此重载后仍延续，直到新战斗、重置或删除。
+function Segments:SetFullRunOverride(seg)
+    if not seg or not seg._localID then return end
+    ns.db.fullRunOverrideLocalID = seg._localID
+    self._fullRunOverrideSegment = seg
+    self:ViewArchived(seg._localID)
+end
+
+function Segments:ClearFullRunOverride()
+    local id = ns.db and ns.db.fullRunOverrideLocalID
+    local cached = self._fullRunOverrideSegment
+    if ns.db then ns.db.fullRunOverrideLocalID = nil end
+    self._fullRunOverrideSegment = nil
+    -- Instance full-run presentation aliases Overall to the same local segment.
+    -- Once that override is cleared (new combat, hide, delete), the alias must
+    -- disappear too or a hidden full run can remain visible through Total.
+    local overall = self.overall
+    if overall and (overall == cached or (id and overall._localID == id)) then
+        self.overall = self:NewSegment("overall", L.OVERALL)
+    end
+end
+
+function Segments:GetFullRunOverride()
+    local id = ns.db and ns.db.fullRunOverrideLocalID
+    if not id then return nil end
+    local cached = self._fullRunOverrideSegment
+    if cached and cached._localID == id and cached._isMerged then return cached end
+    for _, seg in ipairs(self.history or {}) do
+        if seg._localID == id and seg._isMerged then
+            self._fullRunOverrideSegment = seg
+            return seg
         end
-    end)
+    end
+    self:ClearFullRunOverride()
+    return nil
+end
+
+function Segments:GetTotalDisplaySegment()
+    -- “总计”代表当前有效 Total 数据源。离本全程覆盖期间，即使
+    -- HistoryList 显式选中“总计”，Current/Total 仍同显该全程；
+    -- 下一场战斗清除覆盖后才恢复 Blizzard Overall。
+    return self:GetFullRunOverride() or self.overall
 end
 
 function Segments:OnEncounterStart(encounterID, name, difficultyID, groupSize)
@@ -308,24 +364,30 @@ function Segments:OnEncounterStart(encounterID, name, difficultyID, groupSize)
     }
     ns.state.lastCombatWasBoss = true
 
-    if ns.state.inMythicPlus and ns.db.mythicPlus.autoSegment then
-        if self.current then
-            self.current.type          = "boss"
-            self.current.name          = name or "Boss"
-            self.current.encounterID   = encounterID
-            self.current.encounterName = name
-            self.current.difficultyID  = difficultyID
-        end
+    if self.current and self.current.isActive then
+        self.current.type          = "boss"
+        self.current._isBoss       = true
+        self.current.name          = name or "Boss"
+        self.current.encounterID   = encounterID
+        self.current.encounterName = name
+        self.current.difficultyID  = difficultyID
+    end
+    if ns.CombatTracker and ns.CombatTracker.PersistLifecycleState then
+        ns.CombatTracker:PersistLifecycleState()
     end
 end
 
 function Segments:OnEncounterEnd(encounterID, name, difficultyID, groupSize, success)
     self.bossActive = false
     if self.current then
+        self.current._isBoss       = true
         self.current.success       = (success == 1)
         self.current.encounterName = name
     end
     self.currentBoss = nil
+    if ns.CombatTracker and ns.CombatTracker.PersistLifecycleState then
+        ns.CombatTracker:PersistLifecycleState()
+    end
 end
 
 -- ============================================================
@@ -344,47 +406,71 @@ end
 --   返回当前暴雪 API 中所有 session 的轻量段对象,过滤掉:
 --   - 已经归档进 history 的 sessionID
 --   - 在黑名单里的 sessionID
---   - 时长不足 minCombatTime 的(用户配置项)
 --   注:这里不读 session 数据,只构建元信息壳。数据由 UI 走 API 路径现读。
 -- ============================================================
 function Segments:BuildVirtualSegments()
-    if not C_DamageMeter or not C_DamageMeter.GetAvailableCombatSessions then
-        return {}
+    local gateway = ns.DamageMeterGateway
+    local sessions, sessionsState
+    if gateway then
+        sessions, sessionsState = gateway:GetAvailableSessionsRaw()
     end
-
-    local sessions = C_DamageMeter.GetAvailableCombatSessions()
-    if not sessions or #sessions == 0 then return {} end
+    if not gateway or sessionsState ~= gateway.ACCESSIBLE
+        or type(sessions) ~= "table" or #sessions == 0 then return {} end
 
     -- 收集 history 中所有已归档段的 sessionID(归档段的原始来源)
     local archivedSIDs = {}
+    local rawGeneration = gateway:GetRawGeneration()
     for _, seg in ipairs(self.history) do
-        if seg._sessionID then
+        -- Session IDs are only unique inside one Damage Meter generation and
+        -- may be reused after ResetAllCombatSessions.  A stale local ID must
+        -- never suppress a new official session from virtual History.
+        if seg._sessionID and seg._archiveGeneration == rawGeneration then
             archivedSIDs[seg._sessionID] = true
         end
     end
 
-    local minDur = (ns.db and ns.db.tracking and ns.db.tracking.minCombatTime) or 2
     local result = {}
 
-    -- ★ 战斗中,GetAvailableCombatSessions 的最后一项是正在进行的 live session,
-    --   它已经被底部"当前战斗"常驻项覆盖,不要在虚拟段列表里重复显示。
-    local liveIdx = ns.state.inCombat and #sessions or nil
-
     for i, s in ipairs(sessions) do
-        local sid = s.sessionID
-        local dur = s.durationSeconds or 0
+        local sid, sidState = gateway:ReadField(s, "sessionID")
+        local rawDuration, durationState = gateway:ReadField(s, "durationSeconds")
+        local sessionName, nameState = gateway:ReadField(s, "name")
+        -- sessionID is the identity of a virtual History row.  Optional or
+        -- temporarily protected metadata must never decide whether that row
+        -- exists: Current can already read the same official session, and
+        -- hiding it here would make the fight unreachable after next combat.
+        if sidState ~= gateway.ACCESSIBLE or type(sid) ~= "number" then sid = nil end
+        local durationPublic = durationState == gateway.ACCESSIBLE
+            and type(rawDuration) == "number"
+        local dur = durationPublic and rawDuration or 0
 
         local skip = false
-        if i == liveIdx then skip = true end               -- 战斗中的 live session
+        if not sid then skip = true end
+        -- Group combat state can remain true briefly after this session has
+        -- completed.  Only hide the final row as live when its metadata does
+        -- not yet prove completion; a positive public duration is History.
+        local officiallyCompleted = ns.CombatTracker
+            and ns.CombatTracker.IsCompletedSessionID
+            and ns.CombatTracker:IsCompletedSessionID(sid)
+        local finalSessionStillLive = ns.state.inCombat and i == #sessions
+            and not officiallyCompleted
+            and not (durationState == gateway.ACCESSIBLE
+                and type(rawDuration) == "number" and rawDuration > 0)
+        if finalSessionStillLive then skip = true end
         if archivedSIDs[sid] then skip = true end          -- 已经归档过
         if isSessionIDHidden(sid) then skip = true end     -- 用户黑名单
-        if dur > 0 and dur < minDur then skip = true end   -- 时长太短
-
+        -- Rendering History must never *classify* a raw session.  Classification
+        -- belongs to the instance/M+ lifecycle transaction and is scoped to the
+        -- current raw epoch.  Calling the heuristic here used to let stale reset
+        -- state hide an otherwise ordinary Blizzard session.
+        if ns.CombatTracker and ns.CombatTracker.IsSyntheticSessionID
+            and ns.CombatTracker:IsSyntheticSessionID(sid) then skip = true end
         if not skip then
             local now = GetTime()
+            if nameState ~= gateway.ACCESSIBLE then sessionName = nil end
             local seg = {
                 type      = "virtual",
-                name      = s.name or GetZoneText() or "Combat",
+                name      = sessionName or GetZoneText() or "Combat",
                 _isVirtual = true,
                 _sessionID = sid,
                 _sessionIdx = i,
@@ -393,6 +479,7 @@ function Segments:BuildVirtualSegments()
                 endTime   = now,
                 isActive  = false,
                 _realTime = time() - math.floor(dur or 0),
+                _durationUnavailable = not durationPublic or nil,
                 -- 数据相关字段为空,UI 走 API 路径现读
                 players = {},
                 totalDamage = 0, totalHealing = 0, totalDamageTaken = 0,
@@ -444,7 +531,7 @@ function Segments:GetViewSegment()
 
     -- 总计
     if self:IsViewingOverall() then
-        return self.overall
+        return self:GetTotalDisplaySegment()
     end
 
     -- 已归档(按 localID 反查)
@@ -566,9 +653,7 @@ function Segments:GetViewLabel()
         if ns.MythicPlus then return ns.MythicPlus:FormatSegLabel(seg) end
         return seg.name or L.MYTHIC_PLUS
     elseif seg.type == "boss" then
-        local icon = seg.success == true  and "|cff00ff00[Win]|r "
-                  or seg.success == false and "|cffff0000[Loss]|r " or ""
-        return icon .. (seg.encounterName or seg.name)
+        return seg.name or seg.encounterName or L.COMBAT
     else
         return seg.name or L.CURRENT
     end
@@ -579,15 +664,15 @@ end
 -- ============================================================
 function Segments:GetPlayer(seg, guid, name, flags)
     if not seg or not guid then return nil end
+    local gateway = ns.DamageMeterGateway
+    if gateway and (not gateway:IsAccessible(guid) or not gateway:IsAccessible(name)) then return nil end
 
     local pd = seg.players[guid]
     if not pd then
         local classEng
-        if ns:IsNPCGUID(guid) then
-            classEng = "NPC"
-        else
+        if not ns:IsNPCGUID(guid) then
             local ok, _, ce = pcall(GetPlayerInfoByGUID, guid)
-            classEng = (ok and ce) or "WARRIOR"
+            classEng = ok and ce or nil
         end
         pd = self:NewPlayerData(guid, name, classEng)
         seg.players[guid] = pd
@@ -661,7 +746,8 @@ function Segments:GetHistoryList()
     local list = {}
 
     local merged = self:GetMergedSegmentList()
-    local maxSeg = ns.db and ns.db.tracking and ns.db.tracking.maxSegments or 30
+    local maxSeg = ns.GetHistoryDisplayLimit and ns:GetHistoryDisplayLimit()
+        or (ns.db and ns.db.tracking and (ns.db.tracking.historyDisplayLimit or ns.db.tracking.maxSegments)) or 30
 
     -- 注意:合并列表是"最新→最旧"(因为 sort 用 ae > be)。
     -- 渲染上是"最旧 → 最新 → 当前 → 总计",所以倒着遍历。
@@ -673,10 +759,6 @@ function Segments:GetHistoryList()
         local label
         if seg.type == "mythicplus" then
             label = ns.MythicPlus and ns.MythicPlus:FormatSegLabel(seg) or seg.name
-        elseif seg.type == "boss" then
-            local icon = seg.success == true  and "|cff00ff00[Win]|r "
-                      or seg.success == false and "|cffff4444[Loss]|r " or ""
-            label = icon .. (seg.encounterName or seg.name or "Boss")
         else
             label = seg.name or L.COMBAT
         end
@@ -764,6 +846,7 @@ function Segments:HideSession(entry)
     elseif entry.key == "archived" and entry.localID then
         ns.db.hiddenLocalIDs = ns.db.hiddenLocalIDs or {}
         ns.db.hiddenLocalIDs[entry.localID] = true
+        if ns.db.fullRunOverrideLocalID == entry.localID then self:ClearFullRunOverride() end
     end
 
     -- 如果当前正在看这个段,自动跳走
@@ -804,4 +887,24 @@ function Segments:MigrateHideOnArchive(seg)
         ns.db.hiddenLocalIDs = ns.db.hiddenLocalIDs or {}
         ns.db.hiddenLocalIDs[seg._localID] = true
     end
+end
+
+function Segments:HideLocalID(localID)
+    if not localID or not ns.db then return end
+    ns.db.hiddenLocalIDs = ns.db.hiddenLocalIDs or {}
+    ns.db.hiddenLocalIDs[localID] = true
+    if ns.db.fullRunOverrideLocalID == localID then self:ClearFullRunOverride() end
+end
+
+function Segments:HideWhere(predicate)
+    if type(predicate) ~= "function" then return 0 end
+    local count = 0
+    for _, seg in ipairs(self.history or {}) do
+        if seg._localID and predicate(seg) then
+            self:HideLocalID(seg._localID)
+            count = count + 1
+        end
+    end
+    if ns.Analysis then ns.Analysis:InvalidateCache() end
+    return count
 end

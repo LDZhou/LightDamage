@@ -14,6 +14,8 @@ local L = ns.L
 local HL = {}
 ns.HistoryList = HL
 
+local PREVIEW_STRATA = "FULLSCREEN_DIALOG"
+
 local LIST_W   = 220
 local ITEM_H   = 20
 local MAX_SHOW = 12
@@ -101,6 +103,7 @@ function HL:Build()
     cbTxt:SetTextColor(1, 0.4, 0.4)
 
     clrBtn:SetScript("OnClick", function()
+        if ns.UI and ns.UI._previewContext then self:Hide(); return end
         if not ns.Segments then self:Hide(); return end
         local segs = ns.Segments
         self:Hide()
@@ -151,6 +154,33 @@ function HL:Build()
     self.frame = f; self.scrollFrame = sf; self.scrollChild = child
     self.scrollBar = sb; self.sep = sep; self.pinnedContainer = pinned
     self._histItems = {}; self._pinnedItems = {}; self._open = false
+    self:ApplyPreviewLayer()
+end
+
+function HL:SetPreviewLayer(active)
+    self._previewLayerActive = active and true or false
+    self:ApplyPreviewLayer()
+end
+
+function HL:ApplyPreviewLayer()
+    local f, clickOut = self.frame, self._clickOut
+    if not f or not clickOut then return end
+    if self._previewLayerActive then
+        if not self._prePreviewLayer then
+            self._prePreviewLayer = {
+                frameStrata = f:GetFrameStrata(), frameLevel = f:GetFrameLevel(),
+                clickStrata = clickOut:GetFrameStrata(), clickLevel = clickOut:GetFrameLevel(),
+            }
+        end
+        clickOut:SetFrameStrata(PREVIEW_STRATA); clickOut:SetFrameLevel(self._prePreviewLayer.clickLevel or 99)
+        f:SetFrameStrata(PREVIEW_STRATA); f:SetFrameLevel(self._prePreviewLayer.frameLevel or 100)
+    elseif self._prePreviewLayer then
+        clickOut:SetFrameStrata(self._prePreviewLayer.clickStrata or "HIGH")
+        clickOut:SetFrameLevel(self._prePreviewLayer.clickLevel or 99)
+        f:SetFrameStrata(self._prePreviewLayer.frameStrata or "HIGH")
+        f:SetFrameLevel(self._prePreviewLayer.frameLevel or 100)
+        self._prePreviewLayer = nil
+    end
 end
 
 function HL:Toggle(anchorFrame)
@@ -176,7 +206,8 @@ function HL:Hide()
 end
 
 function HL:Rebuild()
-    local segs = ns.Segments
+    local preview = ns.UI and ns.UI._previewContext and ns.UI._previewContext.model
+    local segs = preview or ns.Segments
     if not segs then self.frame:Hide(); return end
     local list = segs:GetHistoryList()
     if not list or #list == 0 then self.frame:Hide(); return end
@@ -184,16 +215,15 @@ function HL:Rebuild()
     -- 分离常驻项 (current) 和历史区项 (archived/virtual)
     local histData = {}; local pinnedData = {}
     for _, data in ipairs(list) do
-        if data.key == "current" then
+        if data.key == "current" or data.key == "overall" then
             table.insert(pinnedData, data)
         elseif data.key == "archived" or data.key == "virtual" then
             table.insert(histData, data)
         end
-        -- overall 不显示在弹出列表里(原行为一致)
     end
 
     local curKey, curID = segs:GetViewKey()   -- ★ key-based
-    local isLocked = segs._locked
+    local isLocked = preview and true or segs._locked
 
     for i, data in ipairs(histData) do
         local item = self._histItems[i]
@@ -322,6 +352,7 @@ function HL:MakeItem(parent)
 
     -- ★ 删除按钮:不再 table.remove,改为 HideSession 加黑名单
     delBtn:SetScript("OnClick", function()
+        if ns.UI and ns.UI._previewContext then return end
         local data = item.data
         if not data or not ns.Segments then return end
         if ns.Segments._locked then return end
@@ -335,6 +366,13 @@ function HL:MakeItem(parent)
 
     f:SetScript("OnClick", function()
         local data = item.data; if not data then return end
+        local model = ns.UI and ns.UI._previewContext and ns.UI._previewContext.model
+        if model then
+            model:SetViewEntry(data)
+            if ns.Analysis then ns.Analysis:InvalidateCache() end
+            if ns.UI then ns.UI:Refresh() end
+            self:Hide(); return
+        end
         if ns.Segments then
             if data.key == "current" then ns.Segments:ViewCurrent()
             elseif data.key == "overall" then ns.Segments:ViewOverall()

@@ -17,8 +17,14 @@ function Analysis:Init() end
 function Analysis:GetSorted(segment, mode)
     if not segment then return {} end
 
+    self._sortedCacheMap = self._sortedCacheMap or setmetatable({}, {__mode="k"})
+    local byMode = self._sortedCacheMap[segment]
+    if not byMode then byMode = {}; self._sortedCacheMap[segment] = byMode end
+    local modeKey = mode
+    if byMode[modeKey] then return byMode[modeKey] end
+
     -- 敌人承伤走独立数据结构
-    if mode == "damageTaken" and ns.state.damageTakenView == "enemy" then
+    if mode == "enemyDamageTaken" then
         local list = segment.enemyDamageTakenList or {}
         local result = {}
         local totalValue = 0
@@ -27,27 +33,17 @@ function Analysis:GetSorted(segment, mode)
             table.insert(result, {
                 guid     = "creature_" .. (entry.creatureID or i),
                 name     = entry.name,
-                class    = "WARRIOR",
+                class    = "NPC",
                 value    = entry.total,
-                perSec   = entry.perSec or 0,
+                perSec   = entry.perSec,
                 percent  = totalValue > 0 and (entry.total / totalValue * 100) or 0,
                 deaths   = 0, interrupts = 0, dispels = 0,
                 _isEnemy = true,
                 _sources = entry.sources,
             })
         end
+        byMode[modeKey] = result
         return result
-    end
-
-    local viewSuffix = (mode == "damageTaken" and ns.state.damageTakenView == "enemy") and "|enemy" or ""
-    local cacheKey = tostring(segment) .. "|" .. mode .. viewSuffix
-
-    -- 检查两个缓存槽
-    if self._sortedCache and self._sortedCacheKey == cacheKey then
-        return self._sortedCache
-    end
-    if self._sortedCache2 and self._sortedCacheKey2 == cacheKey then
-        return self._sortedCache2
     end
 
     local result     = {}
@@ -57,10 +53,10 @@ function Analysis:GetSorted(segment, mode)
         local value = self:GetPlayerValue(pd, mode, segment)
         if value > 0 then
             -- ★ 读取暴雪存储的每秒值（活跃时间口径，与官方面板一致）
-            local perSec = 0
-            if mode == "damage"         then perSec = pd.damagePerSec      or 0
-            elseif mode == "healing"    then perSec = pd.healingPerSec     or 0
-            elseif mode == "damageTaken" then perSec = pd.damageTakenPerSec or 0
+            local perSec
+            if mode == "damage"         then perSec = pd.damagePerSec
+            elseif mode == "healing"    then perSec = pd.healingPerSec
+            elseif mode == "damageTaken" then perSec = pd.damageTakenPerSec
             end
 
             table.insert(result, {
@@ -90,15 +86,12 @@ function Analysis:GetSorted(segment, mode)
         d.percent = totalValue > 0 and (d.value / totalValue * 100) or 0
     end
 
-    -- 轮替缓存：淘汰最旧的
-    self._sortedCache2    = self._sortedCache
-    self._sortedCacheKey2 = self._sortedCacheKey
-    self._sortedCache     = result
-    self._sortedCacheKey  = cacheKey
+    byMode[modeKey] = result
     return result
 end
 
 function Analysis:InvalidateCache()
+    self._sortedCacheMap = setmetatable({}, {__mode="k"})
     self._sortedCache     = nil
     self._sortedCacheKey  = nil
     self._sortedCache2    = nil
@@ -125,11 +118,17 @@ end
 
 function Analysis:GetPetTotal(pd, mode)
     local total = 0
-    for _, pet in pairs(pd.pets) do
+    for _, pet in pairs(pd.pets or {}) do
         if mode == "damage" then
             total = total + (pet.damage or 0)
         elseif mode == "healing" then
             total = total + (pet.healing or 0)
+        elseif mode == "damageTaken" then
+            total = total + (pet.damageTaken or 0)
+        elseif mode == "interrupts" then
+            total = total + (pet.interrupts or 0)
+        elseif mode == "dispels" then
+            total = total + (pet.dispels or 0)
         end
     end
     return total
@@ -156,7 +155,8 @@ function Analysis:GetSpellBreakdown(segment, guid, mode)
         sourceTable = pd.dispelSpells or {}
     end
 
-    for spellID, sd in pairs(sourceTable) do
+    for spellKey, sd in pairs(sourceTable) do
+        local spellID = sd.spellID or sd.id or spellKey
         local value = 0
         if mode == "damage" then
             value = sd.damage or 0
@@ -171,7 +171,9 @@ function Analysis:GetSpellBreakdown(segment, guid, mode)
         if value > 0 then
             table.insert(result, {
                 spellID     = spellID,
-                name        = sd.name,
+                name        = (sd.isPet and sd.petName and sd.petName ~= "")
+                    and (sd.petName .. ": " .. (sd.name or ("spell:" .. spellID)))
+                    or sd.name,
                 school      = sd.school,
                 value       = value,
                 hits        = sd.hits,
@@ -180,7 +182,10 @@ function Analysis:GetSpellBreakdown(segment, guid, mode)
                 minHit      = sd.minHit ~= 999999999 and sd.minHit or 0,
                 critPercent = sd.hits > 0 and (sd.crits / sd.hits * 100) or 0,
                 overhealing = sd.overhealing,
-                isPet       = false,
+                isPet       = sd.isPet == true,
+                petName     = sd.petName,
+                perSec      = sd.amountPerSecond,
+                hasRate     = type(sd.amountPerSecond) == "number",
             })
             totalValue = totalValue + value
         end
@@ -188,8 +193,17 @@ function Analysis:GetSpellBreakdown(segment, guid, mode)
 
     -- 宠物技能
     if ns.db.tracking.mergePlayerPets then
-        for petGUID, pet in pairs(pd.pets) do
-            for spellID, sd in pairs(pet.spells or {}) do
+        for petGUID, pet in pairs(pd.pets or {}) do
+            local petSpellMap = pet.spells or {}
+            if mode == "damageTaken" then
+                petSpellMap = pet.damageTakenSpells or {}
+            elseif mode == "interrupts" then
+                petSpellMap = pet.interruptSpells or {}
+            elseif mode == "dispels" then
+                petSpellMap = pet.dispelSpells or {}
+            end
+            for spellKey, sd in pairs(petSpellMap) do
+                local spellID = sd.spellID or sd.id or spellKey
                 local value = 0
                 if mode == "damage" then
                     value = sd.damage or 0
@@ -197,6 +211,8 @@ function Analysis:GetSpellBreakdown(segment, guid, mode)
                     value = sd.healing or 0
                 elseif mode == "damageTaken" then
                     value = sd.damage or 0
+                elseif mode == "interrupts" or mode == "dispels" then
+                    value = sd.hits or sd.damage or 0
                 end
 
                 if value > 0 then
@@ -218,8 +234,13 @@ function Analysis:GetSpellBreakdown(segment, guid, mode)
             end
 
             -- 宠物无技能细分时，显示总计行
-            if not next(pet.spells or {}) then
-                local petVal = mode == "damage" and (pet.damage or 0) or (pet.healing or 0)
+            if not next(petSpellMap) then
+                local petVal = 0
+                if mode == "damage" then petVal = pet.damage or 0
+                elseif mode == "healing" then petVal = pet.healing or 0
+                elseif mode == "damageTaken" then petVal = pet.damageTaken or 0
+                elseif mode == "interrupts" then petVal = pet.interrupts or 0
+                elseif mode == "dispels" then petVal = pet.dispels or 0 end
                 if petVal > 0 then
                     table.insert(result, {
                         spellID     = 0,
@@ -249,7 +270,14 @@ end
 function Analysis:GetSegmentDuration(segment)
     if not segment then return 0 end
     if segment.isActive then
-        return C_DamageMeter.GetSessionDurationSeconds(Enum.DamageMeterSessionType.Current) or 0
+        local gateway = ns.DamageMeterGateway
+        local duration, status
+        if gateway then
+            duration, status = gateway:GetSessionDurationRaw(
+                Enum.DamageMeterSessionType.Current)
+        end
+        if gateway and status == gateway.ACCESSIBLE and type(duration) == "number" then return duration end
+        return 0
     end
 
     return segment.duration or 0
@@ -266,12 +294,17 @@ function Analysis:GetFightSummary(segment)
     local totalDeaths   = 0
     local totalInts     = 0
     local totalDisp     = 0
+    local groupDPS, groupHPS, groupDTPS = 0, 0, 0
+    local hasDPS, hasHPS, hasDTPS = false, false, false
 
     for _, pd in pairs(segment.players) do
         playerCount = playerCount + 1
         totalDeaths = totalDeaths + pd.deaths
         totalInts   = totalInts   + pd.interrupts
         totalDisp   = totalDisp   + pd.dispels
+        if type(pd.damagePerSec) == "number" then groupDPS = groupDPS + pd.damagePerSec; hasDPS = true end
+        if type(pd.healingPerSec) == "number" then groupHPS = groupHPS + pd.healingPerSec; hasHPS = true end
+        if type(pd.damageTakenPerSec) == "number" then groupDTPS = groupDTPS + pd.damageTakenPerSec; hasDTPS = true end
     end
 
     return {
@@ -280,9 +313,9 @@ function Analysis:GetFightSummary(segment)
         totalDamage      = segment.totalDamage,
         totalHealing     = segment.totalHealing,
         totalDamageTaken = segment.totalDamageTaken,
-        groupDPS         = dur > 0 and (segment.totalDamage      / dur) or 0,
-        groupHPS         = dur > 0 and (segment.totalHealing     / dur) or 0,
-        groupDTPS        = dur > 0 and (segment.totalDamageTaken / dur) or 0,
+        groupDPS         = hasDPS and groupDPS or nil,
+        groupHPS         = hasHPS and groupHPS or nil,
+        groupDTPS        = hasDTPS and groupDTPS or nil,
         totalDeaths      = totalDeaths,
         totalInterrupts  = totalInts,
         totalDispels     = totalDisp,
@@ -305,7 +338,6 @@ function Analysis:GetOverallPlayerData(guid, mode)
     local pd = ovr.players[guid]
     if not pd then return nil end
 
-    local dur   = self:GetSegmentDuration(ovr)
     local value = self:GetPlayerValue(pd, mode, ovr)
     if value <= 0 then return nil end
 
@@ -314,10 +346,14 @@ function Analysis:GetOverallPlayerData(guid, mode)
         total = total + self:GetPlayerValue(opd, mode, ovr)
     end
 
+    local perSec
+    if mode == "damage" then perSec = pd.damagePerSec
+    elseif mode == "healing" then perSec = pd.healingPerSec
+    elseif mode == "damageTaken" then perSec = pd.damageTakenPerSec end
     return {
         value   = value,
-        perSec  = dur > 0 and (value / dur) or 0,
+        perSec  = perSec,
         percent = total > 0 and (value / total * 100) or 0,
-        dur     = dur,
+        dur     = self:GetSegmentDuration(ovr),
     }
 end

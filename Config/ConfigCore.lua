@@ -9,17 +9,17 @@ local SCROLL_EXTRA_PAD = 150
 local Config = {}
 ns.Config = Config
 
-local PANEL_W   = 500
-local PANEL_H   = 480
-local SIDEBAR_W = 110
+local PANEL_W   = 760
+local PANEL_H   = 560
+local SIDEBAR_W = 130
 local CAT_H     = 34
 
 local categories = {
     {id="layout", labelKey="CATEGORY_LAYOUT",   icon="-"},
     {id="data",   labelKey="CATEGORY_DATA",   icon="-"},
     {id="look",   labelKey="CATEGORY_APPEARANCE",   icon="-"},
-    {id="perf",   labelKey="CATEGORY_PERFORMANCE",   icon="-"},
-    {id="profiles", labelKey="CATEGORY_PROFILES", icon="-"},
+    {id="perf",   labelKey="CATEGORY_BEHAVIOR",   icon="-"},
+    {id="profiles", labelKey="CATEGORY_CONFIG", icon="-"},
 }
 
 -- ============================================================
@@ -46,12 +46,20 @@ end
 
 function Config:GetSharedMediaFonts()
     local chatFont = select(1, ChatFontNormal:GetFont())
-    local result = { {l=L.SYSTEM_DEFAULT, v=STANDARD_TEXT_FONT}, {l=L.DAMAGE_TEXT, v=DAMAGE_TEXT_FONT}, {l=L.CONFIG_CHAT_FONT, v=chatFont}, {l=L.UNIT_NAME, v=UNIT_NAME_FONT} }
-    local builtinPaths = {}; for _, b in ipairs(result) do builtinPaths[b.v] = true end
+    local result, knownPaths = {}, {}
+    local function Add(label, path)
+        if not path or knownPaths[path] then return end
+        knownPaths[path] = true
+        result[#result + 1] = {l=label, v=path}
+    end
+    Add(L.SYSTEM_DEFAULT, STANDARD_TEXT_FONT)
+    Add(L.DAMAGE_TEXT, DAMAGE_TEXT_FONT)
+    Add(L.CONFIG_CHAT_FONT, chatFont)
+    Add(L.UNIT_NAME, UNIT_NAME_FONT)
     local LSM = LibStub and LibStub("LibSharedMedia-3.0", true)
     if LSM then
         local list = LSM:List(LSM.MediaType.FONT)
-        if list then for _, name in ipairs(list) do local path = LSM:Fetch(LSM.MediaType.FONT, name); if path and not builtinPaths[path] then table.insert(result, { l = name, v = path }) end end end
+        if list then for _, name in ipairs(list) do Add(name, LSM:Fetch(LSM.MediaType.FONT, name)) end end
     end
     return result
 end
@@ -125,19 +133,24 @@ function Config:RefreshTitle()
     if self.titleText then
         local pName = LightDamageDB and LightDamageDB.activeProfile or "默认"
         local displayName = (pName == "默认") and L.DEFAULT or pName
-        self.titleText:SetText(string.format(L.MSG_LIGHT_DAMAGE_SETTINGS_FORMAT, displayName))
+        self.titleText:SetText(string.format(L.MSG_LIGHT_DAMAGE_SETTINGS_FORMAT, ns.version or "?", displayName))
     end
 end
 
 function Config:Toggle()
+    if self._previewActive then self:ClosePreview(); return end
     if not self.panel then self:Build() end
-    if self.panel:IsShown() then self.panel:Hide() else self.panel:Show() end
+    if self.panel:IsShown() then self.panel:Hide() else
+        if self.RefreshMediaOptions then self:RefreshMediaOptions() end
+        self.panel:Show()
+    end
 end
 
 -- ============================================================
 -- Build 主面板
 -- ============================================================
 function Config:Build()
+    self.settingRefreshers = {}
     local p = CreateFrame("Frame", "LightDamageConfig", UIParent, "BackdropTemplate")
     p:SetSize(PANEL_W, PANEL_H); p:SetPoint("CENTER")
     p:SetFrameStrata("DIALOG"); p:SetFrameLevel(100)
@@ -147,7 +160,7 @@ function Config:Build()
     p:Hide(); self.panel = p
     p:SetScale(ns.db and ns.db.window and ns.db.window.configScale or 1.0)
 
-    local tc = ns.db.window.themeColor or {0.08, 0.08, 0.12, 1}
+    local tc = ns.db.window.themeColor or {0, 0, 0, 1}
     local title = CreateFrame("Frame", nil, p)
     title:SetHeight(30); title:SetPoint("TOPLEFT", 0, 0); title:SetPoint("TOPRIGHT", 0, 0)
     title:EnableMouse(true); title:RegisterForDrag("LeftButton")
@@ -179,11 +192,12 @@ function Config:Build()
         local btn = CreateFrame("Button", nil, sidebar); btn:SetSize(SIDEBAR_W, CAT_H); btn:SetPoint("TOPLEFT", sidebar, "TOPLEFT", 0, -((i-1)*CAT_H))
         btn.activeBg = btn:CreateTexture(nil, "BORDER"); btn.activeBg:SetAllPoints(); btn.activeBg:SetColorTexture(0, 0.65, 1, 0.15); btn.activeBg:Hide()
         local icon = btn:CreateFontString(nil, "OVERLAY"); icon:SetFont(STANDARD_TEXT_FONT, 13, "OUTLINE"); icon:SetPoint("LEFT", 14, 0); icon:SetText(cat.icon); icon:SetTextColor(0.5, 0.5, 0.5)
-        local label = btn:CreateFontString(nil, "OVERLAY"); label:SetFont(STANDARD_TEXT_FONT, 11, ""); label:SetPoint("LEFT", icon, "RIGHT", 8, 0); label:SetText(L[cat.labelKey]); label:SetTextColor(0.6, 0.6, 0.6)
+        local label = btn:CreateFontString(nil, "OVERLAY"); label:SetFont(STANDARD_TEXT_FONT, 11, ""); label:SetPoint("LEFT", icon, "RIGHT", 8, 0); label:SetPoint("RIGHT",btn,"RIGHT",-6,0); label:SetJustifyH("LEFT"); label:SetWordWrap(false); if label.SetMaxLines then label:SetMaxLines(1) end; label:SetText(L[cat.labelKey]); label:SetTextColor(0.6, 0.6, 0.6)
+        local widthGetter=label.GetUnboundedStringWidth or label.GetStringWidth; local ok,labelW=pcall(widthGetter,label); if ok and type(labelW)=="number" and labelW>label:GetWidth() then label:SetFont(STANDARD_TEXT_FONT,10,"") end
         btn.icon = icon; btn.label = label
         btn:SetScript("OnClick", function() self:ShowPage(cat.id) end)
-        btn:SetScript("OnEnter", function() if self.activeCat ~= cat.id then label:SetTextColor(1,1,1); icon:SetTextColor(0.8,0.8,0.8) end end)
-        btn:SetScript("OnLeave", function() if self.activeCat ~= cat.id then label:SetTextColor(0.6,0.6,0.6); icon:SetTextColor(0.5,0.5,0.5) end end)
+        btn:SetScript("OnEnter", function(self2) if self.activeCat ~= cat.id then label:SetTextColor(1,1,1); icon:SetTextColor(0.8,0.8,0.8) end; if label.IsTruncated and label:IsTruncated() then GameTooltip:SetOwner(self2,"ANCHOR_RIGHT"); GameTooltip:SetText(L[cat.labelKey]); GameTooltip:Show() end end)
+        btn:SetScript("OnLeave", function() if self.activeCat ~= cat.id then label:SetTextColor(0.6,0.6,0.6); icon:SetTextColor(0.5,0.5,0.5) end; GameTooltip:Hide() end)
         self.catBtns[cat.id] = btn
 
         local page = CreateFrame("ScrollFrame", nil, content)
@@ -204,14 +218,20 @@ function Config:Build()
 
     self:BuildLayoutPage(); self:BuildDataPage(); self:BuildLookPage(); self:BuildPerfPage(); self:BuildProfilesPage()
     self:ShowPage("layout")
-    self:BuildPreviewBtn(); self:BuildSceneSwitcher()
-    p:HookScript("OnHide", function() self:ClosePreview() end)
+    self:BuildPreviewBtn(); self:BuildConfigScaleControl(); self:BuildSceneSwitcher()
+    p:HookScript("OnHide", function()
+        if self._previewActive then self:ClosePreview() end
+        if self._openDropdownBlocker then
+            self._openDropdownBlocker:Hide()
+            self._openDropdownBlocker = nil
+        end
+    end)
     tinsert(UISpecialFrames, "LightDamageConfig")
 end
 
 function Config:BuildPreviewBtn()
     local titleFrame = self._configTitle; if not titleFrame then return end
-    local btn = CreateFrame("Button", nil, titleFrame); btn:SetSize(52, 22); btn:SetPoint("RIGHT", titleFrame, "RIGHT", -32, 0)
+    local btn = CreateFrame("Button", nil, titleFrame); btn:SetSize(82, 22); btn:SetPoint("RIGHT", titleFrame, "RIGHT", -32, 0)
     self:FillBg(btn, 0.05, 0.20, 0.35, 1); self:CreateBorder(btn, 0.1, 0.45, 0.75, 1)
     local bt = btn:CreateFontString(nil, "OVERLAY"); bt:SetFont(STANDARD_TEXT_FONT, 10, "OUTLINE"); bt:SetPoint("CENTER"); bt:SetText(L.PREVIEW); bt:SetTextColor(0.4, 0.85, 1)
     btn:SetScript("OnClick", function() self:TogglePreview() end)
@@ -220,7 +240,39 @@ function Config:BuildPreviewBtn()
     self._previewBtn = btn; self._previewBtnT = bt
 end
 
+function Config:ApplyConfigScale(value)
+    value=math.floor(math.max(.5,math.min(2,tonumber(value) or 1))*20+.5)/20
+    ns.db.window.configScale=value
+    if self.panel then self.panel:SetScale(value) end
+    if self._pvSwitcher then self._pvSwitcher:SetScale(value) end
+    self:RefreshConfigScaleControl()
+end
+
+function Config:RefreshConfigScaleControl()
+    if self._configScaleText then self._configScaleText:SetFormattedText("%d%%",math.floor(((ns.db.window.configScale or 1)*100)+.5)) end
+end
+
+function Config:BuildConfigScaleControl()
+    local titleFrame,preview=self._configTitle,self._previewBtn; if not titleFrame or not preview then return end
+    local group=CreateFrame("Frame",nil,titleFrame); group:SetSize(108,22); group:SetPoint("RIGHT",preview,"LEFT",-8,0); group:EnableMouseWheel(true)
+    local function compactButton(width,label,onClick,tooltip)
+        local b=CreateFrame("Button",nil,group); b:SetSize(width,22); self:FillBg(b,.06,.09,.13,1); self:CreateBorder(b,.2,.32,.44,1)
+        local t=b:CreateFontString(nil,"OVERLAY"); t:SetFont(STANDARD_TEXT_FONT,10,"OUTLINE"); t:SetPoint("CENTER"); t:SetText(label); t:SetTextColor(.75,.82,.9)
+        b:SetScript("OnClick",onClick)
+        b:SetScript("OnEnter",function(frame) t:SetTextColor(.3,.85,1); GameTooltip:SetOwner(frame,"ANCHOR_BOTTOM"); GameTooltip:AddLine(tooltip or L.CONFIG_PANEL_SCALE,1,1,1); GameTooltip:Show() end)
+        b:SetScript("OnLeave",function() t:SetTextColor(.75,.82,.9); GameTooltip:Hide() end)
+        return b,t
+    end
+    local minus=compactButton(24,"-",function() self:ApplyConfigScale((ns.db.window.configScale or 1)-.05) end); minus:SetPoint("LEFT")
+    local value,valueText=compactButton(56,"",function() self:ApplyConfigScale(1) end,L.CONFIG_SCALE_RESET_HINT); value:SetPoint("LEFT",minus,"RIGHT",2,0)
+    local plus=compactButton(24,"+",function() self:ApplyConfigScale((ns.db.window.configScale or 1)+.05) end); plus:SetPoint("LEFT",value,"RIGHT",2,0)
+    group:SetScript("OnMouseWheel",function(_,delta) self:ApplyConfigScale((ns.db.window.configScale or 1)+(delta>0 and .05 or -.05)) end)
+    self._configScaleControl=group; self._configScaleText=valueText; self:RefreshConfigScaleControl()
+    if self.titleText then self.titleText:SetPoint("RIGHT",group,"LEFT",-8,0); self.titleText:SetJustifyH("LEFT"); self.titleText:SetWordWrap(false) end
+end
+
 function Config:ShowPage(id)
+    if self._layoutStudio and self._layoutStudio.choiceMenu then self._layoutStudio.choiceMenu:Hide() end
     self.activeCat = id
     for cid, btn in pairs(self.catBtns) do
         if cid == id then btn.activeBg:Show(); btn.icon:SetTextColor(0, 0.75, 1); btn.label:SetTextColor(1, 1, 1)
@@ -228,6 +280,7 @@ function Config:ShowPage(id)
     end
     for pid, page in pairs(self.pages) do if pid == id then page.scroll:Show() else page.scroll:Hide() end end
     if id == "profiles" then self:RefreshProfilesPage() end
+    if id == "layout" and self.RefreshLayoutStudio then self:RefreshLayoutStudio() end
     self:UpdatePageScroll(id)
 end
 
@@ -242,7 +295,17 @@ end
 function Config:RefreshUI()
     if self.colorSwatches then for _, updateFn in ipairs(self.colorSwatches) do updateFn() end end
     if ns.UI and ns.UI.frame and ns.UI.frame:IsShown() then ns.UI:Layout() end
+    if self.RefreshLayoutStudio then self:RefreshLayoutStudio() end
     if self._previewFrame and self._previewFrame:IsShown() then self:RefreshPreviewTheme(); self:UpdatePreviewScene(self._previewSceneId or "mplus") end
+end
+
+function Config:RefreshSettingsVisuals()
+    self._refreshingSettings = true
+    for _, refresh in ipairs(self.settingRefreshers or {}) do pcall(refresh) end
+    self._refreshingSettings = false
+    if self.colorSwatches then for _, updateFn in ipairs(self.colorSwatches) do pcall(updateFn) end end
+    self:RefreshConfigScaleControl()
+    if self.RefreshLayoutStudio then self:RefreshLayoutStudio() end
 end
 
 -- ============================================================
@@ -261,6 +324,8 @@ function Config:Check(p, label, y, getter, setter, tooltipText)
     local btn = CreateFrame("Button", nil, p); btn:SetSize(20, 14); btn:SetPoint("TOPLEFT", 4, y)
     self:FillBg(btn, 0.1, 0.1, 0.15, 1); self:CreateBorder(btn, 0.3, 0.3, 0.4, 1)
     local fill = btn:CreateTexture(nil, "ARTWORK"); fill:SetPoint("TOPLEFT", 3, -3); fill:SetPoint("BOTTOMRIGHT", -3, 3); fill:SetColorTexture(0, 0.75, 1, 1); fill:SetShown(getter())
+    local function RefreshValue() fill:SetShown(getter() and true or false) end
+    if not self._suppressSettingRefreshers then table.insert(self.settingRefreshers or {}, RefreshValue) end
     local hl = btn:CreateTexture(nil, "HIGHLIGHT"); hl:SetAllPoints(); hl:SetColorTexture(1, 1, 1, 0.1)
     local t = btn:CreateFontString(nil, "OVERLAY"); t:SetFont(STANDARD_TEXT_FONT, 11, ""); t:SetPoint("LEFT", btn, "RIGHT", 8, 0); t:SetTextColor(0.8, 0.8, 0.8); t:SetText(label)
     btn:SetScript("OnClick", function() local nxt = not getter(); fill:SetShown(nxt); setter(nxt) end)
@@ -285,7 +350,9 @@ function Config:Slider(p, label, y, mn, mx, step, getter, setter, isPercent)
     s:SetScript("OnLeave", function() thumb:SetVertexColor(0, 0.75, 1, 1); fill:SetColorTexture(0, 0.75, 1, 1) end)
     s:SetMinMaxValues(mn, mx); s:SetValueStep(step); s:SetObeyStepOnDrag(true); s:SetValue(getter())
     local function upd(v) if isPercent then vt:SetText(string.format("%.0f%%", v * 100)) else vt:SetText(step < 1 and string.format("%.2f", v) or string.format("%.0f", v)) end end
-    upd(getter()); s:SetScript("OnValueChanged", function(_, v) setter(v); upd(v) end); return y - 26
+    upd(getter()); s:SetScript("OnValueChanged", function(_, v) if not self._refreshingSettings then setter(v) end; upd(v) end)
+    if not self._suppressSettingRefreshers then table.insert(self.settingRefreshers or {}, function() local v=getter(); s:SetValue(v); upd(v) end) end
+    return y - 26
 end
 
 function Config:Dropdown(p, label, y, opts, getter, setter)
@@ -294,19 +361,45 @@ function Config:Dropdown(p, label, y, opts, getter, setter)
     y = y - 16
     local btn = CreateFrame("Button", nil, p); btn:SetSize(220, 20); btn:SetPoint("TOPLEFT", 6, y); self:FillBg(btn, 0.1, 0.1, 0.15, 1); self:CreateBorder(btn, 0.3, 0.3, 0.4, 1)
     local bt = btn:CreateFontString(nil, "OVERLAY"); bt:SetFont(STANDARD_TEXT_FONT, 11, ""); bt:SetPoint("LEFT", 6, 0); bt:SetTextColor(0.9, 0.9, 0.9)
-    local arrow = btn:CreateTexture(nil, "OVERLAY"); arrow:SetSize(12, 12); arrow:SetPoint("RIGHT", -6, 0)
-    arrow:SetTexture("Interface\\AddOns\\"..addonName.."\\Textures\\btn_expand.tga"); arrow:SetVertexColor(0.7, 0.7, 0.7)
+    local arrow = btn:CreateFontString(nil, "OVERLAY"); arrow:SetFont(STANDARD_TEXT_FONT, 10, "OUTLINE"); arrow:SetPoint("RIGHT", -7, 0); arrow:SetText("v"); arrow:SetTextColor(0.7, 0.7, 0.7)
     local hlBtn = btn:CreateTexture(nil, "HIGHLIGHT"); hlBtn:SetAllPoints(); hlBtn:SetColorTexture(1, 1, 1, 0.05)
-    local function refreshText() local cur = getter(); for _, o in ipairs(opts) do if o.v == cur then bt:SetText(o.l); return end end; bt:SetText(opts[1] and opts[1].l or "") end; refreshText()
+    local function refreshText()
+        local cur = getter()
+        for _, o in ipairs(opts) do if o.v == cur then bt:SetText(o.l); btn._missingValue=nil; return end end
+        btn._missingValue=cur
+        local fmt=L.CONFIG_OPTION_UNAVAILABLE_FORMAT or "Unavailable: %s"
+        bt:SetText(string.format(fmt,tostring(cur or "?")))
+    end
+    refreshText()
+    if not self._suppressSettingRefreshers then table.insert(self.settingRefreshers or {}, refreshText) end
 
-    local blocker = CreateFrame("Button", nil, p); blocker:SetAllPoints(UIParent); blocker:SetFrameStrata("TOOLTIP"); blocker:SetFrameLevel(90); blocker:Hide()
-    blocker:SetScript("OnClick", function() blocker:Hide(); arrow:SetTexture("Interface\\AddOns\\"..addonName.."\\Textures\\btn_expand.tga") end)
+    local popupParent = self.panel or p
+    local blocker = CreateFrame("Button", nil, popupParent); blocker:SetAllPoints(UIParent); blocker:SetFrameStrata("TOOLTIP")
+    -- The config panel itself sits at level 100.  A fixed level of 90 let the
+    -- controls created after this dropdown draw through the open menu.  Keep
+    -- the full-screen click blocker and every menu child above the owning
+    -- panel, regardless of future panel-level changes.
+    local menuBaseLevel = math.max(
+        (self.panel and self.panel:GetFrameLevel() or p:GetFrameLevel() or 0) + 100,
+        200)
+    blocker:SetFrameLevel(menuBaseLevel)
+    if blocker.SetToplevel then blocker:SetToplevel(true) end
+    blocker:Hide()
+    local function CloseDropdown()
+        blocker:Hide(); arrow:SetText("v")
+        if self._openDropdownBlocker == blocker then self._openDropdownBlocker = nil end
+    end
+    blocker:SetScript("OnClick", CloseDropdown)
+    blocker:SetScript("OnHide", function()
+        arrow:SetText("v")
+        if self._openDropdownBlocker == blocker then self._openDropdownBlocker = nil end
+    end)
     local visibleCount = math.min(#opts, MAX_VISIBLE); local listH = visibleCount * ITEM_H + 4; local needScroll = #opts > MAX_VISIBLE
-    local list = CreateFrame("Frame", nil, blocker); list:SetPoint("TOPLEFT", btn, "BOTTOMLEFT", 0, -2); list:SetSize(220, listH); list:SetFrameLevel(95)
+    local list = CreateFrame("Frame", nil, blocker); list:SetPoint("TOPLEFT", btn, "BOTTOMLEFT", 0, -2); list:SetSize(220, listH); list:SetFrameLevel(menuBaseLevel + 10)
     self:FillBg(list, 0.08, 0.08, 0.1, 1); self:CreateBorder(list, 0.3, 0.3, 0.4, 1)
-    local sf = CreateFrame("ScrollFrame", nil, list); sf:SetPoint("TOPLEFT", 2, -2)
+    local sf = CreateFrame("ScrollFrame", nil, list); sf:SetPoint("TOPLEFT", 2, -2); sf:SetFrameLevel(menuBaseLevel + 11)
     if needScroll then sf:SetPoint("BOTTOMRIGHT", -6, 2) else sf:SetPoint("BOTTOMRIGHT", -2, 2) end
-    local child = CreateFrame("Frame", nil, sf); child:SetWidth(needScroll and 208 or 216); child:SetHeight(#opts * ITEM_H); sf:SetScrollChild(child)
+    local child = CreateFrame("Frame", nil, sf); child:SetWidth(needScroll and 208 or 216); child:SetHeight(#opts * ITEM_H); child:SetFrameLevel(menuBaseLevel + 12); sf:SetScrollChild(child)
     local sb
     if needScroll then
         sb = CreateFrame("Slider", nil, list); sb:SetWidth(4); sb:SetPoint("TOPRIGHT", list, "TOPRIGHT", -2, -2); sb:SetPoint("BOTTOMRIGHT", list, "BOTTOMRIGHT", -2, 2)
@@ -318,22 +411,39 @@ function Config:Dropdown(p, label, y, opts, getter, setter)
         list:EnableMouseWheel(true); list:SetScript("OnMouseWheel", function(_, delta) local cur = sb:GetValue(); local _, mx = sb:GetMinMaxValues(); sb:SetValue(math.max(0, math.min(mx, cur - delta * ITEM_H * 2))) end)
     end
     btn.items = {}
-    for i, o in ipairs(opts) do
-        local item = CreateFrame("Button", nil, child); item:SetHeight(ITEM_H)
+    local function EnsureItem(i)
+        if btn.items[i] then return btn.items[i] end
+        local item = CreateFrame("Button", nil, child); item:SetHeight(ITEM_H); item:SetFrameLevel(menuBaseLevel + 13)
         item:SetPoint("TOPLEFT", child, "TOPLEFT", 0, -((i-1) * ITEM_H)); item:SetPoint("TOPRIGHT", child, "TOPRIGHT", 0, -((i-1) * ITEM_H))
         local hl = item:CreateTexture(nil, "HIGHLIGHT"); hl:SetAllPoints(); hl:SetColorTexture(0, 0.75, 1, 0.2)
-        local itx = item:CreateFontString(nil, "OVERLAY"); itx:SetFont(STANDARD_TEXT_FONT, 11, ""); itx:SetPoint("LEFT", 6, 0); itx:SetTextColor(0.8, 0.8, 0.8); itx:SetText(o.l)
-        item:SetScript("OnClick", function() setter(o.v); bt:SetText(o.l); blocker:Hide(); arrow:SetTexture("Interface\\AddOns\\"..addonName.."\\Textures\\btn_expand.tga") end)
+        local itx = item:CreateFontString(nil, "OVERLAY"); itx:SetFont(STANDARD_TEXT_FONT, 11, ""); itx:SetPoint("LEFT", 6, 0); itx:SetPoint("RIGHT",-4,0); itx:SetWordWrap(false); itx:SetTextColor(0.8, 0.8, 0.8)
         if needScroll then item:EnableMouseWheel(true); item:SetScript("OnMouseWheel", function(_, delta) local cur = sb:GetValue(); local _, mx = sb:GetMinMaxValues(); sb:SetValue(math.max(0, math.min(mx, cur - delta * ITEM_H * 2))) end) end
-        table.insert(btn.items, {btn = item, txt = itx})
+        local row={btn=item,txt=itx}; btn.items[i]=row; return row
+    end
+    local function BindItem(i,o)
+        local row=EnsureItem(i); row.txt:SetText(o.l)
+        row.btn:SetScript("OnClick", function() setter(o.v); bt:SetText(o.l); btn._missingValue=nil; CloseDropdown() end)
+        row.btn:Show()
+    end
+    for i, o in ipairs(opts) do
+        BindItem(i,o)
     end
     btn.UpdateOpts = function(newOpts)
         opts = newOpts; local newNeedScroll = #opts > MAX_VISIBLE; local newVisCount = math.min(#opts, MAX_VISIBLE); list:SetHeight(newVisCount * ITEM_H + 4); child:SetHeight(#opts * ITEM_H)
         if sb then if newNeedScroll then sb:SetMinMaxValues(0, math.max(0, (#opts - MAX_VISIBLE) * ITEM_H)); sb:SetValue(0); sb:Show() else sb:Hide(); sb:SetValue(0) end end
-        for i, o in ipairs(opts) do local row = btn.items[i]; if row then row.txt:SetText(o.l); row.btn:SetScript("OnClick", function() setter(o.v); bt:SetText(o.l); blocker:Hide(); arrow:SetTexture("Interface\\AddOns\\"..addonName.."\\Textures\\btn_expand.tga") end); row.btn:Show() end end
+        for i, o in ipairs(opts) do BindItem(i,o) end
         for i = #opts + 1, #btn.items do btn.items[i].btn:Hide() end; refreshText()
     end
-    btn:SetScript("OnClick", function() if blocker:IsShown() then blocker:Hide(); arrow:SetTexture("Interface\\AddOns\\"..addonName.."\\Textures\\btn_expand.tga") else blocker:Show(); arrow:SetTexture("Interface\\AddOns\\"..addonName.."\\Textures\\btn_collapse.tga"); if sb then sb:SetValue(0) end end end)
+    btn:SetScript("OnClick", function()
+        if blocker:IsShown() then CloseDropdown() else
+            if self._openDropdownBlocker and self._openDropdownBlocker ~= blocker then
+                self._openDropdownBlocker:Hide()
+            end
+            self._openDropdownBlocker = blocker
+            blocker:Show(); if blocker.Raise then blocker:Raise() end
+            arrow:SetText("^"); if sb then sb:SetValue(0) end
+        end
+    end)
     return y - 28, btn
 end
 

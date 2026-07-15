@@ -24,7 +24,7 @@ function Config:BuildLayoutPage()
 
     local posesLR = { {l=L.LEFT, v=1}, {l=L.RIGHT, v=2} }; local posesTB = { {l=L.TOP, v=1}, {l=L.BOTTOM, v=2} }
     local dirs = { {l=L.CONFIG_LEFT_RIGHT_SPLIT, v="LR"}, {l=L.CONFIG_TOP_BOTTOM_SPLIT, v="TB"} }
-    local allModes = { {l=L.DAMAGE, v="damage"}, {l=L.HEALING, v="healing"}, {l=L.DAMAGE_TAKEN, v="damageTaken"}, {l=L.DEATHS, v="deaths"}, {l=L.INTERRUPTS, v="interrupts"}, {l=L.DISPELS, v="dispels"} }
+    local allModes = { {l=L.DAMAGE, v="damage"}, {l=L.HEALING, v="healing"}, {l=L.DAMAGE_TAKEN, v="damageTaken"}, {l=L.DEATHS, v="deaths"}, {l=L.ENEMY_DAMAGE_TAKEN, v="enemyDamageTaken"}, {l=L.INTERRUPTS, v="interrupts"}, {l=L.DISPELS, v="dispels"} }
 
     local sec2 = CreateFrame("Frame", nil, inner); sec2:SetWidth(inner:GetWidth()); local y2 = 0
     y2 = self:H(sec2, L.CONFIG_CURRENT_AND_OVERALL_WINDOW, y2)
@@ -116,7 +116,47 @@ end
 -- ============================================================
 -- Data 页
 -- ============================================================
-function Config:BuildDataPage()
+function Config:BuildBottomBarSettings(page)
+    local y = 0
+    y = self:H(page, L.BOTTOM_BAR_SETTINGS, y)
+    y = self:Desc(page, y, L.BOTTOM_BAR_SETTINGS_DESC)
+    y = self:Desc(page, y, L.BOTTOM_BAR_OVERVIEW_ALWAYS)
+    local function BottomModes()
+        ns.db.display.bottomBarModes=type(ns.db.display.bottomBarModes)=="table" and ns.db.display.bottomBarModes or {}
+        return ns.db.display.bottomBarModes
+    end
+    local function RefreshBottomBar()
+        if ns.UI then
+            if ns.UI.CloseOtherTabMenu then ns.UI:CloseOtherTabMenu() end
+            ns.UI:LayoutTabs(); ns.UI:Refresh()
+        end
+    end
+    y = self:Dropdown(page, L.BOTTOM_BAR_LABEL_STYLE, y, {
+            {l=L.TAB_LABEL_STYLE_FULL, v="full"},
+            {l=L.TAB_LABEL_STYLE_SHORT, v="short"},
+        },
+        function() return ns.db.display.tabLabelStyle=="short" and "short" or "full" end,
+        function(v)
+            ns.db.display.tabLabelStyle=v
+            ns.db.display.useShortTabs=(v=="short")
+            RefreshBottomBar()
+        end)
+    y = y - 8
+    for _,mode in ipairs(ns.MODE_ORDER) do
+        local m=mode
+        y = self:Check(page, L[ns.MODE_NAMES[m] or m], y,
+            function() return BottomModes()[m] == true end,
+            function(v) BottomModes()[m]=v and true or false; RefreshBottomBar() end)
+    end
+    y = y - 8
+    y = self:Desc(page, y, L.CONFIG_WHEN_ENABLED_DAMAGE_DAMAGE_HEAL_HEAL_TAKEN_TKN_DEATHS_DTH_INTERR)
+    return y
+end
+
+-- Kept only as a migration/reference implementation. The active data page is
+-- built by ConfigLayouts.lua; giving this legacy builder a distinct name
+-- prevents load order from silently replacing either implementation again.
+function Config:BuildLegacyDataPage()
     local inner = self.pages["data"].inner; local y = 0
     y = self:H(inner, L.CONFIG_DATA_DISPLAY_FORMAT, y)
     y = self:Check(inner, L.CONFIG_SHOW_TOTAL_DAMAGE_AND_DPS, y, function() return ns.db.display.showPerSecond end, function(v) ns.db.display.showPerSecond=v; self:RefreshUI() end)
@@ -156,14 +196,10 @@ function Config:BuildDataPage()
     dataCleanSub:SetHeight(math.abs(yc))
     self._dataCleanSub = dataCleanSub; self._dataSecClean = secClean; self._dataSecCleanBaseH = math.abs(yClean)
 
-    -- Section: 剩余选项
+    -- Bottom-bar shortcuts are data navigation, so they live with data options.
     local secRest = CreateFrame("Frame", nil, inner); secRest:SetWidth(inner:GetWidth()); local yRest = 0
-    yRest = yRest - 12
-    yRest = self:Check(secRest, L.USE_SHORT_TAB_LABELS, yRest,
-        function() return ns.db.display.useShortTabs end,
-        function(v) ns.db.display.useShortTabs = v; if ns.UI then ns.UI:LayoutTabs(); ns.UI:Refresh() end end)
-    yRest = self:Desc(secRest, yRest, L.CONFIG_WHEN_ENABLED_DAMAGE_DAMAGE_HEAL_HEAL_TAKEN_TKN_DEATHS_DTH_INTERR)
-    secRest:SetHeight(math.abs(yRest))
+    yRest = self:BuildBottomBarSettings(secRest)
+    secRest:SetHeight(math.abs(yRest) + 8)
     self._dataSecRest = secRest
 
     self:UpdateDataVisibility()
@@ -201,6 +237,7 @@ end
 -- Look 页
 -- ============================================================
 function Config:ShowLookSubPage(id)
+    if not (self.lookSubPages and self.lookSubPages[id]) then id="general" end
     self.activeLookSubPage = id
     for sid, page in pairs(self.lookSubPages or {}) do
         if sid == id then page:Show() else page:Hide() end
@@ -225,10 +262,9 @@ function Config:BuildLookSubTabs(inner)
         {id="fonts",    label=L.LOOK_TAB_FONTS},
         {id="bars",     label=L.LOOK_TAB_BARS},
         {id="details",  label=L.LOOK_TAB_DETAILS},
-        {id="behavior", label=L.LOOK_TAB_BEHAVIOR},
     }
     self.lookSubBtns = {}
-    local w, gap = 56, 2
+    local w, gap = 78, 2
     for i, tab in ipairs(tabs) do
         local btn = CreateFrame("Button", nil, inner)
         btn:SetSize(w, 22)
@@ -253,38 +289,51 @@ end
 
 function Config:AddFontSettingsBlock(parent, y, title, fields, defaultSize, refreshFn)
     y = self:H(parent, title, y)
-    local fonts = self._lookFonts or self:GetSharedMediaFonts()
-    local outlines = self._lookOutlines or self:GetSharedMediaFontOutlines()
-    local db = fields.db or ns.db.display
-    local function getFont() return db[fields.font] or db.font or STANDARD_TEXT_FONT end
-    local function getSize() return db[fields.size] or defaultSize end
-    local function getOutline() return db[fields.outline] or db.fontOutline or "OUTLINE" end
-    local function getShadow() return db[fields.shadow] or false end
+    local fonts = self:GetSharedMediaFonts()
+    local outlines = self:GetSharedMediaFontOutlines()
+    local dbKey=fields.dbKey or "display"
+    local function getDB() return (ns.db and ns.db[dbKey]) or {} end
+    local function getFont() local db=getDB(); return db[fields.font] or db.font or STANDARD_TEXT_FONT end
+    local function getSize() local db=getDB(); return db[fields.size] or defaultSize end
+    local function getOutline() local db=getDB(); return db[fields.outline] or db.fontOutline or "OUTLINE" end
+    local function getShadow() local db=getDB(); return db[fields.shadow] or false end
     local function getColor()
+        local db=getDB()
         local c = db[fields.color] or fields.colorFallback or {1, 1, 1, 1}
         return c[1], c[2], c[3], c[4]
     end
-    y = self:Dropdown(parent, L.CONFIG_FONT_FAMILY, y, fonts, getFont, function(v) db[fields.font] = v; refreshFn() end)
-    y = self:Slider(parent, L.CONFIG_FONT_SIZE, y, 8, 22, 1, getSize, function(v) db[fields.size] = v; refreshFn() end)
-    y = self:Dropdown(parent, L.CONFIG_FONT_OUTLINE, y, outlines, getOutline, function(v) db[fields.outline] = v; refreshFn() end)
-    y = self:Check(parent, L.CONFIG_ENABLE_TEXT_SHADOW, y, getShadow, function(v) db[fields.shadow] = v; refreshFn() end)
+    local fontDropdown
+    y,fontDropdown = self:Dropdown(parent, L.CONFIG_FONT_FAMILY, y, fonts, getFont, function(v) local db=getDB(); db[fields.font] = v; refreshFn() end)
+    self._fontDropdowns=self._fontDropdowns or {}; self._fontDropdowns[#self._fontDropdowns+1]=fontDropdown
+    y = self:Slider(parent, L.CONFIG_FONT_SIZE, y, 8, 22, 1, getSize, function(v) local db=getDB(); db[fields.size] = v; refreshFn() end)
+    y = self:Dropdown(parent, L.CONFIG_FONT_OUTLINE, y, outlines, getOutline, function(v) local db=getDB(); db[fields.outline] = v; refreshFn() end)
+    y = self:Check(parent, L.CONFIG_ENABLE_TEXT_SHADOW, y, getShadow, function(v) local db=getDB(); db[fields.shadow] = v; refreshFn() end)
     if fields.color then
         y = self:ColorSwatch(parent, fields.colorLabel or L.CONFIG_FONT_COLOR, y, getColor,
-            function(r, g, b, a) db[fields.color] = {r, g, b, a}; refreshFn() end)
+            function(r, g, b, a) local db=getDB(); db[fields.color] = {r, g, b, a}; refreshFn() end)
     end
     return y - 8
 end
 
+function Config:RefreshMediaOptions()
+    local fonts=self:GetSharedMediaFonts()
+    for _,dropdown in ipairs(self._fontDropdowns or {}) do
+        if dropdown and dropdown.UpdateOpts then dropdown.UpdateOpts(fonts) end
+    end
+end
+
 function Config:AddDataTitleColorControls(parent, y, refreshFn)
     if not ns.db.display.dataTitleColors then ns.db.display.dataTitleColors = {} end
-    local colors = ns.db.display.dataTitleColors
     local function Add(label, key, fallback)
         y = self:ColorSwatch(parent, label, y,
             function()
+                local colors=ns.db.display.dataTitleColors or {}
                 local c = colors[key] or fallback
                 return c[1], c[2], c[3], c[4] or 1
             end,
             function(r, g, b, a)
+                ns.db.display.dataTitleColors=ns.db.display.dataTitleColors or {}
+                local colors=ns.db.display.dataTitleColors
                 colors[key] = {r, g, b, a}
                 if refreshFn then refreshFn() elseif ns.UI then ns.UI:Refresh() end
             end)
@@ -301,8 +350,7 @@ end
 
 function Config:BuildLookPage()
     local inner = self.pages["look"].inner
-    self._lookFonts = self:GetSharedMediaFonts()
-    self._lookOutlines = self:GetSharedMediaFontOutlines()
+    self._fontDropdowns={}
     local textures = self:GetSharedMediaTextures()
     self:BuildLookSubTabs(inner)
 
@@ -326,10 +374,10 @@ function Config:BuildLookPage()
     end
 
     local page = NewSubPage("general"); local y = 0
-    y = self:H(page, L.CONFIG_GLOBAL_SIZE, y)
-    y = self:Slider(page, L.CONFIG_WINDOW_SCALE, y, 0.5, 2.0, 0.05, function() return ns.db.window.scale end, function(v) ns.db.window.scale = v; if ns.UI and ns.UI.frame then ns.UI.frame:SetScale(v) end end)
-    y = self:Slider(page, L.CONFIG_PANEL_SCALE, y, 0.5, 2.0, 0.05, function() return ns.db.window.configScale or 1.0 end, function(v) ns.db.window.configScale = v; if self.panel then self.panel:SetScale(v) end; if self._pvSwitcher then self._pvSwitcher:SetScale(v) end end)
-    y = self:Check(page, L.CONFIG_LOCK_WINDOW, y, function() return ns.db.window.locked end, function(v) ns.db.window.locked = v; if ns.UI and ns.UI.UpdateLockState then ns.UI:UpdateLockState() end end)
+    y = self:H(page, L.CONFIG_MAIN_WINDOW, y)
+    y = self:Slider(page, L.CONFIG_WINDOW_SCALE, y, 0.5, 2.0, 0.05, function() return ns.db.window.scale end, function(v) ns.db.window.scale = v; if ns.UI and ns.UI.frame then ns.UI.frame:SetScale(v); ns.UI:LayoutTabs() end end)
+    y = self:Slider(page, L.CONFIG_WINDOW_OPACITY, y, 0.1, 1.0, 0.05, function() return ns.db.window.alpha or 0.92 end, function(v) ns.db.window.alpha = v; if ns.UI and ns.UI.frame then ns.UI.frame:SetAlpha(v) end end, true)
+    y = self:Check(page, L.CONFIG_LOCK_WINDOW, y, function() return ns.db.window.locked end, function(v) ns.db.window.locked = v; if ns.UI then ns.UI:UpdateLockState() end end)
     y = y - 12; y = self:H(page, L.CONFIG_ICON_STYLE, y)
     y = self:Dropdown(page, L.CONFIG_SPEC_ICON_PACK, y,
         { {l=L.DEFAULT, v="default"}, {l="Apex", v="apex"}, {l="Cartoon", v="cartoon"}, {l="ToxiUI", v="toxiui"} , {l="LightDamage", v="lightdamage"}},
@@ -338,51 +386,26 @@ function Config:BuildLookPage()
     page:SetHeight(math.abs(y) + 8)
 
     page = NewSubPage("colors"); y = 0
-    y = self:H(page, L.CONFIG_UI_COLORS, y)
-    y = self:ColorSwatch(page, L.CONFIG_TITLE_TAB_THEME_COLOR, y, function() local c = ns.db.window.themeColor or {0.08, 0.08, 0.12, 1}; return c[1], c[2], c[3], c[4] end, function(r, g, b, a) ns.db.window.themeColor = {r, g, b, a}; if ns.UI and ns.UI.ApplyTheme then ns.UI:ApplyTheme() end end)
-    y = self:ColorSwatch(page, L.CONFIG_DATA_BACKGROUND_COLOR, y, function() local c = ns.db.window.bgColor or {0.04, 0.04, 0.05, 0.90}; return c[1], c[2], c[3], c[4] end, function(r, g, b, a) ns.db.window.bgColor = {r, g, b, a}; if ns.UI and ns.UI.ApplyTheme then ns.UI:ApplyTheme() end end)
-    y = self:ColorSwatch(page, L.CONFIG_OVERALL_COLUMN_BACKGROUND_COLOR, y, function() local c = ns.db.window.ovrBgColor or {0.02, 0.04, 0.08, 0.95}; return c[1], c[2], c[3], c[4] end, function(r, g, b, a) ns.db.window.ovrBgColor = {r, g, b, a}; if ns.UI and ns.UI.ApplyTheme then ns.UI:ApplyTheme() end end)
+    y = self:H(page, L.CONFIG_WINDOW_AND_BACKGROUND_COLORS, y)
+    y = self:ColorSwatch(page, L.CONFIG_TITLE_TAB_THEME_COLOR, y, function() local c = ns.db.window.themeColor or {0, 0, 0, 1}; return c[1], c[2], c[3], c[4] end, function(r, g, b, a) ns.db.window.themeColor = {r, g, b, a}; if ns.UI and ns.UI.ApplyTheme then ns.UI:ApplyTheme() end end)
+    y = self:ColorSwatch(page, L.CONFIG_DATA_BACKGROUND_COLOR, y, function() local c = ns.db.window.bgColor or {0.02, 0.02, 0.025, 0.58}; return c[1], c[2], c[3], c[4] end, function(r, g, b, a) ns.db.window.bgColor = {r, g, b, a}; if ns.UI and ns.UI.ApplyTheme then ns.UI:ApplyTheme() end end)
+    y = self:ColorSwatch(page, L.CONFIG_OVERALL_COLUMN_BACKGROUND_COLOR, y, function() local c = ns.db.window.ovrBgColor or {0.025, 0.035, 0.05, 0.62}; return c[1], c[2], c[3], c[4] end, function(r, g, b, a) ns.db.window.ovrBgColor = {r, g, b, a}; if ns.UI and ns.UI.ApplyTheme then ns.UI:ApplyTheme() end end)
+    y = y - 8; y = self:H(page, L.CONFIG_DATA_TITLE_COLORS, y)
+    y = self:AddDataTitleColorControls(page, y, RefreshFonts)
     page:SetHeight(math.abs(y) + 8)
 
     page = NewSubPage("fonts"); y = 0
-    local function RebuildLookPage(subPage)
-        if not self.panel or not self.panel:IsShown() then return end
-        local savedScroll = 0
-        if self.pages and self.pages.look and self.pages.look.sb then
-            savedScroll = self.pages.look.sb:GetValue() or 0
-        end
-        local function DoRebuild()
-            if not self.panel or not self.panel:IsShown() then return end
-            self.panel:Hide()
-            self.panel:SetParent(nil)
-            self.panel = nil
-            self.colorSwatches = nil
-            self:Build()
-            self.panel:Show()
-            self:ShowPage("look")
-            self:ShowLookSubPage(subPage or "fonts")
-            local pg = self.pages and self.pages.look
-            if pg and pg.sb then
-                local _, maxScroll = pg.sb:GetMinMaxValues()
-                pg.sb:SetValue(math.max(0, math.min(maxScroll or 0, savedScroll)))
-            end
-        end
-        if C_Timer and C_Timer.After then C_Timer.After(0, DoRebuild) else DoRebuild() end
-    end
     y = self:AddFontSettingsBlock(page, y, L.CONFIG_BASE_TEXT_FONT_SETTINGS, {font="font", size="fontSizeBase", outline="fontOutline", shadow="fontShadow", color="fontColor", colorFallback={1, 1, 1, 0.93}}, 13, RefreshFonts)
     y = self:AddFontSettingsBlock(page, y, L.CONFIG_TOP_TITLE_FONT_SETTINGS, {font="titleFont", size="titleFontSize", outline="titleFontOutline", shadow="titleFontShadow", color="titleFontColor", colorFallback={1, 1, 1, 0.93}}, 10, RefreshFonts)
     y = self:AddFontSettingsBlock(page, y, L.CONFIG_DATA_HEADER_FONT_SETTINGS, {font="headerFont", size="headerFontSize", outline="headerFontOutline", shadow="headerFontShadow"}, 9, RefreshFonts)
-    y = self:AddDataTitleColorControls(page, y, RefreshFonts)
     y = self:AddFontSettingsBlock(page, y, L.CONFIG_PLAYER_NAME_FONT_SETTINGS, {font="nameFont", size="nameFontSize", outline="nameFontOutline", shadow="nameFontShadow"}, 13, RefreshFonts)
     local nameColorModeOpts = {{l=L.CONFIG_CLASS_COLOR, v="class"}, {l=L.CUSTOM, v="custom"}}
     y = self:Dropdown(page, L.CONFIG_PLAYER_NAME_COLOR_MODE, y, nameColorModeOpts,
         function() return ns.db.display.nameColorMode or "class" end,
-        function(v) ns.db.display.nameColorMode = v; RefreshFonts(); RebuildLookPage("fonts") end)
-    if (ns.db.display.nameColorMode or "class") == "custom" then
-        y = self:ColorSwatch(page, L.CONFIG_CUSTOM_PLAYER_NAME_COLOR, y,
-            function() local c = ns.db.display.nameFontColor or {1, 1, 1, 1}; return c[1], c[2], c[3], c[4] end,
-            function(r, g, b, a) ns.db.display.nameFontColor = {r, g, b, a}; RefreshFonts() end)
-    end
+        function(v) ns.db.display.nameColorMode = v; RefreshFonts() end)
+    y = self:ColorSwatch(page, L.CONFIG_CUSTOM_PLAYER_NAME_COLOR, y,
+        function() local c = ns.db.display.nameFontColor or {1, 1, 1, 1}; return c[1], c[2], c[3], c[4] end,
+        function(r, g, b, a) ns.db.display.nameFontColor = {r, g, b, a}; RefreshFonts() end)
     y = self:AddFontSettingsBlock(page, y, L.CONFIG_BOTTOM_TAB_FONT_SETTINGS, {font="tabFont", size="tabFontSize", outline="tabFontOutline", shadow="tabFontShadow", color="tabActiveFontColor", colorLabel=L.CONFIG_TAB_ACTIVE_FONT_COLOR, colorFallback={1, 1, 1, 1}}, 9, RefreshFonts)
     y = self:ColorSwatch(page, L.CONFIG_TAB_INACTIVE_FONT_COLOR, y, function() local c = ns.db.display.tabInactiveFontColor or {0.55, 0.55, 0.55, 0.9}; return c[1], c[2], c[3], c[4] end, function(r, g, b, a) ns.db.display.tabInactiveFontColor = {r, g, b, a}; RefreshFonts() end)
     page:SetHeight(math.abs(y) + 8)
@@ -408,77 +431,15 @@ function Config:BuildLookPage()
     local detailBarColorModeOpts = {{l=L.CONFIG_DEFAULT_COLORS, v="default"}, {l=L.CUSTOM, v="custom"}}
     y = self:Dropdown(page, L.CONFIG_DETAIL_BAR_COLOR_MODE, y, detailBarColorModeOpts,
         function() return ns.db.detailDisplay.barColorMode or "default" end,
-        function(v) ns.db.detailDisplay.barColorMode = v; if ns.DetailView then ns.DetailView:Refresh() end; RebuildLookPage("details") end)
-    if (ns.db.detailDisplay.barColorMode or "default") == "custom" then
-        y = self:ColorSwatch(page, L.CONFIG_DETAIL_CUSTOM_BAR_COLOR, y,
-            function() local c = ns.db.detailDisplay.barColor or {0, 0.65, 1, 0.92}; return c[1], c[2], c[3], c[4] end,
-            function(r, g, b, a) ns.db.detailDisplay.barColor = {r, g, b, a}; if ns.DetailView then ns.DetailView:Refresh() end end)
-    end
-    y = self:AddFontSettingsBlock(page, y, L.CONFIG_SPELL_DETAILS_FONT, {db=ns.db.detailDisplay, font="font", size="fontSizeBase", outline="fontOutline", shadow="fontShadow", color="fontColor", colorFallback={1, 1, 1, 1}}, 10,
+        function(v) ns.db.detailDisplay.barColorMode = v; if ns.DetailView then ns.DetailView:Refresh() end end)
+    y = self:ColorSwatch(page, L.CONFIG_DETAIL_CUSTOM_BAR_COLOR, y,
+        function() local c = ns.db.detailDisplay.barColor or {0, 0.65, 1, 0.92}; return c[1], c[2], c[3], c[4] end,
+        function(r, g, b, a) ns.db.detailDisplay.barColor = {r, g, b, a}; if ns.DetailView then ns.DetailView:Refresh() end end)
+    y = self:AddFontSettingsBlock(page, y, L.CONFIG_SPELL_DETAILS_FONT, {dbKey="detailDisplay", font="font", size="fontSizeBase", outline="fontOutline", shadow="fontShadow", color="fontColor", colorFallback={1, 1, 1, 1}}, 10,
         function() if ns.DetailView then ns.DetailView:ApplyTheme(); ns.DetailView:Refresh() end end)
     page:SetHeight(math.abs(y) + 8)
 
-    page = NewSubPage("behavior")
-    local foldContainer = CreateFrame("Frame", nil, page)
-    foldContainer:SetWidth(page:GetWidth())
-    foldContainer:SetPoint("TOPLEFT", page, "TOPLEFT", 0, 0)
-    self._foldContainer = foldContainer
-    self:RebuildFoldAndHide()
-    page:SetHeight(self._foldContainer:GetHeight() + 8)
-
     self:ShowLookSubPage(self.activeLookSubPage or "general")
-end
-
-function Config:RebuildFoldAndHide()
-    local container = self._foldContainer; if not container then return end
-    for _, child in ipairs({container:GetChildren()}) do child:Hide(); child:SetParent(nil) end
-    for _, region in ipairs({container:GetRegions()}) do region:Hide() end
-    local y = 0
-    y = self:H(container, L.CONFIG_COLLAPSE_AND_FADE, y)
-    y = y - 4
-    local colHdr = container:CreateFontString(nil, "OVERLAY"); colHdr:SetFont(STANDARD_TEXT_FONT, 11, "OUTLINE"); colHdr:SetPoint("TOPLEFT", 6, y); colHdr:SetTextColor(0.6, 0.8, 1.0); colHdr:SetText(" -  " .. L.CONFIG_COLLAPSE); y = y - 20
-    y = self:Check(container, L.CONFIG_AUTO_COLLAPSE_OUT_OF_COMBAT, y, function() return ns.db.collapse.autoCollapse end, function(v) ns.db.collapse.autoCollapse = v; if ns.UI then ns.UI:CheckAutoCollapse() end end)
-    y = self:Check(container, L.CONFIG_NEVER_AUTO_COLLAPSE_IN_INSTANCES, y, function() return ns.db.collapse.neverInInstance end, function(v) ns.db.collapse.neverInInstance = v; if ns.UI then ns.UI:CheckAutoCollapse() end end)
-    y = self:Slider(container, L.CONFIG_AUTO_COLLAPSE_DELAY_SECONDS, y, 0, 10, 0.5, function() return ns.db.collapse.delay or 1.5 end, function(v) ns.db.collapse.delay = v end)
-    y = self:Check(container, L.CONFIG_ENABLE_COLLAPSE_ANIMATION, y, function() return ns.db.collapse.enableAnim end, function(v) ns.db.collapse.enableAnim = v end)
-    y = self:Slider(container, L.CONFIG_ANIMATION_DURATION, y, 0.1, 2.0, 0.1, function() return ns.db.collapse.animDuration end, function(v) ns.db.collapse.animDuration = v end)
-
-    y = y - 12
-    local fadeHdr = container:CreateFontString(nil, "OVERLAY"); fadeHdr:SetFont(STANDARD_TEXT_FONT, 11, "OUTLINE"); fadeHdr:SetPoint("TOPLEFT", 6, y); fadeHdr:SetTextColor(0.6, 0.8, 1.0); fadeHdr:SetText(" -  " .. L.CONFIG_AUTO_HIDE); y = y - 20
-    y = self:Check(container, L.CONFIG_UNHIDE_ON_MOUSE_HOVER, y, function() return ns.db.fade.unfadeOnHover end, function(v) ns.db.fade.unfadeOnHover = v; if ns.UI then ns.UI:CheckAutoFade(true) end end)
-    y = self:Slider(container, L.CONFIG_AUTO_HIDE_DELAY_SECONDS, y, 0, 10, 0.5, function() return ns.db.fade.delay or 1.5 end, function(v) ns.db.fade.delay = v; if ns.UI then ns.UI:CheckAutoFade(true) end end)
-    y = y - 8
-
-    y = self:Check(container, L.CONFIG_TITLE_AND_TAB_BAR, y, function() return ns.db.fade.fadeBars end, function(v) ns.db.fade.fadeBars = v; if ns.UI then ns.UI:CheckAutoFade(true) end; self:RebuildFoldAndHide(); self:UpdateLookPageHeight() end)
-    if ns.db.fade.fadeBars then
-        local sub = CreateFrame("Frame", nil, container); sub:SetWidth(container:GetWidth() - 16); sub:SetPoint("TOPLEFT", container, "TOPLEFT", 16, y); local ys = 0
-        local whenOpts = { {l=L.ALWAYS, v="always"}, {l=L.OUT_OF_COMBAT, v="ooc"} }
-        ys = self:Dropdown(sub, L.CONFIG_HIDE_TITLE_TAB_WHEN, ys, whenOpts, function() return ns.db.fade.barsWhen or "ooc" end, function(v) ns.db.fade.barsWhen = v; if ns.UI then ns.UI:CheckAutoFade(true) end end)
-        ys = self:Check(sub, L.CONFIG_NEVER_HIDE_TITLE_TAB_IN_INSTANCES, ys, function() return ns.db.fade.barsNeverInInstance end, function(v) ns.db.fade.barsNeverInInstance = v; if ns.UI then ns.UI:CheckAutoFade(true) end end)
-        ys = self:Slider(sub, L.CONFIG_TITLE_TAB_HIDDEN_ALPHA, ys, 0, 1, 0.05, function() return ns.db.fade.barsAlpha end, function(v) ns.db.fade.barsAlpha = v; if ns.UI then ns.UI:CheckAutoFade(true) end end, true)
-        sub:SetHeight(math.abs(ys)); y = y - math.abs(ys)
-    end
-
-    y = self:Check(container, L.DATA_AREA, y, function() return ns.db.fade.fadeBody end, function(v) ns.db.fade.fadeBody = v; if ns.UI then ns.UI:CheckAutoFade(true) end; self:RebuildFoldAndHide(); self:UpdateLookPageHeight() end)
-    if ns.db.fade.fadeBody then
-        local sub = CreateFrame("Frame", nil, container); sub:SetWidth(container:GetWidth() - 16); sub:SetPoint("TOPLEFT", container, "TOPLEFT", 16, y); local ys = 0
-        local whenOpts = { {l=L.ALWAYS, v="always"}, {l=L.OUT_OF_COMBAT, v="ooc"} }
-        ys = self:Dropdown(sub, L.CONFIG_HIDE_DATA_AREA_WHEN, ys, whenOpts, function() return ns.db.fade.bodyWhen or "ooc" end, function(v) ns.db.fade.bodyWhen = v; if ns.UI then ns.UI:CheckAutoFade(true) end end)
-        ys = self:Check(sub, L.CONFIG_NEVER_HIDE_DATA_AREA_IN_INSTANCES, ys, function() return ns.db.fade.bodyNeverInInstance end, function(v) ns.db.fade.bodyNeverInInstance = v; if ns.UI then ns.UI:CheckAutoFade(true) end end)
-        ys = self:Slider(sub, L.CONFIG_DATA_AREA_HIDDEN_ALPHA, ys, 0, 1, 0.05, function() return ns.db.fade.bodyAlpha end, function(v) ns.db.fade.bodyAlpha = v; if ns.UI then ns.UI:CheckAutoFade(true) end end, true)
-        sub:SetHeight(math.abs(ys)); y = y - math.abs(ys)
-    end
-
-    y = y - 8
-    y = self:Check(container, L.CONFIG_ENABLE_HIDE_ANIMATION, y, function() return ns.db.fade.enableAnim end, function(v) ns.db.fade.enableAnim = v end)
-    y = self:Slider(container, L.CONFIG_HIDE_ANIMATION_DURATION, y, 0.1, 2.0, 0.1, function() return ns.db.fade.animDuration end, function(v) ns.db.fade.animDuration = v end)
-    container:SetHeight(math.abs(y))
-end
-
-function Config:UpdateLookPageHeight()
-    if not self._foldContainer or not self.lookSubPages or not self.lookSubPages.behavior then return end
-    self.lookSubPages.behavior:SetHeight(self._foldContainer:GetHeight() + 8)
-    self:ShowLookSubPage(self.activeLookSubPage or "behavior")
 end
 
 -- ============================================================
@@ -491,6 +452,12 @@ function Config:BuildPerfPage()
     y = self:Slider(inner, L.CONFIG_OUT_OF_COMBAT_REFRESH_SECONDS, y, 0.5, 5.0, 0.5, function() return ns.db.smartRefresh.idleInterval end, function(v) ns.db.smartRefresh.idleInterval=v end)
     y = y - 12
     y = self:H(inner, L.DATA_TRACKING, y)
-    y = self:Slider(inner, L.MAX_HISTORY_SEGMENTS, y, 5, 100, 1, function() return ns.db.tracking.maxSegments or 20 end, function(v) ns.db.tracking.maxSegments=v; ns.Segments:SetViewSegment(ns.Segments.viewIndex) end)
+    y = self:Slider(inner, L.MAX_HISTORY_SEGMENTS, y, 5, 100, 1,
+        function() return ns.db.tracking.historyDisplayLimit or ns.db.tracking.maxSegments or 20 end,
+        function(v)
+            ns.db.tracking.historyDisplayLimit = v
+            ns.db.tracking.maxSegments = v -- legacy readers/migration compatibility
+            ns.Segments:SetViewSegment(ns.Segments.viewIndex)
+        end)
     inner:SetHeight(math.abs(y) + 20)
 end

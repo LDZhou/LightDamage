@@ -11,6 +11,8 @@ ns.FONT_MAIN = ns.FONT_MAIN or STANDARD_TEXT_FONT
 local DV = {}
 ns.DetailView = DV
 
+local PREVIEW_STRATA = "FULLSCREEN_DIALOG"
+
 local ICON_W = 18
 
 local ROW_BG = {
@@ -20,6 +22,15 @@ local ROW_BG = {
 local BG_HEADER  = {0.04, 0.04, 0.08, 0.96}
 local BG_SECTION = {0.05, 0.08, 0.13, 0.92}
 local BG_FATAL   = {0.22, 0.03, 0.03, 0.96}
+
+local function GetOpaqueAbbreviatedNumber(value)
+    local formatter=ns.AbbrevProtectedNumber
+    if formatter then
+        local ok,text=pcall(formatter,value)
+        if ok then return text end
+    end
+    return value
+end
 
 -- 获取动态外观参数
 function DV:GetBarConfig()
@@ -93,7 +104,7 @@ function DV:EnsureCreated()
     back:SetSize(24, 24); back:SetPoint("LEFT", 2, 0)
     local bt = back:CreateFontString(nil, "OVERLAY")
     bt:SetFont(ns.FONT_MAIN, 14, "OUTLINE")
-    bt:SetPoint("CENTER"); bt:SetText("←"); bt:SetTextColor(0.6, 0.6, 0.6)
+    bt:SetPoint("CENTER"); bt:SetText("<"); bt:SetTextColor(0.6, 0.6, 0.6)
     self.backText = bt  -- ★ 新增
 
     back:SetScript("OnClick", function() f:Hide() end)
@@ -106,6 +117,10 @@ function DV:EnsureCreated()
     self.titleText:SetPoint("RIGHT", -28, 0)
     self.titleText:SetJustifyH("LEFT"); self.titleText:SetWordWrap(false)
     self.titleText:SetTextColor(1, 1, 1)
+    self.rawTitleText = tb:CreateFontString(nil, "OVERLAY")
+    self.rawTitleText:SetFont(ns.FONT_MAIN,10,"OUTLINE")
+    self.rawTitleText:SetPoint("LEFT",back,"RIGHT",4,0); self.rawTitleText:SetPoint("RIGHT",-28,0)
+    self.rawTitleText:SetJustifyH("LEFT"); self.rawTitleText:SetWordWrap(false); self.rawTitleText:SetTextColor(1,1,1); self.rawTitleText:Hide()
 
     -- ★ 修复：✕ 在 ARHei.TTF 里没有字形会渲染成方块，改用 X
     local cb = CreateFrame("Button", nil, tb); cb:SetSize(20, 24); cb:SetPoint("RIGHT", -2, 0)
@@ -154,10 +169,14 @@ function DV:EnsureCreated()
     
     -- ★ 新增：缩放手柄
     local resizeGrabber = CreateFrame("Frame", nil, f)
+    self.resizeHandle = resizeGrabber
     resizeGrabber:SetSize(16, 16); resizeGrabber:SetPoint("BOTTOMRIGHT", 0, 0)
     resizeGrabber:SetFrameLevel(f:GetFrameLevel() + 15); resizeGrabber:EnableMouse(true)
     local gt = resizeGrabber:CreateTexture(nil, "OVERLAY"); gt:SetAllPoints()
-    gt:SetTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up")
+    gt:SetTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up"); gt:SetVertexColor(.55,.58,.62,.9)
+    resizeGrabber.iconTex = gt
+    resizeGrabber:SetScript("OnEnter", function() gt:SetVertexColor(.15,.85,1,1) end)
+    resizeGrabber:SetScript("OnLeave", function() gt:SetVertexColor(.55,.58,.62,.9) end)
     resizeGrabber:SetScript("OnMouseDown", function()
         if not (ns.db.window and ns.db.window.locked) then f:StartSizing("BOTTOMRIGHT"); self._resizing = true end
     end)
@@ -179,18 +198,52 @@ function DV:EnsureCreated()
             sb:SetMinMaxValues(0, maxScroll)
             if self._lastTotalH > viewH then inner:SetWidth(sc:GetWidth() - 5) else inner:SetWidth(sc:GetWidth()) end
         end
+        if self.RefreshValuePriorities then self:RefreshValuePriorities() end
     end)
-
     self.frame      = f
     self.content    = inner
     self.scrollFrame = sc
     self.scrollBar  = sb
     self.rows       = {}
+    self:UpdateLockState()
     tinsert(UISpecialFrames, "LightDamageDetail")
+
+    self:ApplyPreviewLayer()
 
     f:SetScript("OnShow", function() self:UpdatePosition() end)
 
     f:Hide()
+end
+
+function DV:SetPreviewLayer(active)
+    self._previewLayerActive = active and true or false
+    self:ApplyPreviewLayer()
+end
+
+function DV:UpdateLockState()
+    local locked=ns.db and ns.db.window and ns.db.window.locked
+    if self.frame then
+        if locked then self.frame:StopMovingOrSizing(); self._resizing=false end
+        self.frame:SetMovable(not locked)
+        self.frame:SetResizable(not locked)
+    end
+    if self.resizeHandle then self.resizeHandle:SetShown(not locked) end
+end
+
+function DV:ApplyPreviewLayer()
+    local f = self.frame
+    if not f then return end
+    if self._previewLayerActive then
+        if not self._prePreviewLayer then
+            self._prePreviewLayer = { strata = f:GetFrameStrata(), level = f:GetFrameLevel() }
+        end
+        f:SetFrameStrata(PREVIEW_STRATA)
+        f:SetFrameLevel(self._prePreviewLayer.level or 20)
+    elseif self._prePreviewLayer then
+        f:SetFrameStrata(self._prePreviewLayer.strata or "HIGH")
+        f:SetFrameLevel(self._prePreviewLayer.level or 20)
+        self._prePreviewLayer = nil
+    end
 end
 
 -- ============================================================
@@ -251,32 +304,57 @@ function DV:ApplyTheme()
     local dbW = ns.db and ns.db.window or {}
     
     -- 1. 同步背景颜色
-    local bg = dbW.bgColor or {0.04, 0.04, 0.05, 0.90}
+    local bg = dbW.bgColor or {0.02, 0.02, 0.025, 0.58}
     self.frame:SetBackdropColor(unpack(bg))
     
     -- 2. 同步标题栏颜色 (ThemeColor)
-    local tc = dbW.themeColor or {0.08, 0.08, 0.12, 1}
+    local tc = dbW.themeColor or {0, 0, 0, 1}
     self.titleBg:SetColorTexture(unpack(tc))
     
     -- 3. ★ 使用全新 DetailDisplay 字体同步
     local _, _, _, font, fSz, fOut, fShad = self:GetBarConfig()
     fOut = ns.NormalizeFontOutline and ns:NormalizeFontOutline(fOut) or fOut
-    local function _applyFont(fs, sz)
-        fs:SetFont(font, sz, fOut)
-        if fShad then fs:SetShadowColor(0,0,0,1); fs:SetShadowOffset(1,-1)
-        else fs:SetShadowOffset(0,0) end
-    end
+    local function _applyFont(fs, sz) ns.UI:ApplyFont(fs,font,sz,fOut,fShad) end
     
     if self.titleText then _applyFont(self.titleText, fSz + 1); self:SetDetailTextColor(self.titleText) end
+    if self.rawTitleText then _applyFont(self.rawTitleText,fSz+1); self:SetDetailTextColor(self.rawTitleText) end
     if self.backText then _applyFont(self.backText, fSz + 4) end
     if self.closeText then _applyFont(self.closeText, fSz + 2) end
     
     for _, r in ipairs(self.rows) do
         _applyFont(r.name, fSz)
+        _applyFont(r.rawName,fSz)
         _applyFont(r.value, fSz)
+        _applyFont(r.rawValue,fSz)
         self:SetDetailTextColor(r.name)
+        self:SetDetailTextColor(r.rawName)
         self:SetDetailTextColor(r.value)
+        self:SetDetailTextColor(r.rawValue)
     end
+end
+
+local function IsSecret(value)
+    local gateway = ns.DamageMeterGateway
+    if gateway then return not gateway:IsAccessible(value) end
+    return issecretvalue and issecretvalue(value) or false
+end
+
+local function OpaqueOr(value,fallback)
+    if IsSecret(value) then return value end
+    if value==nil or value=="" then return fallback end
+    return value
+end
+
+function DV:SetNamedTitle(name,class,mode,titleSuffix)
+    local shown=ns:DisplayName(OpaqueOr(name,"?"))
+    if IsSecret(shown) then
+        self.titleText:Hide(); self.rawTitleText:Show(); self.rawTitleText:SetText(shown)
+        return
+    end
+    self.rawTitleText:Hide(); self.titleText:Show()
+    local rawModeName=ns.MODE_NAMES[mode] or mode
+    local modeName=L[rawModeName] or rawModeName
+    self.titleText:SetFormattedText(L.PLAYER_MODE_BREAKDOWN_TITLE_FORMAT,ns:GetClassHex(class),shown,modeName,titleSuffix or "")
 end
 
 -- ============================================================
@@ -298,6 +376,7 @@ function DV:UpdateScroll(totalH)
         self.scrollBar:SetValue(0)
         self.content:SetWidth(self.scrollFrame:GetWidth())
     end
+    self:RefreshValuePriorities()
 end
 
 -- ============================================================
@@ -327,8 +406,12 @@ function DV:GetRow(idx)
     -- 先创建右侧的数值区域（宽度自适应）
     r.value = r.textFrame:CreateFontString(nil, "OVERLAY")
     r.value:SetPoint("RIGHT", -4, 0)
+    r.value:SetWidth(118)
     r.value:SetJustifyH("RIGHT")
+    r.value:SetWordWrap(false); if r.value.SetMaxLines then r.value:SetMaxLines(1) end
     r.value:SetTextColor(1, 1, 1)
+    r.rawValue = r.textFrame:CreateFontString(nil,"OVERLAY")
+    r.rawValue:SetPoint("RIGHT",-4,0); r.rawValue:SetWidth(118); r.rawValue:SetJustifyH("RIGHT"); r.rawValue:SetWordWrap(false); if r.rawValue.SetMaxLines then r.rawValue:SetMaxLines(1) end; r.rawValue:SetTextColor(1,1,1); r.rawValue:Hide()
 
     -- 新增一个受限制的视觉裁剪框，右边界死死锚定在数值的前方 8 像素处
     r.nameClipFrame = CreateFrame("Frame", nil, r.textFrame)
@@ -342,6 +425,8 @@ function DV:GetRow(idx)
     r.name = r.nameClipFrame:CreateFontString(nil, "OVERLAY")
     r.name:SetJustifyH("LEFT"); r.name:SetWordWrap(false)
     r.name:SetTextColor(1, 1, 1)
+    r.rawName = r.nameClipFrame:CreateFontString(nil,"OVERLAY")
+    r.rawName:SetJustifyH("LEFT"); r.rawName:SetWordWrap(false); r.rawName:SetTextColor(1,1,1); r.rawName:Hide()
 
     -- 悬停的高亮材质可以留在原底板上
     r.hl = r.frame:CreateTexture(nil, "HIGHLIGHT")
@@ -356,10 +441,12 @@ function DV:ClearRows()
     for _, r in ipairs(self.rows) do
         r.frame:Hide()
         r.icon:Hide()
+        r.name:Show(); r.rawName:Hide(); r.rawName:SetText("")
         r.fill:SetMinMaxValues(0, 1)
         r.fill:SetValue(0)
         r.frame:SetScript("OnEnter", nil)
         r.frame:SetScript("OnLeave", nil)
+        r.value:Show(); r.rawValue:Hide(); r.rawValue:SetText("")
     end
 end
 
@@ -396,6 +483,7 @@ function DV:PlaceRow(idx, yOff, h, bgOverride, thickness, vOffset)
     r.icon:Hide()
     r.name:ClearAllPoints()
     r.name:SetPoint("LEFT", r.nameClipFrame, "LEFT", 6, 0)
+    r.rawName:ClearAllPoints(); r.rawName:SetPoint("LEFT",r.nameClipFrame,"LEFT",6,0)
 
     r.fill:SetMinMaxValues(0, 1)
     r.fill:SetValue(0)
@@ -403,25 +491,70 @@ function DV:PlaceRow(idx, yOff, h, bgOverride, thickness, vOffset)
 
     local _, _, _, font, fSz, fOut, fShad = self:GetBarConfig()
     fOut = ns.NormalizeFontOutline and ns:NormalizeFontOutline(fOut) or fOut
-    local function _applyFont(fs, sz)
-        fs:SetFont(font, sz, fOut)
-        if fShad then fs:SetShadowColor(0,0,0,1); fs:SetShadowOffset(1,-1)
-        else fs:SetShadowOffset(0,0) end
-    end
+    local function _applyFont(fs, sz) ns.UI:ApplyFont(fs,font,sz,fOut,fShad) end
     _applyFont(r.name, fSz)
+    _applyFont(r.rawName,fSz)
     _applyFont(r.value, fSz)
+    _applyFont(r.rawValue,fSz)
     self:SetDetailTextColor(r.name)
+    self:SetDetailTextColor(r.rawName)
     self:SetDetailTextColor(r.value)
+    self:SetDetailTextColor(r.rawValue)
 
     return r
 end
 
+local function GetSafeDetailTextWidth(fs)
+    if not fs then return nil end
+    local getter = fs.GetUnboundedStringWidth or fs.GetStringWidth
+    if not getter then return nil end
+    local ok, width = pcall(getter, fs)
+    if ok and type(width) == "number" then return width end
+    return nil
+end
+
+-- Keep the complete right-hand value whenever the row has enough room.  The
+-- name lives in a clipped frame whose right edge follows this column, so names
+-- yield before values without changing either font's scale.
+function DV:PrioritizeRowValue(r, isSecret)
+    if not r or not r.frame or not r.value then return end
+    local rowW = r.frame:GetWidth() or 0
+    local maxValueW = math.max(1, rowW - 12)
+    local wanted
+    if isSecret then
+        -- The protected value is already localized and integer-abbreviated by
+        -- Blizzard. Reserve a fixed column without measuring the opaque text.
+        wanted = math.min(118,maxValueW)
+    else
+        wanted = (GetSafeDetailTextWidth(r.value) or 0) + 8
+    end
+    local valueW = math.max(1, math.min(math.ceil(wanted), math.floor(maxValueW)))
+    r.value:SetWidth(valueW)
+    r._valueIsSecret = isSecret and true or false
+end
+
+function DV:RefreshValuePriorities()
+    if not self.rows then return end
+    for _, r in ipairs(self.rows) do
+        if r.frame and r.frame:IsShown() then
+            self:PrioritizeRowValue(r, r._valueIsSecret)
+        end
+    end
+end
+
 local function setNameWithIcon(r, iconTex, text)
-    if iconTex then
-        r.icon:SetTexture(iconTex)
-        r.icon:Show()
-        r.name:ClearAllPoints()
-        r.name:SetPoint("LEFT", r.nameClipFrame, "LEFT", r.icon:GetWidth() + 7, 0)
+    r.rawName:Hide(); r.name:Show()
+    local iconIsSecret=IsSecret(iconTex)
+    if iconIsSecret or iconTex ~= nil then
+        local ok=pcall(r.icon.SetTexture,r.icon,iconTex)
+        if ok then
+            r.icon:Show()
+            r.name:ClearAllPoints()
+            r.name:SetPoint("LEFT", r.nameClipFrame, "LEFT", ICON_W + 7, 0)
+        else
+            r.icon:Hide()
+            r.name:ClearAllPoints(); r.name:SetPoint("LEFT",r.nameClipFrame,"LEFT",6,0)
+        end
     else
         r.icon:Hide()
         r.name:ClearAllPoints()
@@ -430,10 +563,31 @@ local function setNameWithIcon(r, iconTex, text)
     r.name:SetText(text)
 end
 
+local function setOpaqueNameWithIcon(r,iconTex,text)
+    r.name:Hide(); r.rawName:Show()
+    local iconIsSecret=IsSecret(iconTex)
+    if iconIsSecret or iconTex ~= nil then
+        local ok=pcall(r.icon.SetTexture,r.icon,iconTex)
+        if ok then
+            r.icon:Show()
+            r.rawName:ClearAllPoints()
+            r.rawName:SetPoint("LEFT",r.nameClipFrame,"LEFT",ICON_W+7,0)
+        else
+            r.icon:Hide()
+            r.rawName:ClearAllPoints(); r.rawName:SetPoint("LEFT",r.nameClipFrame,"LEFT",6,0)
+        end
+    else
+        r.icon:Hide()
+        r.rawName:ClearAllPoints(); r.rawName:SetPoint("LEFT",r.nameClipFrame,"LEFT",6,0)
+    end
+    r.rawName:SetText(text)
+end
+
 local function GetSpellIcon(spellID)
-    if not spellID then return nil end
+    local idSecret=IsSecret(spellID)
+    if not idSecret and not spellID then return nil end
     local ok, icon = pcall(function()
-        if spellID == 0 then return nil end
+        if not idSecret and spellID == 0 then return nil end
         if C_Spell and C_Spell.GetSpellTexture then
             return C_Spell.GetSpellTexture(spellID)
         end
@@ -442,15 +596,15 @@ local function GetSpellIcon(spellID)
         end
         return nil
     end)
-    if ok and icon then return icon end
+    if ok then return icon end
     return nil
 end
 
 -- ============================================================
 -- 技能列表渲染
 -- ============================================================
-function DV:RenderSpellList(name, class, mode, spells, dur, titleSuffix, apiMaxAmount)
-    self._lastRenderArgs = { type = "spell", args = {name, class, mode, spells, dur, titleSuffix, apiMaxAmount} }
+function DV:RenderSpellList(name, class, mode, spells, dur, titleSuffix, apiMaxAmount, hasSecretData)
+    self._lastRenderArgs = { type = "spell", args = {name, class, mode, spells, dur, titleSuffix, apiMaxAmount, hasSecretData} }
     self:EnsureCreated()
     self.frame:Show()
     self:ApplyTheme()
@@ -458,12 +612,7 @@ function DV:RenderSpellList(name, class, mode, spells, dur, titleSuffix, apiMaxA
 
     -- print("|cffff00ff[LD DEBUG RenderSpellList]|r frameShown=", self.frame:IsShown(), "spells=", #spells, "apiMaxAmount=", type(apiMaxAmount))
 
-    local ch = ns:GetClassHex(class)
-    -- ★ 在这里实时获取翻译
-    local rawModeName = ns.MODE_NAMES[mode] or mode
-    local mn = L[rawModeName] or rawModeName
-    local suffix = titleSuffix or ""
-    self.titleText:SetFormattedText(L.PLAYER_MODE_BREAKDOWN_TITLE_FORMAT, ch, ns:DisplayName(name), mn, suffix)
+    self:SetNamedTitle(name,class,mode,titleSuffix)
 
     local bh, gap, alpha, _, _, _, _, thickness, vOffset, texPath = self:GetBarConfig()
     local currentY = 0
@@ -472,12 +621,13 @@ function DV:RenderSpellList(name, class, mode, spells, dur, titleSuffix, apiMaxA
         local r = self:PlaceRow(1, 0, bh, nil, thickness, vOffset)
         r.name:SetText(L.COLORED_NO_SPELL_DATA)
         r.value:SetText("")
+        self:PrioritizeRowValue(r, false)
         self:UpdateScroll(bh + 5)
         return
     end
 
     local maxV
-    if apiMaxAmount then
+    if hasSecretData then
         -- ★ 战斗中：用 API 提供的 secret maxAmount（和暴雪做法一致）
         maxV = apiMaxAmount
     else
@@ -492,7 +642,7 @@ function DV:RenderSpellList(name, class, mode, spells, dur, titleSuffix, apiMaxA
         r.fill:SetStatusBarTexture(texPath)
         pcall(function()
             r.fill:SetMinMaxValues(0, maxV)
-            r.fill:SetValue(sp.secretAmt or sp.value)
+            if sp.isSecretAmount then r.fill:SetValue(sp.rawAmount) else r.fill:SetValue(sp.value) end
         end)
 
         -- ★ 颜色：魔法学派颜色，透明度跟主界面统一
@@ -505,61 +655,103 @@ function DV:RenderSpellList(name, class, mode, spells, dur, titleSuffix, apiMaxA
         
         if sp.isAvoidable then
             sc2 = {0.85, 0.70, 0.15}
-            sn = sn .. " |cffffcc00[可规避]|r"
+            sn = sn .. " |cffffcc00" .. L.AVOIDABLE_MARKER .. "|r"
         end
         
         -- 【先】设定右侧值文字，让它把占位大小确定下来
         local isCount = (mode == "interrupts" or mode == "dispels")
+        local valueIsSecret = sp.isSecretAmount or sp.isSecretRate
         local valStr
-        if sp.secretAmt then
-            valStr = AbbreviateNumbers(sp.secretAmt)
+        if valueIsSecret then
+            valStr = nil
         elseif isCount then
             valStr = string.format(L.COLORED_COUNT_TIMES_FORMAT, sp.value)
-        elseif dur and dur > 0 and ns.MODE_UNITS[mode] then
+        elseif sp.hasRate and ns.MODE_UNITS[mode] then
             -- ★ 顺序与主界面数据条一致：总量 (每秒)
-            valStr = string.format("%s (%s)", ns:FormatNumber(sp.value), ns:FormatNumber(sp.value / dur))
+            valStr = string.format("%s (%s)", ns:FormatNumber(sp.value), ns:FormatNumber(sp.perSec))
         else
             valStr = ns:FormatNumber(sp.value)
         end
         
-        if sp.secretAmt then
-            r.value:SetText(valStr)
+        if valueIsSecret then
+            r.value:Hide(); r.rawValue:Show()
+            local totalText
+            if sp.isSecretAmount then totalText=GetOpaqueAbbreviatedNumber(sp.rawAmount)
+            else totalText=ns.AbbrevNumber(sp.value) end
+            if isCount then
+                r.rawValue:SetFormattedText("%s%s",totalText,L.COUNT_SUFFIX)
+            elseif sp.hasRate and ns.MODE_UNITS[mode] then
+                local rateText
+                if sp.isSecretRate then rateText=GetOpaqueAbbreviatedNumber(sp.rawRate)
+                else rateText=ns.AbbrevNumber(sp.rate) end
+                r.rawValue:SetFormattedText("%s (%s)",totalText,rateText)
+            else
+                r.rawValue:SetText(totalText)
+            end
         else
+            r.rawValue:Hide(); r.value:Show()
             local pctStr = string.format("%.1f%%", sp.percent or 0)
             r.value:SetText(valStr .. " |cffaaaaaa" .. pctStr .. "|r")
         end
+        self:PrioritizeRowValue(r, valueIsSecret)
 
         -- 【后】再赋予左侧名字，此时超出裁剪框的部分会被完美隐藏
-        setNameWithIcon(r, GetSpellIcon(sp.spellID), nc .. sn .. "|r")
+        local displaySpellID=sp.spellID
+        if sp.isSecretSpellID then displaySpellID=sp.rawSpellID end
+        if sp.isSecretName then
+            setOpaqueNameWithIcon(r,GetSpellIcon(displaySpellID),sp.rawName)
+        else
+            setNameWithIcon(r, GetSpellIcon(displaySpellID), nc .. sn .. "|r")
+        end
 
         local sp_c = sp
         r.frame:SetScript("OnEnter", function(fw)
-            GameTooltip:SetOwner(fw, "ANCHOR_RIGHT")
-            pcall(function()
-                if sp_c.spellID and sp_c.spellID > 0 then
-                    GameTooltip:SetSpellByID(sp_c.spellID)
-                end
-            end)
-            if not GameTooltip:NumLines() or GameTooltip:NumLines() == 0 then
-                local nameOk, n = pcall(tostring, sp_c.name or "?")
-                GameTooltip:AddLine(nameOk and n or "?")
+            local useOpaque = sp_c.isSecretSpellID or sp_c.isSecretName
+                or sp_c.isSecretAmount or sp_c.isSecretRate
+            local tip
+            if ns.PrivateTooltip then
+                tip = useOpaque and ns.PrivateTooltip:GetOpaque() or ns.PrivateTooltip:Get()
+            elseif useOpaque then
+                return
+            else
+                tip = GameTooltip
             end
-            GameTooltip:AddLine(" ")
+            tip:SetOwner(fw, "ANCHOR_RIGHT")
+            if not useOpaque then pcall(function()
+                if not sp_c.isSecretSpellID and sp_c.spellID and sp_c.spellID > 0 then
+                    tip:SetSpellByID(sp_c.spellID)
+                end
+            end) end
+            if not tip:NumLines() or tip:NumLines() == 0 then
+                if sp_c.isSecretName then
+                    tip:AddLine(sp_c.rawName)
+                else
+                    local nameOk, n = pcall(tostring, sp_c.name or "?")
+                    tip:AddLine(nameOk and n or "?")
+                end
+            end
+            tip:AddLine(" ")
             
             -- Tooltip 内的安全渲染
-            local amtStr = sp_c.secretAmt and AbbreviateNumbers(sp_c.secretAmt) or ns:FormatNumber(sp_c.value)
-            GameTooltip:AddDoubleLine(L.TOTAL, amtStr, 0.7, 0.7, 0.7, 1, 1, 1)
-            
-            if not sp_c.secretAmt and dur and dur > 0 and ns.MODE_UNITS[mode] then
-                GameTooltip:AddDoubleLine(L.PER_SECONDS, string.format("%.1f", sp_c.value / dur), 0.7, 0.7, 0.7, 1, 0.85, 0)
+            if sp_c.isSecretAmount and useOpaque then
+                tip:AddDoubleLine(L.TOTAL, GetOpaqueAbbreviatedNumber(sp_c.rawAmount), 0.7, 0.7, 0.7, 1, 1, 1)
+            elseif not sp_c.isSecretAmount then
+                tip:AddDoubleLine(L.TOTAL, ns:FormatNumber(sp_c.value), 0.7, 0.7, 0.7, 1, 1, 1)
+            end
+
+            if sp_c.isSecretRate and useOpaque and ns.MODE_UNITS[mode] then
+                tip:AddDoubleLine(L.PER_SECONDS, GetOpaqueAbbreviatedNumber(sp_c.rawRate), 0.7,0.7,0.7,1,0.85,0)
+            elseif not sp_c.isSecretRate and ns.MODE_UNITS[mode] then
+                local visibleRate=sp_c.hasRate and (sp_c.rate or sp_c.perSec) or nil
+                if visibleRate then tip:AddDoubleLine(L.PER_SECONDS,string.format("%.1f",visibleRate),0.7,0.7,0.7,1,0.85,0) end
             end
 
             if (sp_c.overhealing or 0) > 0 then
-                GameTooltip:AddDoubleLine(L.OVERHEAL, ns:FormatNumber(sp_c.overhealing), 0.7, 0.7, 0.7, 0.8, 0.4, 0.4)
+                tip:AddDoubleLine(L.OVERHEAL, ns:FormatNumber(sp_c.overhealing), 0.7, 0.7, 0.7, 0.8, 0.4, 0.4)
             end
-            GameTooltip:Show()
+            tip:Show()
         end)
-        r.frame:SetScript("OnLeave", function() GameTooltip:Hide() end)
+        r.frame:SetScript("OnLeave", function() if ns.PrivateTooltip then ns.PrivateTooltip:Hide() else GameTooltip:Hide() end end)
     end
 
     self:UpdateScroll(math.abs(currentY))
@@ -576,40 +768,50 @@ function DV:ShowSpellBreakdown(guid, name, class, mode, seg)
     self:RenderSpellList(name, class, displayMode, spells, dur, "")
 end
 
-function DV:ShowSpellBreakdownFromAPI(sourceGUID, sourceCreatureID, name, class, mode, sessionType, sessionID)
+function DV:ShowSpellBreakdownFromAPI(sourceGUID,sourceCreatureID,name,class,mode,sessionType,sessionID,isLocalPlayer)
+    if isLocalPlayer then
+        sourceGUID=UnitGUID("player")
+        sourceCreatureID=nil
+    end
     -- 走通用 dmType 映射，承伤/打断/驱散/敌人承伤一并支持
     local dmType = ns.UI and ns.UI.MODE_TO_DM and ns.UI.MODE_TO_DM[mode]
     if not dmType then
         self:EnsureCreated(); self.frame:Show(); self:ApplyTheme()
-        self:RenderSpellList(name or "?", class or "WARRIOR", mode, {}, 0, "")
+        self:RenderSpellList(OpaqueOr(name,"?"), class, mode, {}, 0, "")
         self._lastRenderArgs = {
             type = "spellAPI",
-            args = {sourceGUID, sourceCreatureID, name, class, mode, sessionType, sessionID}
+            args = {sourceGUID,sourceCreatureID,name,class,mode,sessionType,sessionID,isLocalPlayer}
         }
         return
     end
 
     -- 路由：有 sessionID 走 FromID(虚拟段/归档段)，否则走 FromType(current/overall)
-    local ok, srcData
+    local gateway = ns.DamageMeterGateway
+    local srcData,srcState
     if sessionID then
-        ok, srcData = pcall(
-            C_DamageMeter.GetCombatSessionSourceFromID,
-            sessionID, dmType, sourceGUID, sourceCreatureID
-        )
+        if gateway then srcData,srcState=gateway:GetRawSource(nil,sessionID,dmType,sourceGUID,sourceCreatureID) end
     else
         local sType = sessionType or Enum.DamageMeterSessionType.Current
-        ok, srcData = pcall(
-            C_DamageMeter.GetCombatSessionSourceFromType,
-            sType, dmType, sourceGUID, sourceCreatureID
-        )
+        if gateway then srcData,srcState=gateway:GetRawSource(sType,nil,dmType,sourceGUID,sourceCreatureID) end
     end
 
-    if not ok or type(srcData) ~= "table" or type(srcData.combatSpells) ~= "table" then
+    local rawSpells
+    local sourceReadable=type(srcData)=="table" and gateway and gateway:IsTableAccessible(srcData)
+    if sourceReadable then
+        local ok,value=pcall(function() return srcData.combatSpells end)
+        if ok and type(value)=="table" and gateway:IsTableAccessible(value) then rawSpells=value end
+    end
+    if not rawSpells then
+        if ns.state.inCombat or IsSecret(name) or IsSecret(sourceGUID) then
+            self:ShowCombatLocked(OpaqueOr(name,"?"))
+            self._lastRenderArgs={type="spellAPI",args={sourceGUID,sourceCreatureID,name,class,mode,sessionType,sessionID,isLocalPlayer}}
+            return
+        end
         self:EnsureCreated(); self.frame:Show(); self:ApplyTheme()
-        self:RenderSpellList(name or "?", class or "WARRIOR", mode, {}, 0, "")
+        self:RenderSpellList(OpaqueOr(name,"?"), class, mode, {}, 0, "")
         self._lastRenderArgs = {
             type = "spellAPI",
-            args = {sourceGUID, sourceCreatureID, name, class, mode, sessionType, sessionID}
+            args = {sourceGUID,sourceCreatureID,name,class,mode,sessionType,sessionID,isLocalPlayer}
         }
         return
     end
@@ -617,86 +819,119 @@ function DV:ShowSpellBreakdownFromAPI(sourceGUID, sourceCreatureID, name, class,
     local spells = {}
     local isSecret = false
 
-    -- 单次遍历：玩家法术 + 宠物法术(creatureName 非空就是宠物施放的)
-    for _, sp in ipairs(srcData.combatSpells) do
+    -- 单次遍历官方技能行。宠物标记只接受 12.1 的
+    -- combatSpellDetails.isPet；creatureName 本身不证明宠物关系。
+    for _, sp in ipairs(rawSpells) do
+        if type(sp)=="table" and gateway:IsTableAccessible(sp) then
         local amtOk, amt = pcall(function() return sp.totalAmount end)
-        if amtOk and amt then
-            local isSec = issecretvalue and issecretvalue(amt)
+        if amtOk then
+            local isSec = IsSecret(amt)
             if isSec then isSecret = true end
+            if isSec or type(amt)=="number" then
 
-            local spellName = ""
-            local nameOk, nameVal = pcall(function()
-                if C_Spell and C_Spell.GetSpellName then
-                    return C_Spell.GetSpellName(sp.spellID)
+            local spellIDSafe
+            pcall(function() spellIDSafe=sp.spellID end)
+            local idSecret=IsSecret(spellIDSafe)
+            local spellName,rawSpellName,isSecretName="?",nil,false
+            if (idSecret or type(spellIDSafe)=="number") and C_Spell and C_Spell.GetSpellName then
+                local nameOk,nameVal=pcall(C_Spell.GetSpellName,spellIDSafe)
+                if nameOk and IsSecret(nameVal) then rawSpellName=nameVal; isSecretName=true
+                elseif nameOk and type(nameVal)=="string" then spellName=nameVal
+                elseif not idSecret then spellName="spell:"..tostring(spellIDSafe) end
+            elseif not idSecret and type(spellIDSafe)=="number" then
+                spellName="spell:"..tostring(spellIDSafe)
+            end
+
+            local rateOk,rateRaw=pcall(function() return sp.amountPerSecond end)
+            local rateSecret=rateOk and IsSecret(rateRaw) or false
+            local hasRate=rateOk and (rateSecret or type(rateRaw)=="number") or false
+
+            local isPet, creatureName = false, nil
+            local details, detailsState = gateway:ReadTableField(sp, "combatSpellDetails")
+            if detailsState == gateway.ACCESSIBLE then
+                local petFlag, petState = gateway:ReadField(details, "isPet")
+                if petState == gateway.ACCESSIBLE and petFlag == true then
+                    isPet = true
+                    local unitName, unitNameState = gateway:ReadField(details, "unitName")
+                    if unitNameState == gateway.ACCESSIBLE and type(unitName) == "string"
+                        and unitName ~= "" then creatureName = unitName end
                 end
-                return nil
-            end)
-            if nameOk and nameVal then
-                spellName = nameVal
-            else
-                local sidOk, sid = pcall(function() return sp.spellID end)
-                spellName = sidOk and sid and ("spell:" .. sid) or "?"
             end
-
-            -- 宠物名直接从 sp.creatureName 读，不需要二次查询
-            local creatureName = nil
-            local cnOk, cnVal = pcall(function() return sp.creatureName end)
-            if cnOk and type(cnVal) == "string"
-            and not (issecretvalue and issecretvalue(cnVal)) then
-                if cnVal ~= "" then
-                    creatureName = cnVal
-                end
+            if isPet and not creatureName then
+                local cnVal, cnState = gateway:ReadField(sp, "creatureName")
+                if cnState == gateway.ACCESSIBLE and type(cnVal) == "string"
+                    and cnVal ~= "" then creatureName = cnVal end
             end
-            local isPet = creatureName ~= nil
-            if isPet then
-                spellName = creatureName .. ": " .. spellName
+            if isPet and not isSecretName then
+                if creatureName then spellName = creatureName .. ": " .. spellName end
             end
-
-            local spellIDSafe = nil
-            pcall(function() spellIDSafe = sp.spellID end)
 
             -- 可规避标记
             local isAvoidable = false
-            pcall(function() isAvoidable = sp.isAvoidable and true or false end)
+            local avoidableRaw
+            pcall(function() avoidableRaw=sp.isAvoidable end)
+            if not IsSecret(avoidableRaw) then isAvoidable=avoidableRaw==true end
 
-            table.insert(spells, {
-                spellID     = spellIDSafe,
+            local publicSpellID = nil
+            if not idSecret then publicSpellID = spellIDSafe end
+            local rawSpellID = nil
+            if idSecret then rawSpellID = spellIDSafe end
+            local rawRate = nil
+            if rateSecret then rawRate = rateRaw end
+            local entry={
+                spellID     = publicSpellID,
+                rawSpellID  = rawSpellID,
+                isSecretSpellID=idSecret,
                 name        = spellName,
-                school      = 1,
+                rawName     = rawSpellName,
+                isSecretName=isSecretName,
+                school      = nil,
                 value       = isSec and 0 or amt,
-                secretAmt   = isSec and amt or nil,
+                isSecretAmount=isSec,
+                rate        = rateSecret and 0 or (hasRate and rateRaw or 0),
+                rawRate     = rawRate,
+                isSecretRate=rateSecret,
+                hasRate     = hasRate,
                 percent     = 0,
                 isPet       = isPet,
                 isAvoidable = isAvoidable,
-            })
+            }
+            if isSec then entry.rawAmount=amt end
+            table.insert(spells,entry)
+            end
+        end
         end
     end
 
     -- 排序与百分比
     if not isSecret then
         table.sort(spells, function(a, b) return a.value > b.value end)
-        local total = srcData.totalAmount or 0
-        if total > 0 then
+        local total
+        local totalOK=pcall(function() total=srcData.totalAmount end)
+        local totalIsSecret=totalOK and IsSecret(total)
+        if totalIsSecret then isSecret=true end
+        if totalOK and not totalIsSecret and type(total)=="number" and total > 0 then
             for _, s in ipairs(spells) do
                 s.percent = s.value / total * 100
             end
         end
     end
 
-    local dur = 0
-    if ns.state.inCombat and ns.state.combatStartTime and ns.state.combatStartTime > 0 then
-        dur = GetTime() - ns.state.combatStartTime
-    end
+    -- Duration is retained in the renderer signature for saved-data
+    -- compatibility, but live API detail never substitutes a local timer.
+    local dur = nil
 
-    local apiMaxAmount = isSecret and srcData.maxAmount or nil
-
-    self._lastRenderArgs = {
-        type = "spellAPI",
-        args = {sourceGUID, sourceCreatureID, name, class, mode, sessionType, sessionID}
-    }
+    local apiMaxAmount=nil
+    if isSecret then pcall(function() apiMaxAmount=srcData.maxAmount end) end
 
     self:EnsureCreated(); self.frame:Show(); self:ApplyTheme()
-    self:RenderSpellList(name or "?", class or "WARRIOR", mode, spells, dur, "", apiMaxAmount)
+    self:RenderSpellList(OpaqueOr(name,"?"), class, mode, spells, dur, "", apiMaxAmount,isSecret)
+    -- RenderSpellList records a local snapshot by default. Restore the API
+    -- locator after rendering so periodic refreshes re-read live details.
+    self._lastRenderArgs = {
+        type = "spellAPI",
+        args = {sourceGUID,sourceCreatureID,name,class,mode,sessionType,sessionID,isLocalPlayer}
+    }
 end
 
 -- ============================================================
@@ -706,16 +941,20 @@ function DV:ShowCombatLocked(safeName)
     self._lastRenderArgs = { type = "combat", args = {safeName} }
     self:EnsureCreated()
     self.frame:Show()
+    self:ApplyTheme()
     self:ClearRows()
-    self.titleText:SetFormattedText(L.SPELL_BREAKDOWN_TITLE_FORMAT, ns:DisplayName(safeName) or L.UNKNOWN) -- ★ 添加DisplayName
+    local shown=ns:DisplayName(OpaqueOr(safeName,L.UNKNOWN))
+    if IsSecret(shown) then self.titleText:Hide(); self.rawTitleText:Show(); self.rawTitleText:SetText(shown)
+    else self.rawTitleText:Hide(); self.titleText:Show(); self.titleText:SetFormattedText(L.SPELL_BREAKDOWN_TITLE_FORMAT,shown) end
     
     local bh, gap, _, _, _, _, _, thickness, vOffset = self:GetBarConfig()
     local r = self:PlaceRow(1, 0, bh * 2, nil, thickness * 2, vOffset)
     
-    r.name:SetText("|cffaaaaaa[API限制，请脱战后查看")
+    r.name:SetText("|cffaaaaaa"..L.COMBAT_DATA_LOCKED.."|r")
     
     r.name:SetWidth(300)
     r.value:SetText("")
+    self:PrioritizeRowValue(r, false)
     self:UpdateScroll(bh * 2 + 5)
 end
 
@@ -744,14 +983,15 @@ function DV:GetSpellBreakdownExt(seg, guid, mode)
     if mode == "damageTaken" then
         if pd.damageTakenSpells and next(pd.damageTakenSpells) then
             local result = {}
-            for spellID, sd in pairs(pd.damageTakenSpells) do
+            for spellKey, sd in pairs(pd.damageTakenSpells) do
+                local spellID = sd.spellID or sd.id or spellKey
                 if (sd.damage or 0) > 0 then
                     table.insert(result, {
                         spellID     = spellID,
                         name        = sd.name or ("spell:" .. spellID),
-                        school      = sd.school or 1,
+                        school      = sd.school,
                         value       = sd.damage,
-                        hits        = sd.hits or 1,
+                        hits        = sd.hits,
                         isAvoidable = sd.isAvoidable,
                     })
                 end
@@ -764,7 +1004,7 @@ function DV:GetSpellBreakdownExt(seg, guid, mode)
             return result
         else
             if (pd.damageTaken or 0) > 0 then
-                return {{ spellID=0, name=L.TOTAL_DAMAGE_TAKEN, school=1, value=pd.damageTaken,
+                return {{ spellID=0, name=L.TOTAL_DAMAGE_TAKEN, school=nil, value=pd.damageTaken,
                     hits=0, percent=100 }}
             end
         end
@@ -778,7 +1018,8 @@ function DV:GetSpellBreakdownExt(seg, guid, mode)
         -- 如果有具体的技能明细记录，则遍历显示
         if spellTable and next(spellTable) then
             local result = {}
-            for spellID, sd in pairs(spellTable) do
+            for spellKey, sd in pairs(spellTable) do
+                local spellID = sd.spellID or sd.id or spellKey
                 local amt = sd.damage or sd.hits or 0
                 if amt > 0 then
                     local sName = sd.name or ("spell:" .. spellID)
@@ -790,7 +1031,7 @@ function DV:GetSpellBreakdownExt(seg, guid, mode)
                     table.insert(result, {
                         spellID     = spellID,
                         name        = sName,
-                        school      = sd.school or 1,
+                        school      = sd.school,
                         value       = amt,
                         hits        = amt,
                     })
@@ -807,7 +1048,7 @@ function DV:GetSpellBreakdownExt(seg, guid, mode)
             -- 兜底逻辑
             if (totalVal or 0) > 0 then
                 local fallbackName = (mode == "interrupts") and L.TOTAL_INTERRUPTS or L.TOTAL_DISPELS
-                return {{ spellID=0, name=fallbackName, school=1, value=totalVal,
+                return {{ spellID=0, name=fallbackName, school=nil, value=totalVal,
                     hits=0, percent=100 }}
             end
         end
@@ -827,9 +1068,16 @@ function DV:ShowDeathDetail(death)
     self:ClearRows()
     if not death then return end
 
-    local ch      = ns:GetClassHex(death.playerClass)
-    local selfTag = death.isSelf and " |cffff8888[自己]|r" or ""
-    self.titleText:SetText(ch .. ns:DisplayName(death.playerName or "?") .. "|r" .. selfTag .. L.DEATH_DETAILS_TITLE_SUFFIX) -- ★ 玩家名
+    local selfTag = death.isSelf and (" "..L.COLORED_OWN_DEATH) or ""
+    if IsSecret(death.playerName) then
+        self.titleText:Hide(); self.rawTitleText:Show(); self.rawTitleText:SetText(death.playerName)
+    elseif type(death.playerName) == "string" and death.playerName ~= "" then
+        local playerShown = ns:DisplayName(death.playerName)
+        self.rawTitleText:Hide(); self.titleText:Show()
+        self.titleText:SetText(ns:GetClassHex(death.playerClass)..playerShown.."|r"..selfTag..L.DEATH_DETAILS_TITLE_SUFFIX)
+    else
+        self.rawTitleText:Hide(); self.titleText:Show(); self.titleText:SetText(L.DEATHS)
+    end
 
     local events     = death.events or {}
     local evReversed = {}
@@ -840,23 +1088,27 @@ function DV:ShowDeathDetail(death)
     local bh, gap, alpha, _, _, _, _, thickness, vOffset, texPath = self:GetBarConfig()
     local ri        = 0
     local currentY  = 0
-    local deathTime = events[#events] and events[#events].time or GetTime()
+    local deathTime = events[#events] and events[#events].time or nil
 
     -- 致命一击行
-    ri = ri + 1
-    local hr = self:PlaceRow(ri, currentY, bh + 4, BG_FATAL, thickness + 4, vOffset)
-    currentY = currentY - (bh + 4 + gap)
-    hr.fill:SetStatusBarTexture(texPath)
-    hr.fill:SetMinMaxValues(0, 1)
-    hr.fill:SetValue(1)
-    hr.fill:SetStatusBarColor(self:GetDetailBarColor({0.70, 0.04, 0.04, 0.55}, 0.55))
-    setNameWithIcon(hr,
-        death.killingAbility ~= "?" and GetSpellIcon(
-            (evReversed[1] and not evReversed[1].isHeal) and evReversed[1].spellID or 0
-        ) or nil,
-        L.COLORED_FATAL_PREFIX .. (death.killingAbility or "?")
-    )
-    hr.value:SetText(L.COLORED_KILLER_PREFIX .. (death.killerName ~= "" and ns:DisplayName(death.killerName) or L.UNKNOWN)) -- ★ 击杀者名
+    if type(death.killingAbility) == "string" and death.killingAbility ~= "" then
+        ri = ri + 1
+        local hr = self:PlaceRow(ri, currentY, bh + 4, BG_FATAL, thickness + 4, vOffset)
+        currentY = currentY - (bh + 4 + gap)
+        hr.fill:SetStatusBarTexture(texPath)
+        hr.fill:SetMinMaxValues(0, 1)
+        hr.fill:SetValue(1)
+        hr.fill:SetStatusBarColor(self:GetDetailBarColor({0.70, 0.04, 0.04, 0.55}, 0.55))
+        setNameWithIcon(hr,
+            GetSpellIcon((evReversed[1] and not evReversed[1].isHeal) and evReversed[1].spellID or nil),
+            L.COLORED_FATAL_PREFIX .. death.killingAbility
+        )
+        local killerShown = type(death.killerName) == "string" and death.killerName ~= ""
+            and ns:DisplayName(death.killerName) or nil
+        hr.rawValue:Hide(); hr.value:Show()
+        hr.value:SetText(killerShown and (L.COLORED_KILLER_PREFIX .. killerShown) or "")
+        self:PrioritizeRowValue(hr, false)
+    end
 
     -- 分割线
     ri = ri + 1
@@ -866,6 +1118,7 @@ function DV:ShowDeathDetail(death)
     sep.fill:SetValue(0)
     sep.name:SetText(L.EVENTS_BEFORE_DEATH_RECENT_OLD)
     sep.value:SetText(string.format(L.COLORED_ROW_COUNT_FORMAT, #evReversed))
+    self:PrioritizeRowValue(sep, false)
 
     if #evReversed == 0 then
         ri = ri + 1
@@ -873,6 +1126,7 @@ function DV:ShowDeathDetail(death)
         currentY = currentY - (bh + gap)
         er.name:SetText(L.COLORED_NO_EVENT_DATA)
         er.value:SetText("")
+        self:PrioritizeRowValue(er, false)
     end
 
     for idx, ev in ipairs(evReversed) do
@@ -881,93 +1135,121 @@ function DV:ShowDeathDetail(death)
         currentY = currentY - (bh + gap)
         local isFatal = (idx == 1 and not ev.isHeal)
 
-        local hpPct = math.min(1, math.max(0, (ev.hpPercent or 0) / 100))
+        local hpPct = type(ev.hpPercent) == "number"
+            and math.min(1, math.max(0, ev.hpPercent / 100)) or nil
         r.fill:SetStatusBarTexture(texPath)
         r.fill:SetMinMaxValues(0, 1)
-        r.fill:SetValue(hpPct)
+        if hpPct then r.fill:SetValue(hpPct); r.fill:Show()
+        else r.fill:SetValue(0); r.fill:Hide() end
+
+        local eventName = (type(ev.spellName) == "string" and ev.spellName ~= "" and ev.spellName)
+            or (type(ev.eventType) == "string" and ev.eventType ~= "" and ev.eventType) or ""
 
         if ev.isHeal then
             r.fill:SetStatusBarColor(self:GetDetailBarColor({0.10, 0.50, 0.10}, alpha))
             r.bg:SetColorTexture(unpack(ROW_BG[(ri % 2) + 1]))
-            setNameWithIcon(r, GetSpellIcon(ev.spellID),
-                string.format("|cff44ee44+%s|r %s",
-                    ns:FormatNumber(math.abs(ev.amount)), ev.spellName or L.HEALING))
+            setNameWithIcon(r, GetSpellIcon(ev.spellID), eventName)
         elseif isFatal then
             r.bg:SetColorTexture(0.20, 0.03, 0.03, 0.96)
             r.fill:SetStatusBarColor(self:GetDetailBarColor({0.80, 0.04, 0.04}, alpha))
             setNameWithIcon(r, GetSpellIcon(ev.spellID),
-                string.format("|cffff1111-%s|r |cffff7755%s|r",
-                    ns:FormatNumber(ev.amount), ev.spellName or "?"))
+                string.format("|cffff7755%s|r", eventName))
         else
             r.fill:SetStatusBarColor(self:GetDetailBarColor({0.60, 0.08, 0.08}, alpha))
-            setNameWithIcon(r, GetSpellIcon(ev.spellID),
-                string.format("|cffff9977-%s|r %s",
-                    ns:FormatNumber(ev.amount), ev.spellName or "?"))
+            setNameWithIcon(r, GetSpellIcon(ev.spellID), eventName)
         end
 
-        local td = deathTime - (ev.time or deathTime)
+        local td = (type(deathTime) == "number" and type(ev.time) == "number")
+            and (deathTime - ev.time) or nil
         local timeStr
-        if td < 0.05 then
+        if type(td) == "number" and td < 0.05 then
             timeStr = L.COLORED_DEATH
-        else
+        elseif type(td) == "number" then
             timeStr = string.format(L.COLORED_SECONDS_AGO_FORMAT, td)
         end
-        local hpColor = ev.isHeal and "44ee44" or (hpPct < 0.15 and "ff4444" or "bbbbbb")
-        r.value:SetText(string.format("|cff%s%.0f%%|r %s", hpColor, ev.hpPercent or 0, timeStr))
+        local valueParts = {}
+        if type(ev.amount) == "number" then
+            valueParts[#valueParts + 1] = ev.isHeal
+                and string.format("|cff44ee44+%s|r", ns:FormatNumber(math.abs(ev.amount)))
+                or string.format("|cffff7777-%s|r", ns:FormatNumber(math.abs(ev.amount)))
+        end
+        if type(ev.hpPercent) == "number" then
+            local hpColor = ev.isHeal and "44ee44" or (hpPct < 0.15 and "ff4444" or "bbbbbb")
+            valueParts[#valueParts + 1] = string.format("|cff%s%.0f%%|r", hpColor, ev.hpPercent)
+        end
+        if timeStr then valueParts[#valueParts + 1] = timeStr end
+        r.value:SetText(table.concat(valueParts, "  "))
+        self:PrioritizeRowValue(r, false)
 
         local ev_c    = ev
         local td_c    = td
-        local maxHP_c = death.maxHP or 0
+        local maxHP_c = ev.maxHP
         r.frame:SetScript("OnEnter", function(fw)
-            GameTooltip:SetOwner(fw, "ANCHOR_RIGHT")
+            local tip=(ns.PrivateTooltip and ns.PrivateTooltip:Get()) or GameTooltip
+            tip:SetOwner(fw, "ANCHOR_RIGHT")
             if ev_c.spellID and ev_c.spellID > 0 then
-                pcall(function() GameTooltip:SetSpellByID(ev_c.spellID) end)
+                pcall(function() tip:SetSpellByID(ev_c.spellID) end)
             else
-                GameTooltip:AddLine(ev_c.spellName or "?")
+                local publicEventName = ev_c.spellName or ev_c.eventType
+                if publicEventName then tip:AddLine(publicEventName) end
             end
-            GameTooltip:AddLine(" ")
-            if ev_c.isHeal then
-                GameTooltip:AddDoubleLine(L.HEALING_DONE,
+            tip:AddLine(" ")
+            if ev_c.isHeal and type(ev_c.amount) == "number" then
+                tip:AddDoubleLine(L.HEALING_DONE,
                     ns:FormatNumber(math.abs(ev_c.amount)), 0.7, 0.7, 0.7, 0.3, 1, 0.3)
-            else
-                GameTooltip:AddDoubleLine(L.DAMAGE_DONE,
+            elseif not ev_c.isHeal and type(ev_c.amount) == "number" then
+                tip:AddDoubleLine(L.DAMAGE_DONE,
                     ns:FormatNumber(ev_c.amount), 0.7, 0.7, 0.7, 1, 0.3, 0.3)
-                if (ev_c.overkill or 0) > 0 then
-                    GameTooltip:AddDoubleLine(L.OVERKILL,
+                if type(ev_c.overkill) == "number" and ev_c.overkill > 0 then
+                    tip:AddDoubleLine(L.OVERKILL,
                         ns:FormatNumber(ev_c.overkill), 0.7, 0.7, 0.7, 1, 0.5, 0)
                 end
             end
-            if ev_c.srcName and ev_c.srcName ~= "" then
-                GameTooltip:AddDoubleLine(L.SOURCE, ns:DisplayName(ev_c.srcName), 0.7, 0.7, 0.7, 1, 1, 1) -- ★ 来源名
+            -- Public native GameTooltip is retained for the complete spell
+            -- description.  An opaque source name is optional detail and must
+            -- not be injected into GameTooltip's undocumented line storage.
+            if not IsSecret(ev_c.srcName) and ev_c.srcName~=nil and ev_c.srcName~="" then
+                tip:AddDoubleLine(L.SOURCE, ns:DisplayName(ev_c.srcName), 0.7, 0.7, 0.7, 1, 1, 1)
             end
-            GameTooltip:AddDoubleLine(L.HP_REMAINING,
-                string.format("%s / %s (%.0f%%)",
-                    ns:FormatNumber(ev_c.hp or 0),
-                    ns:FormatNumber(maxHP_c),
-                    ev_c.hpPercent or 0),
-                0.7, 0.7, 0.7, 1, 1, 1)
-            if td_c >= 0.05 then
-                GameTooltip:AddDoubleLine(L.TO_DEATH, string.format(L.SECONDS_FORMAT, td_c), 0.7, 0.7, 0.7, 1, 1, 1)
+            if type(ev_c.hp) == "number" and type(maxHP_c) == "number"
+                and type(ev_c.hpPercent) == "number" then
+                tip:AddDoubleLine(L.HP_REMAINING,
+                    string.format("%s / %s (%.0f%%)",
+                        ns:FormatNumber(ev_c.hp),
+                        ns:FormatNumber(maxHP_c),
+                        ev_c.hpPercent),
+                    0.7, 0.7, 0.7, 1, 1, 1)
             end
-            GameTooltip:Show()
+            if type(td_c) == "number" and td_c >= 0.05 then
+                tip:AddDoubleLine(L.TO_DEATH, string.format(L.SECONDS_FORMAT, td_c), 0.7, 0.7, 0.7, 1, 1, 1)
+            end
+            tip:Show()
         end)
-        r.frame:SetScript("OnLeave", function() GameTooltip:Hide() end)
+        r.frame:SetScript("OnLeave", function() if ns.PrivateTooltip then ns.PrivateTooltip:Hide() else GameTooltip:Hide() end end)
     end
 
-    -- 底部汇总行
-    ri = ri + 1
-    local tr   = self:PlaceRow(ri, currentY, bh + 4, BG_HEADER, thickness + 4, vOffset)
-    currentY = currentY - (bh + 4 + gap)
-    tr.fill:SetStatusBarTexture(texPath)
-    tr.fill:SetMinMaxValues(0, 1)
-    tr.fill:SetValue(1)
-    tr.fill:SetStatusBarColor(self:GetDetailBarColor({0.04, 0.04, 0.08, 0.90}, 0.90))
-    tr.name:SetText(string.format(
-        L.DAMAGE_TAKEN_LINE_FORMAT,
-        ns:FormatNumber(death.totalDamageTaken or 0)))
-    local spanStr = (death.timeSpan and death.timeSpan > 0)
-        and string.format(L.COLORED_SPAN_SECONDS_FORMAT, death.timeSpan) or ""
-    tr.value:SetText(spanStr)
+    -- 底部汇总行：只展示暴雪实际提供并可安全归档的字段。
+    local hasDamageTotal = type(death.totalDamageTaken) == "number"
+    local hasSpan = type(death.timeSpan) == "number" and death.timeSpan > 0
+    if hasDamageTotal or hasSpan then
+        ri = ri + 1
+        local tr = self:PlaceRow(ri, currentY, bh + 4, BG_HEADER, thickness + 4, vOffset)
+        currentY = currentY - (bh + 4 + gap)
+        tr.fill:SetStatusBarTexture(texPath)
+        tr.fill:SetMinMaxValues(0, 1)
+        tr.fill:SetValue(1)
+        tr.fill:SetStatusBarColor(self:GetDetailBarColor({0.04, 0.04, 0.08, 0.90}, 0.90))
+        tr.name:SetText(L.DAMAGE_TAKEN_LABEL)
+        local parts = {}
+        if hasDamageTotal then
+            parts[#parts + 1] = string.format("|cffff9966%s|r", ns:FormatNumber(death.totalDamageTaken))
+        end
+        if hasSpan then
+            parts[#parts + 1] = string.format(L.COLORED_SPAN_SECONDS_FORMAT, death.timeSpan)
+        end
+        tr.value:SetText(table.concat(parts, "  "))
+        self:PrioritizeRowValue(tr, false)
+    end
 
     self:UpdateScroll(math.abs(currentY))
 end
@@ -984,7 +1266,9 @@ function DV:ShowEnemyDamageTakenDetail(enemyName, sources, totalDmg)
     self:ApplyTheme()
     self:ClearRows()
 
-    self.titleText:SetText(string.format(L.DAMAGE_TAKEN_SOURCE_TITLE_FORMAT, ns:DisplayName(enemyName)))
+    local shown=ns:DisplayName(OpaqueOr(enemyName,"?"))
+    if IsSecret(shown) then self.titleText:Hide(); self.rawTitleText:Show(); self.rawTitleText:SetText(shown)
+    else self.rawTitleText:Hide(); self.titleText:Show(); self.titleText:SetText(string.format(L.DAMAGE_TAKEN_SOURCE_TITLE_FORMAT,shown)) end
 
     local bh, gap, alpha, _, _, _, _, thickness, vOffset, texPath = self:GetBarConfig()
     local currentY = 0
@@ -992,6 +1276,7 @@ function DV:ShowEnemyDamageTakenDetail(enemyName, sources, totalDmg)
     if not sources or #sources == 0 then
         local r = self:PlaceRow(1, 0, bh, nil, thickness, vOffset)
         r.name:SetText(L.COLORED_NO_DAMAGE_TAKEN_DATA); r.value:SetText("")
+        self:PrioritizeRowValue(r, false)
         self:UpdateScroll(bh + 5); return
     end
 
@@ -1006,17 +1291,19 @@ function DV:ShowEnemyDamageTakenDetail(enemyName, sources, totalDmg)
         r.fill:SetMinMaxValues(0, maxV)
         r.fill:SetValue(src.amount)
 
-        local classKey = type(src.class) == "string" and src.class or "NPC"
+        local classKey = type(src.class) == "string" and src.class or nil
         local ok, cc = pcall(ns.GetClassColor, ns, classKey)
         if not ok or not cc then cc = {0.5, 0.5, 0.5} end
         r.fill:SetStatusBarColor(self:GetDetailBarColor(cc, alpha))
 
         local nameOk, nameStr = pcall(ns.DisplayName, ns, src.name)
-        r.name:SetText((nameOk and nameStr) or tostring(src.name or "?"))
+        r.name:SetText((nameOk and nameStr) or "")
         r.name:SetTextColor(cc[1], cc[2], cc[3])
 
-        local pct = totalDmg > 0 and (src.amount / totalDmg * 100) or 0
+        local totalSafe=(not IsSecret(totalDmg) and type(totalDmg)=="number") and totalDmg or 0
+        local pct = totalSafe > 0 and (src.amount / totalSafe * 100) or 0
         r.value:SetText(string.format("%s  |cffaaaaaa%.0f%%|r", ns:FormatNumber(src.amount), pct))
+        self:PrioritizeRowValue(r, false)
 
         r.frame:SetScript("OnEnter", nil)
         r.frame:SetScript("OnLeave", nil)
@@ -1030,9 +1317,17 @@ end
 -- 查 EnemyDamageTaken source，按攻击玩家聚合 → 复用 ShowEnemyDamageTakenDetail 渲染
 -- ============================================================
 function DV:ShowEnemyDamageTakenFromAPI(creatureID, enemyName, totalAmount, sessionType, sessionID)
-    if not creatureID then
-        self:EnsureCreated(); self.frame:Show(); self:ApplyTheme()
-        self:ShowEnemyDamageTakenDetail(enemyName or "?", {}, totalAmount or 0)
+    if IsSecret(creatureID) then
+        self:ShowCombatLocked(OpaqueOr(enemyName,"?"))
+        self._lastRenderArgs = {
+            type = "enemyDmgTakenAPI",
+            args = {creatureID, enemyName, totalAmount, sessionType, sessionID}
+        }
+        return
+    end
+    if creatureID == nil then
+        if ns.state.inCombat or IsSecret(enemyName) or IsSecret(totalAmount) then self:ShowCombatLocked(OpaqueOr(enemyName,"?"))
+        else self:ShowEnemyDamageTakenDetail(OpaqueOr(enemyName,"?"), {}, totalAmount or 0) end
         self._lastRenderArgs = {
             type = "enemyDmgTakenAPI",
             args = {creatureID, enemyName, totalAmount, sessionType, sessionID}
@@ -1041,53 +1336,59 @@ function DV:ShowEnemyDamageTakenFromAPI(creatureID, enemyName, totalAmount, sess
     end
 
     local dmType = Enum.DamageMeterType.EnemyDamageTaken
-    local ok, srcData
+    local gateway = ns.DamageMeterGateway
+    local srcData
     if sessionID then
-        ok, srcData = pcall(
-            C_DamageMeter.GetCombatSessionSourceFromID,
-            sessionID, dmType, nil, creatureID
-        )
+        srcData = gateway and select(1, gateway:GetRawSource(
+            nil, sessionID, dmType, nil, creatureID))
     else
         local sType = sessionType or Enum.DamageMeterSessionType.Current
-        ok, srcData = pcall(
-            C_DamageMeter.GetCombatSessionSourceFromType,
-            sType, dmType, nil, creatureID
-        )
+        srcData = gateway and select(1, gateway:GetRawSource(
+            sType, nil, dmType, nil, creatureID))
     end
 
     local sources = {}
-    if ok and srcData and type(srcData.combatSpells) == "table" then
+    local protected=false
+    local rawSpells
+    local sourceType=type(srcData)
+    local sourceReadable=sourceType=="table" and gateway and gateway:IsTableAccessible(srcData)
+    if sourceType~="nil" and not sourceReadable then protected=true end
+    if sourceReadable then
+        local ok,value=pcall(function() return srcData.combatSpells end)
+        if ok then rawSpells=value end
+    end
+    if type(rawSpells) ~= "nil" and (type(rawSpells)~="table" or not gateway:IsTableAccessible(rawSpells)) then
+        protected = true
+    elseif type(rawSpells) == "table" then
         local agg = {}  -- name → {name, class, amount}
-        pcall(function()
-            for _, sp in ipairs(srcData.combatSpells) do
-                local details = sp.combatSpellDetails
-                if details then
-                    local pName = details.unitName
-                    local pClass = details.unitClassFilename
-                    if not pClass or pClass == "" then pClass = "NPC" end
-
-                    local amt = 0
-                    pcall(function() amt = details.amount or 0 end)
-                    if amt == 0 then
-                        pcall(function() amt = sp.totalAmount or 0 end)
-                    end
-
-                    if pName and type(pName) == "string" and amt > 0
-                       and not (issecretvalue and issecretvalue(pName)) then
-                        if not agg[pName] then
-                            agg[pName] = { name = pName, class = pClass, amount = 0 }
-                        end
-                        agg[pName].amount = agg[pName].amount + amt
-                    end
+        for _, sp in ipairs(rawSpells) do
+            if type(sp)=="table" and gateway:IsTableAccessible(sp) then
+            local details, detailsState = gateway:ReadTableField(sp, "combatSpellDetails")
+            if detailsState == gateway.ACCESSIBLE then
+                local pName, nameState = gateway:ReadField(details, "unitName")
+                local pClass, classState = gateway:ReadField(details, "unitClassFilename")
+                local amt, amountState = gateway:ReadField(details, "amount")
+                if nameState == gateway.ACCESSIBLE and amountState == gateway.ACCESSIBLE
+                    and type(pName)=="string" and type(amt)=="number" and amt>0 then
+                    if classState ~= gateway.ACCESSIBLE or type(pClass) ~= "string" then pClass=nil end
+                    if not agg[pName] then agg[pName]={name=pName,class=pClass,amount=0} end
+                    agg[pName].amount=agg[pName].amount+amt
                 end
             end
-        end)
+            end
+        end
         for _, entry in pairs(agg) do
             table.insert(sources, entry)
         end
     end
 
-    self:ShowEnemyDamageTakenDetail(enemyName or "?", sources, totalAmount or 0)
+    if protected or IsSecret(totalAmount) or (not srcData and ns.state.inCombat) then
+        self:ShowCombatLocked(OpaqueOr(enemyName,"?"))
+        self._lastRenderArgs={type="enemyDmgTakenAPI",args={creatureID,enemyName,totalAmount,sessionType,sessionID}}
+        return
+    end
+
+    self:ShowEnemyDamageTakenDetail(OpaqueOr(enemyName,"?"), sources, totalAmount or 0)
     self._lastRenderArgs = {
         type = "enemyDmgTakenAPI",
         args = {creatureID, enemyName, totalAmount, sessionType, sessionID}

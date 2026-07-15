@@ -257,12 +257,23 @@ end
 ns._guidUnitCache    = {}
 ns._guidUnitCacheAge = 0
 
+local function IsPublicGUID(guid)
+    if type(guid) ~= "string" then return false end
+    if ns.DamageMeterGateway then return ns.DamageMeterGateway:IsAccessible(guid) end
+    if type(issecretvalue) == "function" then
+        local ok, secret = pcall(issecretvalue, guid)
+        if not ok or secret then return false end
+    end
+    return true
+end
+
 function ns:InvalidateGUIDCache()
     ns._guidUnitCache    = {}
     ns._guidUnitCacheAge = GetTime()
 end
 
 function ns:FindUnitByGUID(guid)
+    if not IsPublicGUID(guid) then return nil end
     if guid == ns.state.playerGUID then return "player" end
 
     local cached = ns._guidUnitCache[guid]
@@ -276,7 +287,7 @@ function ns:FindUnitByGUID(guid)
         local unit = prefix .. i
         if UnitExists(unit) then
             local g = UnitGUID(unit)
-            if g then
+            if IsPublicGUID(g) then
                 ns._guidUnitCache[g] = unit
                 if g == guid then return unit end
             end
@@ -287,7 +298,9 @@ end
 
 -- 获取宠物主人GUID
 function ns:FindPetOwner(petGUID)
-    if UnitExists("pet") and UnitGUID("pet") == petGUID then
+    if not IsPublicGUID(petGUID) then return nil end
+    local playerPetGUID = UnitExists("pet") and UnitGUID("pet")
+    if IsPublicGUID(playerPetGUID) and playerPetGUID == petGUID then
         return UnitGUID("player")
     end
 
@@ -295,7 +308,8 @@ function ns:FindPetOwner(petGUID)
     local count  = IsInRaid() and GetNumGroupMembers() or math.max(0, GetNumGroupMembers() - 1)
     for i = 1, count do
         local petUnit = prefix .. "pet" .. i
-        if UnitExists(petUnit) and UnitGUID(petUnit) == petGUID then
+        local unitPetGUID = UnitExists(petUnit) and UnitGUID(petUnit)
+        if IsPublicGUID(unitPetGUID) and unitPetGUID == petGUID then
             return UnitGUID(prefix .. i)
         end
     end
@@ -308,21 +322,21 @@ function ns:ShortName(name)
 end
 
 function ns:DisplayName(name)
-    if not name then return "?" end
-    if issecretvalue and issecretvalue(name) then
+    -- Protected names must remain opaque.  Ambiguate is explicitly allowed
+    -- to consume them; string matching, substring operations and measuring
+    -- are not.  Realm-visible mode therefore returns the API value verbatim.
+    local protected=issecretvalue and issecretvalue(name)
+    if protected then
+        if ns.db and ns.db.display and ns.db.display.showRealm then return name end
+        if Ambiguate then local ok,result=pcall(Ambiguate,name,"short"); if ok then return result end end
         return name
     end
-    if name == "" then return "?" end
-    
-    local ok, result = pcall(function()
-        if ns.db and ns.db.display and ns.db.display.showRealm then
-            return name:gsub("%-", " - ")
-        else
-            return name:match("^([^%-]+)") or name
-        end
-    end)
-    
-    if ok and result then return result end
+    if not name or name=="" then return "?" end
+    if ns.db and ns.db.display and ns.db.display.showRealm then return name end
+    if Ambiguate then
+        local ok, result = pcall(Ambiguate, name, "short")
+        if ok and result then return result end
+    end
     return name
 end
 
@@ -341,7 +355,6 @@ ns.MODE_SHORT = {
     damage          = "DAMAGE_SHORT",
     healing         = "HEALING_SHORT",
     damageTaken     = "DAMAGE_TAKEN_SHORT",
-    enemyDamageTaken= "ENEMY_SHORT",
     deaths          = "DEATHS_SHORT",
     interrupts      = "INTERRUPTS_SHORT",
     dispels         = "DISPELS_SHORT",
@@ -349,12 +362,13 @@ ns.MODE_SHORT = {
 }
 
 ns.MODE_UNITS = {
-    damage      = "DPS",
-    healing     = "HPS",
-    damageTaken = "DTPS",
+    damage          = "DPS",
+    healing         = "HPS",
+    damageTaken     = "DTPS",
+    enemyDamageTaken= "DPS",
 }
 
-ns.MODE_ORDER = { "damage", "healing", "damageTaken", "deaths", "interrupts", "dispels" }
+ns.MODE_ORDER = { "damage", "healing", "damageTaken", "deaths", "enemyDamageTaken", "interrupts", "dispels" }
 
 function ns:NextMode(current)
     for i, m in ipairs(ns.MODE_ORDER) do
@@ -397,14 +411,14 @@ do
 
     local options
     if asian then
-        -- 中文/韩文：< 10000 不缩写，10000 起用 萬，1亿 起用 億
+        -- 1.4.6 数值显示规则：中文/韩文使用 万/萬、亿/億的标准缩写精度。
         options = {
-            {breakpoint=100000000, abbreviation="SECOND_NUMBER_CAP_NO_SPACE", significandDivisor=1000000, fractionDivisor=100, abbreviationIsGlobal=true},  -- 億
-            {breakpoint=10000,     abbreviation="FIRST_NUMBER_CAP_NO_SPACE",  significandDivisor=100,     fractionDivisor=100, abbreviationIsGlobal=true},  -- 萬
+            {breakpoint=100000000, abbreviation="SECOND_NUMBER_CAP_NO_SPACE", significandDivisor=1000000, fractionDivisor=100, abbreviationIsGlobal=true},  -- 亿/億
+            {breakpoint=10000,     abbreviation="FIRST_NUMBER_CAP_NO_SPACE",  significandDivisor=100,     fractionDivisor=100, abbreviationIsGlobal=true},  -- 万/萬
             {breakpoint=1,         abbreviation="",                            significandDivisor=1,       fractionDivisor=1,   abbreviationIsGlobal=false},
         }
     else
-        -- 英文：1K / 1M / 1B
+        -- 1.4.6 数值显示规则：西文环境使用标准 K / M / B 缩写精度。
         options = {
             {breakpoint=1000000000, abbreviation="B", significandDivisor=10000000, fractionDivisor=100, abbreviationIsGlobal=false},
             {breakpoint=1000000,    abbreviation="M", significandDivisor=10000,    fractionDivisor=100, abbreviationIsGlobal=false},
@@ -417,6 +431,13 @@ do
     local settings = {config = cfg}
     function ns.AbbrevNumber(n)
         if n == nil then return "0" end
+        return AbbreviateNumbers(n, settings)
+    end
+
+    -- Secret combat numbers cannot be compared with nil or handled by Lua
+    -- arithmetic. AbbreviateNumbers is the 12.1-safe formatter and returns an
+    -- opaque localized string that can be passed directly to a FontString.
+    function ns.AbbrevProtectedNumber(n)
         return AbbreviateNumbers(n, settings)
     end
 end

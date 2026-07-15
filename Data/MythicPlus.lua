@@ -45,30 +45,14 @@ end
 local function cleanOutdoorHistory()
     local segs = ns.Segments
     if not segs then return end
-
-    local now     = GetTime()
-    local cleaned = {}
-    for _, seg in ipairs(segs.history) do
-        if seg.archived
-           or seg.type == "mythicplus"
-           or seg.type == "boss"
-           or seg._isMerged
-           or seg._isBoss
-           or seg._instanceTag
-        then
-            table.insert(cleaned, seg)
-        end
-    end
-    segs.history = cleaned
+    -- Physical history is immutable outside an explicit full Reset.  The
+    -- public clear action writes permanent hidden IDs instead.
+    segs:HideWhere(function(seg)
+        return seg._wasOutdoor and not seg._isBoss and not seg._isMerged
+    end)
 end
 
 local function enterInstance(id, name, level, timeLimit)
-    cleanOutdoorHistory()
-
-    if ns.CombatTracker then
-        ns.CombatTracker._baselineSessionCount = 0
-        ns.CombatTracker._lastProcessedCount   = 0
-    end
     MP._baseline = 0
 
     if ns.Segments then
@@ -105,11 +89,24 @@ local function leaveInstance()
     end)
 end
 
+function MP:ResumeAfterBoundaryReset()
+    local id, name, timeLimit = getMapInfo()
+    local level = getKeystoneLevel()
+    name = name or GetZoneText() or L.MYTHIC_PLUS
+    enterInstance(id, name, level or 0, timeLimit)
+end
+
 -- ============================================================
 -- Init(Core:OnInitialize 调用)
 -- ============================================================
 function MP:Init()
     C_Timer.After(2, function()
+        if ns.CombatTracker and ns.CombatTracker.IsResetReasonPending
+            and ns.CombatTracker:IsResetReasonPending("challenge-start") then
+            -- The semantic callback persisted with the boundary will enter the
+            -- run only after the official reset is confirmed.
+            return
+        end
         local id, name, timeLimit = getMapInfo()
         if not id then return end
 
@@ -150,38 +147,17 @@ end
 -- ★ 改造:插钥匙前先归档(secret 等待),再 ResetMeter
 -- ============================================================
 function MP:OnStart()
-    if ns.state.isInInstance and ns.Segments then
-        local preTag = ns.CombatTracker and ns.CombatTracker._currentInstanceTag
-        if preTag then
-            for _, seg in ipairs(ns.Segments.history) do
-                if seg._instanceTag == preTag then
-                    seg._instanceTag = nil
-                    seg._preKeystone = true
-                    if not seg.name:find(L.PRE_INSTANCE_PATTERN) then
-                        seg.name = L.PRE_INSTANCE_PREFIX .. (seg.name or L.COMBAT)
-                    end
-                end
-            end
-        end
+    local function startAfterArchiveAndReset()
+        MP:ResumeAfterBoundaryReset()
     end
 
-    -- ★ 新流程:先归档当前所有未归档 sessions (虚拟段),再清 meter
-    if ns.CombatTracker and ns.CombatTracker.WaitAndProcessArchived then
-        ns.CombatTracker:WaitAndProcessArchived()
+    -- Freeze pre-key sessions, archive them atomically, then reset.  There is
+    -- no time-based shortcut: the callback runs only after reset succeeds.
+    if ns.CombatTracker and ns.CombatTracker.BeginMythicRun then
+        ns.CombatTracker:BeginMythicRun(startAfterArchiveAndReset)
+    else
+        startAfterArchiveAndReset()
     end
-
-    -- 0.5s 缓冲后再清 meter,确保归档完成
-    C_Timer.After(0.5, function()
-        if ns.CombatTracker then
-            ns.CombatTracker:ResetMeterForNewRun()
-        end
-
-        local id, name, timeLimit = getMapInfo()
-        local level = getKeystoneLevel()
-        name  = name  or GetZoneText() or L.MYTHIC_PLUS
-        level = level or 0
-        enterInstance(id, name, level, timeLimit)
-    end)
 end
 
 -- ============================================================
@@ -192,7 +168,7 @@ function MP:OnCompleted(time, onTime)
     MP._elapsedOnStop = time
     MP._completedAndStillInside = true
 
-    local status  = onTime and "✓" or "✗"
+    local status  = onTime and L.STATUS_SUCCESS or L.STATUS_FAILED
     local runName = string.format("+%d %s %s",
         MP._level or 0, MP._mapName or L.MYTHIC_PLUS, status)
 
@@ -216,8 +192,8 @@ function MP:OnReset()
     if MP._active then
         local elapsed = MP._startTime and (GetTime() - MP._startTime) or 0
         if elapsed > 30 then
-            local runName = string.format("+%d %s —",
-                MP._level or 0, MP._mapName or L.MYTHIC_PLUS)
+            local runName = string.format("+%d %s - %s",
+                MP._level or 0, MP._mapName or L.MYTHIC_PLUS, L.STATUS_INCOMPLETE)
             MP:BuildMythicSegment(runName, nil)
         end
     end
@@ -251,7 +227,7 @@ function MP:OnLeaveInstance()
 
     local runName = MP._mapName or L.INSTANCE
     if MP._level and MP._level > 0 then
-        runName = string.format("+%d %s —", MP._level, runName)
+        runName = string.format("+%d %s - %s", MP._level, runName, L.STATUS_INCOMPLETE)
     end
 
     MP:BuildMythicSegment(runName, nil)
@@ -276,6 +252,9 @@ function MP:BuildMythicSegment(name, success)
         mapID   = MP._mapID,
         elapsed = MP._elapsedOnStop,
     }
+    if ns.CombatTracker and ns.CombatTracker.PersistLifecycleState then
+        ns.CombatTracker:PersistLifecycleState()
+    end
 end
 
 -- ============================================================

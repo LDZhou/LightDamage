@@ -18,7 +18,7 @@ function UI:BuildTabs()
     st:SetScript("OnClick", function() ns.db.display.mode = "split"; self:Layout() end)
     self.splitTab = st
 
-    local defs = { {m="damage",l=L.DAMAGE},{m="healing",l=L.HEALING},{m="damageTaken",l=L.DAMAGE_TAKEN},{m="deaths",l=L.DEATHS},{m="interrupts",l=L.INTERRUPTS},{m="dispels",l=L.DISPELS} }
+    local defs = { {m="damage",l=L.DAMAGE},{m="healing",l=L.HEALING},{m="damageTaken",l=L.DAMAGE_TAKEN},{m="deaths",l=L.DEATHS},{m="enemyDamageTaken",l=L.ENEMY_DAMAGE_TAKEN},{m="interrupts",l=L.INTERRUPTS},{m="dispels",l=L.DISPELS} }
     self.tabs = {}
     for i, d in ipairs(defs) do
         local t = CreateFrame("Button", nil, tb)

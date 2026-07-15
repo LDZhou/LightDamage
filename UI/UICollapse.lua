@@ -10,19 +10,16 @@ local TITLE_H = UI.TITLE_H
 
 function UI:ToggleCollapse(collapse, skipAnim)
     if collapse == self._collapsed then return end
+    if collapse and self.CloseOtherTabMenu then self:CloseOtherTabMenu() end
     self._collapsed = collapse
     local db = ns.db.window; local cdb = ns.db.collapse
-    local targetHeight = collapse and TITLE_H or (self._savedHeight or db.height)
+    local workspace = ns.Layouts and ns.Layouts:GetWorkspace(ns.state.sceneKey or "outdoor")
+    local targetHeight = collapse and TITLE_H or (self._savedHeight or (workspace and workspace.windowHeight) or db.height)
     if collapse then
         self._savedHeight = self.frame:GetHeight(); self._savedAnchor = { self.frame:GetPoint() }
         if self._savedHeight > TITLE_H then
-            db.height = self._savedHeight
-            db.width  = self.frame:GetWidth()
-            if db.rememberSceneSize then
-                local cat = ns.state.instanceCategory or "outdoor"
-                if not db.sceneSizes then db.sceneSizes = {} end
-                db.sceneSizes[cat] = { width = db.width, height = self._savedHeight }
-            end
+            if self.PersistWorkspaceGeometry then self:PersistWorkspaceGeometry()
+            else db.height = self._savedHeight; db.width=self.frame:GetWidth() end
         end
         local left = self.frame:GetLeft(); local top = self.frame:GetTop()
         self.frame:ClearAllPoints(); self.frame:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", left, top)
@@ -33,8 +30,8 @@ function UI:ToggleCollapse(collapse, skipAnim)
         self.collapseBtn.iconTex:SetTexture(TEX.."btn_collapse"); self.collapseBtn.iconTex:SetVertexColor(0.65,0.65,0.65,1)
         self.collapseBtn.texNormal = TEX.."btn_collapse"; self.collapseBtn.texHover = TEX.."btn_collapse"
         self.bodyFrame:Show(); self.tabBar:Show()
-        if self:IsOverallColumnActive() and (ns.db.mythicPlus and ns.db.mythicPlus.dualDisplay) and ns.state.isInInstance then self.summaryBar:Show() end
-        if self.resizeHandle then self.resizeHandle:Show() end
+        if self.summaryBar then self.summaryBar:Hide() end
+        self:UpdateLockState()
     end
     local function onAnimComplete()
         if self._collapsed then self.bodyFrame:Hide(); self.tabBar:Hide(); self.summaryBar:Hide()
@@ -62,6 +59,7 @@ function UI:StartCollapseAnim(targetHeight, onComplete)
 end
 
 function UI:CheckAutoCollapse(skipAnim)
+    if self._previewContext then if self._collapsed then self:ToggleCollapse(false,true) end; return end
     local cdb = ns.db.collapse; if not cdb then return end
     local mustExpand = false
     if ns.state.inCombat then mustExpand = true end
@@ -74,6 +72,8 @@ end
 -- 渐隐系统
 -- ============================================================
 function UI:CheckAutoFade(force)
+    if self.UpdateFadeHoverDriver then self:UpdateFadeHoverDriver() end
+    if self._previewNoFade then self._faded=false; self:ApplyFadeAlpha(false,false); return end
     local fdb = ns.db and ns.db.fade; if not fdb then return end
     if not self.frame or not self.frame:IsShown() then return end
     local anyFadeEnabled = fdb.fadeBars or fdb.fadeBody

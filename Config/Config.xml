@@ -1,6 +1,8 @@
 <Ui xmlns="http://www.blizzard.com/wow/ui/">
     <Script file="ConfigCore.lua"/>
     <Script file="ConfigPages.lua"/>
+    <Script file="ConfigLayouts.lua"/>
     <Script file="ConfigProfiles.lua"/>
+    <Script file="PreviewModel.lua"/>
     <Script file="ConfigPreview.lua"/>
 </Ui>

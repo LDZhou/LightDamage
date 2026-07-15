@@ -17,9 +17,9 @@ function UI:Layout()
     end
     self:LayoutTabs()
 
-    local showSumm = (ns.db and ns.db.mythicPlus and ns.db.mythicPlus.dualDisplay) and ns.state.isInInstance and self:IsOverallColumnActive() or false
-    if showSumm then self.summaryBar:Show(); self.bodyFrame:SetPoint("TOPLEFT", self.summaryBar, "BOTTOMLEFT", 0, 0)
-    else self.summaryBar:Hide(); self.bodyFrame:SetPoint("TOPLEFT", self.titleBar, "BOTTOMLEFT", 0, 0) end
+    -- 2.0 removes the legacy instance summary strip.  Keep the old saved
+    -- option only for migration compatibility; it must never affect the UI.
+    self.summaryBar:Hide(); self.bodyFrame:SetPoint("TOPLEFT", self.titleBar, "BOTTOMLEFT", 0, 0)
     self.bodyFrame:SetPoint("BOTTOMRIGHT", self.tabBar, "TOPRIGHT", 0, 0)
 
     C_Timer.After(0, function()
@@ -120,17 +120,11 @@ function UI:DoLayout(retryCount)
         if isSplitView then
             local priLabel = L[ns.MODE_NAMES[sp.primaryMode] or ""]
             local secLabel = L[ns.MODE_NAMES[sp.secondaryMode] or ""]
-            if sp.primaryMode == "damageTaken" and ns.state.damageTakenView == "enemy" then priLabel = L.ENEMY_DAMAGE_TAKEN end
-            if sp.secondaryMode == "damageTaken" and ns.state.damageTakenView == "enemy" then secLabel = L.ENEMY_DAMAGE_TAKEN end
-            local priColorMode = (sp.primaryMode == "damageTaken" and ns.state.damageTakenView == "enemy") and "enemyDamageTaken" or sp.primaryMode
-            local secColorMode = (sp.secondaryMode == "damageTaken" and ns.state.damageTakenView == "enemy") and "enemyDamageTaken" or sp.secondaryMode
-            self:SetModeHeaderText(self.ovrPriHead.label, string.format("[%s%s]", ovrTitleWord, priLabel), priColorMode)
-            self:SetModeHeaderText(self.ovrSecHead.label, string.format("[%s%s]", ovrTitleWord, secLabel), secColorMode)
+            self:SetModeHeaderText(self.ovrPriHead.label, string.format(L.OVERALL_MODE_HEADER_FORMAT, ovrTitleWord, priLabel), sp.primaryMode)
+            self:SetModeHeaderText(self.ovrSecHead.label, string.format(L.OVERALL_MODE_HEADER_FORMAT, ovrTitleWord, secLabel), sp.secondaryMode)
         else
             local modeLabel = L[ns.MODE_NAMES[ns.db.display.mode] or ""]
-            if ns.db.display.mode == "damageTaken" and ns.state.damageTakenView == "enemy" then modeLabel = L.ENEMY_DAMAGE_TAKEN end
-            local colorMode = (ns.db.display.mode == "damageTaken" and ns.state.damageTakenView == "enemy") and "enemyDamageTaken" or ns.db.display.mode
-            self:SetModeHeaderText(self.ovrPriHead.label, string.format("[%s%s]", ovrTitleWord, modeLabel), colorMode)
+            self:SetModeHeaderText(self.ovrPriHead.label, string.format(L.OVERALL_MODE_HEADER_FORMAT, ovrTitleWord, modeLabel), ns.db.display.mode)
         end
     end
     self:Refresh()
@@ -143,18 +137,20 @@ function UI:AnchorBarTexts(bar)
     local vOffset = ns.db.display.barVOffset or 0
     local showIcon = ns.db.display.showSpecIcon
 
-    local hash = (showIcon and "1" or "0")
-        .. "|" .. rowH
-        .. "|" .. thickness
-        .. "|" .. vOffset
-        .. "|" .. tostring(bar.frame:GetFrameLevel())
-
-    if bar._anchorHash == hash then return end
-    bar._anchorHash = hash
+    local frameLevel = bar.frame:GetFrameLevel()
+    local width = math.floor((bar.frame:GetWidth() or 0) + .5)
+    if bar._anchorValid and bar._anchorShowIcon == showIcon
+        and bar._anchorRowH == rowH and bar._anchorThickness == thickness
+        and bar._anchorVOffset == vOffset and bar._anchorFrameLevel == frameLevel
+        and bar._anchorWidth == width then return end
+    bar._anchorValid = true
+    bar._anchorShowIcon = showIcon; bar._anchorRowH = rowH
+    bar._anchorThickness = thickness; bar._anchorVOffset = vOffset
+    bar._anchorFrameLevel = frameLevel; bar._anchorWidth = width
 
     -- ★ 强制层级：数据条在底，文字/icon 在上
-    bar.statusbar:SetFrameLevel(bar.frame:GetFrameLevel() + 1)
-    bar.textFrame:SetFrameLevel(bar.frame:GetFrameLevel() + 5)
+    bar.statusbar:SetFrameLevel(frameLevel + 1)
+    bar.textFrame:SetFrameLevel(frameLevel + 5)
 
     local offset = 0
 
@@ -206,8 +202,46 @@ function UI:AnchorBarTexts(bar)
 
     bar.value:ClearAllPoints()
     bar.value:SetPoint("RIGHT", bar.textFrame, "RIGHT", -2, 0)
-
     bar.name:ClearAllPoints()
     bar.name:SetPoint("LEFT", bar.rank, "RIGHT", 3, 0)
     bar.name:SetPoint("RIGHT", bar.value, "LEFT", -5, 0)
+    if bar.rawName then
+        bar.rawName:ClearAllPoints()
+        bar.rawName:SetPoint("LEFT", bar.rank, "RIGHT", 3, 0)
+        bar.rawName:SetPoint("RIGHT", bar.value, "LEFT", -5, 0)
+    end
+end
+
+-- Restore the 1.4.6 row contract: the value owns only a right anchor and keeps
+-- its natural width; the name is bounded by the rank on the left and whichever
+-- value FontString is active on the right. Protected values remain isolated in
+-- dedicated FontStrings, but their geometry is handed back to the client rather
+-- than guessed from probes. This also matches Details' rule that narrowing the
+-- window compresses the name while rank, icon, total and rate remain present.
+function UI:PrioritizeBarValue(bar, isSecret)
+    if not bar or not bar.frame or not bar.value then return end
+    local activeValue=bar.value
+    if isSecret and bar.rawValue then
+        bar.value:Hide()
+        bar.rawBothLayer:Hide(); bar.rawTotalLayer:Hide(); bar.rawCountLayer:Hide()
+        if bar._showingRawRate then
+            bar.rawBothLayer:Show(); activeValue=bar.rawValue
+        elseif bar._showingRawSuffix then
+            bar.rawCountLayer:Show(); activeValue=bar.rawCountValue
+        else
+            bar.rawTotalLayer:Show(); activeValue=bar.rawTotalValue
+        end
+    else
+        bar.rawBothLayer:Hide(); bar.rawTotalLayer:Hide(); bar.rawCountLayer:Hide()
+        bar.value:Show(); bar.value:ClearAllPoints(); bar.value:SetPoint("RIGHT",bar.textFrame,"RIGHT",-2,0)
+    end
+
+    -- FillBars controls whether the rank has text; never remove the configured
+    -- column merely because the row is narrow.
+    bar.rank:Show()
+    local activeName=(bar.rawName and bar.rawName:IsShown()) and bar.rawName or bar.name
+    activeName:ClearAllPoints()
+    activeName:SetPoint("LEFT",bar.rank,"RIGHT",3,0)
+    activeName:SetPoint("RIGHT",activeValue,"LEFT",-5,0)
+    bar._valueIsSecret=isSecret and true or false
 end
