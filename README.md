@@ -1,16 +1,20 @@
-# Light Damage Combat Stats
-A lightweight combat tracker for World of Warcraft. Designed to show all essential combat data in a single window without the need for multiple frames.
+# Light Damage
 
-## Core Features
-* **Comprehensive Tracking:** Tracks Damage Done, Healing, Damage Taken, Deaths, Interrupts, and Dispels.
-* **Single Window Split-View:** Display Damage and Healing (or any two metrics) simultaneously in one window. No need to set up multiple frames.
-* **Dual Display:** View your current fight and overall dungeon data side-by-side automatically.
-* **Detailed Breakdowns:** Left-click any player to see their spell breakdown.
-* **Death Analysis:** Detailed death logs.
-* **Clean Settings:** Simple, categorized, and easy-to-use configuration panel.
+Light Damage is a damage meter addon for World of Warcraft. It keeps current combat, total data, and combat history in one configurable window.
 
-## Slash Commands
-* `/ldcs` - Open the settings panel
-* `/ldcs show` - Toggle window visibility
-* `/ldcs reset` - Reset all combat data
-* `/ldcs lock` - Lock or unlock the window frame
+## Features
+
+- **Overview and single-stat views:** The Overview combines multiple statistics in one window. Each statistic is also available as a focused single-panel view.
+- **Custom Overview layouts:** Use one of three presets or create a grid from 1×1 to 5×5. Each cell can show Current or Total data. Cells can be merged or split, and row and column proportions can be adjusted.
+- **Separate scene workspaces:** Mythic+, raids, dungeons, arenas, battlegrounds, and outdoor content can each use a different layout and remember their own window position and overall size.
+- **Instance overall segments:** Overall segments can be created after leaving the enabled instance types, with separate settings for each type.
+- **Appearance and behavior settings:** Configure fonts, bars, backgrounds, opacity, number and label formats, window locking, fading, and collapsing.
+- **Languages:** English, Simplified Chinese, Traditional Chinese, and Russian.
+
+## Slash commands
+
+- `/ld` — Open or close the settings window.
+- `/ld show` — Show or hide the main window.
+- `/ld reset` — Clear all combat data.
+- `/ld lock` — Lock or unlock the main window.
+- `/ld help` — List the available commands.
