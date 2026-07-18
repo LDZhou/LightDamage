@@ -39,6 +39,100 @@ local function latestSegment(segments)
     return segments[#segments]
 end
 
+local function findOfficialMythicFullRun(instanceTag)
+    for _, seg in ipairs(ns.Segments and ns.Segments.history or {}) do
+        if seg._isMerged and seg._fromOfficialMythicOverall
+            and seg._sourceInstanceTag == instanceTag then
+            return seg
+        end
+    end
+end
+
+local function decorateMythicFullRun(fullRun, instanceTag, mythicLevel,
+    mythicMapName, instanceName, consumePending)
+    fullRun._instanceTag = nil
+    fullRun._sourceInstanceTag = instanceTag
+    fullRun._isBoss = false
+    fullRun._isMerged = true
+    fullRun._builtByMythicPlus = true
+    fullRun._fromOfficialMythicOverall = true
+    fullRun.mythicLevel = mythicLevel or 0
+    fullRun.mapName = mythicMapName or instanceName
+    local pending = ns.MythicPlus and ns.MythicPlus._pendingMythicSeg
+    if pending then
+        fullRun.success = pending.success
+        fullRun.mapID = pending.mapID
+        fullRun._keystoneTime = (pending.elapsed or 0) / 1000
+        if consumePending then ns.MythicPlus._pendingMythicSeg = nil end
+    end
+end
+
+-- 12.0.7+ publishes a dedicated immutable M+ run-wide session.  At the exit
+-- boundary that row is already the exact product the player expects, so copy it
+-- immediately instead of waiting for every ordinary fight to finish its slower
+-- archive/reset transaction.  Failure is non-destructive: the pending merge
+-- keeps retrying until the core candidate becomes public and accessible.
+function ns.CombatTracker:MaterializeOfficialMythicFullRun(instanceTag, mythicLevel,
+    mythicMapName, instanceName, pendingCombatGeneration)
+    local segs = ns.Segments
+    if not segs or not instanceTag or not shouldGenerate("mplus") then return nil, "disabled" end
+    local existing = findOfficialMythicFullRun(instanceTag)
+    if existing then
+        if pendingCombatGeneration == nil
+            or pendingCombatGeneration == (segs._combatGeneration or 0) then
+            segs.overall = existing
+            -- Fast exit probes and the later strict transaction can both reach
+            -- this idempotent path.  Preserve an explicit History selection;
+            -- only establish the override when it is genuinely absent.
+            if segs:GetFullRunOverride() ~= existing then
+                segs:SetFullRunOverride(existing)
+            end
+        end
+        return existing
+    end
+    if pendingCombatGeneration ~= nil
+        and pendingCombatGeneration ~= (segs._combatGeneration or 0) then
+        return nil, "newer-combat"
+    end
+    if self.IsOverallCompleteForTag and not self:IsOverallCompleteForTag(instanceTag) then
+        return nil, "overall-incomplete"
+    end
+
+    local officialSessionID, officialInfo = self:GetOfficialMythicOverallSession()
+    if not officialSessionID then return nil, "official-overall-missing" end
+    local zoneName = mythicMapName or instanceName or L.INSTANCE
+    local meta = {
+        type = "mythicplus",
+        name = string.format("+%d %s", mythicLevel or 0, zoneName),
+        allowIncomplete = false,
+    }
+    if officialInfo and type(officialInfo.durationSeconds) == "number" then
+        meta.duration = officialInfo.durationSeconds
+    end
+    local candidate, status = self:BuildSessionCandidate(officialSessionID, meta)
+    if not candidate then
+        self._pendingMergeStatus = status
+        return nil, status
+    end
+
+    local fullRun = self:CommitArchiveCandidate(candidate, {insert = false, prefix = "mp"})
+    -- Keep the pending run metadata until the slower archive transaction has
+    -- consumed every ordinary row.  This makes the dedicated summary
+    -- re-classifiable across a reload that happens during that short window.
+    decorateMythicFullRun(fullRun, instanceTag, mythicLevel, mythicMapName, instanceName, false)
+    table.insert(segs.history, 1, fullRun)
+    segs.overall = fullRun
+    segs:SetFullRunOverride(fullRun)
+    self._pendingMergeStatus = nil
+    if ns.SaveSessionHistory then ns:SaveSessionHistory() end
+    if ns.Analysis then ns.Analysis:InvalidateCache() end
+    if ns.HistoryList and ns.HistoryList.IsOpen and ns.HistoryList:IsOpen() then
+        ns.HistoryList:Rebuild()
+    end
+    if ns.UI and ns.UI:IsVisible() then ns.UI:Layout() end
+    return fullRun
+end
+
 function ns.CombatTracker:MergeAndCleanInstance(instanceTag, mythicLevel, mythicMapName,
     instanceName, exitingSceneKey, pendingCombatGeneration, allowIncomplete)
     local segs = ns.Segments
@@ -46,10 +140,11 @@ function ns.CombatTracker:MergeAndCleanInstance(instanceTag, mythicLevel, mythic
     local scene = exitingSceneKey or ((mythicLevel or 0) > 0 and "mplus" or "dungeon")
     local generate = shouldGenerate(scene)
     local all = matchingSegments(instanceTag)
+    local materialized = scene == "mplus" and findOfficialMythicFullRun(instanceTag) or nil
     -- Blizzard session publication is the product boundary: every official
     -- session counts, including zero-value or accidental sessions.  A local
     -- combat edge without a published session must not manufacture a full-run.
-    local hadCombat = #all > 0
+    local hadCombat = #all > 0 or materialized ~= nil
 
     local function releaseExitedInstanceState()
         self._pendingMergeStatus = nil
@@ -102,9 +197,9 @@ function ns.CombatTracker:MergeAndCleanInstance(instanceTag, mythicLevel, mythic
         or pendingCombatGeneration == (segs._combatGeneration or 0)
     local canUseOfficialOverall = generationUnchanged
         and (not self.IsOverallCompleteForTag or self:IsOverallCompleteForTag(instanceTag))
-    local fullRun = nil
+    local fullRun = materialized
 
-    if generate then
+    if generate and not fullRun then
         local zoneName = mythicMapName or instanceName
             or (all[1] and all[1]._instanceDisplayName) or L.INSTANCE
         -- Normal/raid runs use "instance [full run]".  Mythic+ is the explicit
@@ -115,19 +210,37 @@ function ns.CombatTracker:MergeAndCleanInstance(instanceTag, mythicLevel, mythic
             or string.format(L.OVERALL_SEGMENT_NAME_FORMAT, zoneName)
 
         if scene ~= "raid" and canUseOfficialOverall then
-            -- Normal path: exact Blizzard Overall, including all seven modes,
-            -- pets, spells and deaths, captured atomically by the gateway.
-            local candidate, status = self:BuildOverallCandidate({
+            -- 12.0.7+ can publish a dedicated Blizzard M+ run-wide session.
+            -- Prefer that immutable session directly; the Overall selector can
+            -- change or clear between challenge completion and the later world
+            -- transition.  Non-M+ runs, and clients without the dedicated row,
+            -- continue to use Blizzard Overall exactly as before.
+            local officialSessionID, officialInfo
+            if scene == "mplus" and self.GetOfficialMythicOverallSession then
+                officialSessionID, officialInfo = self:GetOfficialMythicOverallSession()
+            end
+            local meta = {
                 type = scene == "mplus" and "mythicplus" or "history",
                 name = mergedName,
                 allowIncomplete = false,
-            })
+            }
+            if officialInfo and type(officialInfo.durationSeconds) == "number" then
+                meta.duration = officialInfo.durationSeconds
+            end
+            local candidate, status
+            if officialSessionID then
+                candidate, status = self:BuildSessionCandidate(officialSessionID, meta)
+            else
+                candidate, status = self:BuildOverallCandidate(meta)
+            end
             if not candidate then
                 self._pendingMergeStatus = status
                 return false
             end
             fullRun = self:CommitArchiveCandidate(candidate, {insert = false, prefix = scene == "mplus" and "mp" or "merged"})
             fullRun._isMerged = true
+            fullRun._fromOfficialMythicOverall = officialSessionID and true or nil
+            if officialSessionID then fullRun._sourceInstanceTag = instanceTag end
         else
             -- Raid, or an exit that had to wait through a newer outdoor fight:
             -- aggregate only the tagged local run so no later combat leaks in.
@@ -143,23 +256,39 @@ function ns.CombatTracker:MergeAndCleanInstance(instanceTag, mythicLevel, mythic
             })
         end
 
-        fullRun._instanceTag = nil
-        fullRun._isBoss = false
-        fullRun._isMerged = true
-        fullRun._builtByMythicPlus = scene == "mplus"
-        fullRun.mythicLevel = mythicLevel or 0
-        fullRun.mapName = mythicMapName or instanceName
-        local pending = ns.MythicPlus and ns.MythicPlus._pendingMythicSeg
-        if pending and scene == "mplus" then
-            fullRun.success = pending.success
-            fullRun.mapID = pending.mapID
-            fullRun._keystoneTime = (pending.elapsed or 0) / 1000
-            ns.MythicPlus._pendingMythicSeg = nil
+        if scene == "mplus" and fullRun._fromOfficialMythicOverall then
+            decorateMythicFullRun(fullRun, instanceTag, mythicLevel, mythicMapName, instanceName, true)
+        else
+            fullRun._instanceTag = nil
+            fullRun._isBoss = false
+            fullRun._isMerged = true
+            fullRun._builtByMythicPlus = scene == "mplus"
+            fullRun.mythicLevel = mythicLevel or 0
+            fullRun.mapName = mythicMapName or instanceName
+            local pending = ns.MythicPlus and ns.MythicPlus._pendingMythicSeg
+            if pending and scene == "mplus" then
+                fullRun.success = pending.success
+                fullRun.mapID = pending.mapID
+                fullRun._keystoneTime = (pending.elapsed or 0) / 1000
+                ns.MythicPlus._pendingMythicSeg = nil
+            end
         end
         table.insert(segs.history, 1, fullRun)
+    end
+
+    if generate then
+        if materialized and scene == "mplus" then
+            -- Immediate publication intentionally leaves this metadata alive so
+            -- a reload can still classify the Blizzard summary.  The completed
+            -- cleanup transaction is the single owner that finally consumes it.
+            decorateMythicFullRun(fullRun, instanceTag, mythicLevel,
+                mythicMapName, instanceName, true)
+        end
         if generationUnchanged then
             segs.overall = fullRun
-            segs:SetFullRunOverride(fullRun)
+            if segs:GetFullRunOverride() ~= fullRun then
+                segs:SetFullRunOverride(fullRun)
+            end
         end
     else
         -- Full-run disabled: current remains the newest instance encounter and

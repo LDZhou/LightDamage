@@ -63,6 +63,8 @@ local function compactSegment(seg)
         _completedWallTime = seg._completedWallTime,
         _preKeystone = seg._preKeystone, _mythicLevel = seg._mythicLevel,
         _mapName = seg._mapName, _builtByMythicPlus = seg._builtByMythicPlus,
+        _fromOfficialMythicOverall = seg._fromOfficialMythicOverall,
+        _sourceInstanceTag = seg._sourceInstanceTag,
         _sessionID = seg._sessionID, _sessionIdx = seg._sessionIdx,
         _localID = seg._localID, _wasOutdoor = seg._wasOutdoor,
         _dataLoaded = seg._dataLoaded, _archiveGeneration = seg._archiveGeneration,

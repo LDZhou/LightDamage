@@ -193,7 +193,8 @@ function UI:MakeBar(parent, section, index)
                 bar._nameStr,
                 bar._data.totalAmount,
                 bar._data.sessionType,
-                bar._data.sessionID
+                bar._data.sessionID,
+                bar._data.sourceGUID
             )
             return
         end

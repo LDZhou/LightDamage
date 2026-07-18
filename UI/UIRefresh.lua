@@ -222,11 +222,18 @@ function UI:ResolveDisplaySource(range)
     local seg = segs:GetViewSegment()
     local source = {kind="local", segment=seg, duration=SegmentDuration(seg), range=range}
     if segs:IsViewingCurrent() then
-        if ns.state.inCombat then
+        local completedCurrent = seg and seg._sessionID and ns.CombatTracker
+            and ns.CombatTracker.IsCompletedSessionID
+            and ns.CombatTracker:IsCompletedSessionID(seg._sessionID)
+        if ns.state.inCombat and not completedCurrent then
             source.kind = "api"
             source.sessionType = Enum.DamageMeterSessionType.Current
             source.rawGeneration = generation
-        elseif seg and seg._sessionID and seg._archiveGeneration == generation then
+        elseif seg and not seg._dataLoaded and seg._sessionID
+            and seg._archiveGeneration == generation then
+            -- Blizzard may publish the finished row while group combat still
+            -- lingers.  Current remains selected, but must read that immutable
+            -- session ID rather than the now-empty live Current selector.
             source.kind = "api"
             source.sessionID = seg._sessionID
             source.rawGeneration = generation

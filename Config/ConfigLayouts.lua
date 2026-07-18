@@ -163,6 +163,11 @@ function Config:RefreshLayoutStudio()
   s.copy:SetPoint("LEFT",s.name,"RIGHT",8,0); s.board:SetPoint("TOPLEFT",0,-64); s.board:SetSize(410,267)
  end
  for _,w in ipairs({s.rowMinus,s.rowPlus,s.colMinus,s.colPlus,s.merge,s.split,s.stat,s.range}) do w:SetEnabled(not preset); w:SetAlpha(preset and .35 or 1) end
+ if not preset then
+  local function trackButtonState(button,enabled) button:SetEnabled(enabled); button:SetAlpha(enabled and 1 or .35) end
+  trackButtonState(s.rowMinus,def.rows>1); trackButtonState(s.rowPlus,def.rows<5)
+  trackButtonState(s.colMinus,def.cols>1); trackButtonState(s.colPlus,def.cols<5)
+ end
  s.rowLabel:SetText(L.ROWS.."  "..def.rows); s.colLabel:SetText(L.COLUMNS.."  "..def.cols)
  self:RefreshStudioRatioControl(def,preset)
  self:DrawStudioBoard()
@@ -219,8 +224,18 @@ function Config:DrawStudioBoard()
  end
  for i=#def.cells+1,#s.cellButtons do s.cellButtons[i]:Hide() end
  local n=0
- for c=1,def.cols-1 do n=n+1; local d=s.dividers[n] or self:CreateStudioDivider("col",n); s.dividers[n]=d; self:SetStudioDividerAxis(d,"col"); d.boundary=c; d:ClearAllPoints(); d:SetPoint("TOPLEFT",s.board,"TOPLEFT",xs[c]+ws[c]-4,0); d:SetSize(10,H); local active=s.ratioSelection and s.ratioSelection.axis=="col" and s.ratioSelection.boundary==c; d.line:SetColorTexture(0,active and .9 or .65,1,active and 1 or .55); d:SetShown(not def.isPreset) end
- for r=1,def.rows-1 do n=n+1; local d=s.dividers[n] or self:CreateStudioDivider("row",n); s.dividers[n]=d; self:SetStudioDividerAxis(d,"row"); d.boundary=r; d:ClearAllPoints(); d:SetPoint("TOPLEFT",s.board,"TOPLEFT",0,-(ys[r]+hs[r]-4)); d:SetSize(W,10); local active=s.ratioSelection and s.ratioSelection.axis=="row" and s.ratioSelection.boundary==r; d.line:SetColorTexture(0,active and .9 or .65,1,active and 1 or .55); d:SetShown(not def.isPreset) end
+ for c=1,def.cols-1 do
+  n=n+1; local d=s.dividers[n] or self:CreateStudioDivider("col",n); s.dividers[n]=d; self:SetStudioDividerAxis(d,"col"); d.boundary=c; d:ClearAllPoints(); d:SetPoint("TOPLEFT",s.board,"TOPLEFT",xs[c]+ws[c]-4,0); d:SetSize(10,H)
+  local active=s.ratioSelection and s.ratioSelection.axis=="col" and s.ratioSelection.boundary==c
+  local visible=self:SetStudioDividerRuns(d,ns.Layouts:GetBoundaryRuns(def,"col",c),xs,ys,ws,hs,active)
+  d:SetShown(not def.isPreset and visible)
+ end
+ for r=1,def.rows-1 do
+  n=n+1; local d=s.dividers[n] or self:CreateStudioDivider("row",n); s.dividers[n]=d; self:SetStudioDividerAxis(d,"row"); d.boundary=r; d:ClearAllPoints(); d:SetPoint("TOPLEFT",s.board,"TOPLEFT",0,-(ys[r]+hs[r]-4)); d:SetSize(W,10)
+  local active=s.ratioSelection and s.ratioSelection.axis=="row" and s.ratioSelection.boundary==r
+  local visible=self:SetStudioDividerRuns(d,ns.Layouts:GetBoundaryRuns(def,"row",r),xs,ys,ws,hs,active)
+  d:SetShown(not def.isPreset and visible)
+ end
  for i=n+1,#s.dividers do s.dividers[i]:Hide() end
 end
 
@@ -248,15 +263,42 @@ function Config:UpdateStudioCellSelection(forceFinish)
 end
 
 function Config:CreateStudioDivider(axis,index)
- local s=self._layoutStudio; local d=CreateFrame("Button",nil,s.board); d:SetFrameLevel(s.board:GetFrameLevel()+20); local line=d:CreateTexture(nil,"OVERLAY"); line:SetColorTexture(0,.75,1,.65); d.line=line; self:SetStudioDividerAxis(d,axis)
- d:SetScript("OnMouseDown",function(self2,button) if button~="LeftButton" then return end; local def=ns.Layouts:GetLayout(s.selectedId); if not def or def.isPreset then return end; local x,y=GetCursorPosition(); s.ratioSelection={axis=self2.axis,boundary=self2.boundary}; self:RefreshStudioRatioControl(def,false); s.drag={axis=self2.axis,boundary=self2.boundary,start=CopyTable(self2.axis=="col" and def.colR or def.rowR),preview=CopyTable(def),startX=x,startY=y,moved=false}; s.board:SetScript("OnUpdate",s.board._dragOnUpdate) end)
+ local s=self._layoutStudio; local d=CreateFrame("Frame",nil,s.board); d:SetFrameLevel(s.board:GetFrameLevel()+20); d.segments={}; self:SetStudioDividerAxis(d,axis)
  return d
 end
 
 function Config:SetStudioDividerAxis(divider,axis)
- divider.axis=axis; local line=divider.line; line:ClearAllPoints()
- if axis=="col" then line:SetWidth(2); line:SetPoint("TOP"); line:SetPoint("BOTTOM")
- else line:SetHeight(2); line:SetPoint("LEFT"); line:SetPoint("RIGHT") end
+ divider.axis=axis
+ for _,segment in ipairs(divider.segments or {}) do segment:ClearAllPoints(); segment:Hide() end
+end
+
+function Config:SetStudioDividerRuns(divider,runs,xs,ys,ws,hs,active)
+ local segments=divider.segments; local axis=divider.axis; local s=self._layoutStudio
+ for i,run in ipairs(runs or {}) do
+  local segment=segments[i]
+  if not segment then
+   segment=CreateFrame("Button",nil,divider); segment:SetFrameLevel(divider:GetFrameLevel()+1); segment._divider=divider
+   segment.line=segment:CreateTexture(nil,"OVERLAY")
+   segment:SetScript("OnMouseDown",function(hit,button)
+    if button~="LeftButton" then return end
+    local owner=hit._divider; local def=ns.Layouts:GetLayout(s.selectedId); if not def or def.isPreset then return end
+    local x,y=GetCursorPosition(); s.ratioSelection={axis=owner.axis,boundary=owner.boundary}; self:RefreshStudioRatioControl(def,false)
+    s.drag={axis=owner.axis,boundary=owner.boundary,start=CopyTable(owner.axis=="col" and def.colR or def.rowR),preview=CopyTable(def),startX=x,startY=y,moved=false}; s.board:SetScript("OnUpdate",s.board._dragOnUpdate)
+   end)
+   segments[i]=segment
+  end
+  segment:ClearAllPoints(); local line=segment.line; line:ClearAllPoints(); line:SetColorTexture(0,active and .9 or .65,1,active and 1 or .55)
+  if axis=="col" then
+   segment:SetPoint("TOPLEFT",divider,"TOPLEFT",0,-ys[run[1]]); segment:SetSize(10,ys[run[2]]+hs[run[2]]-ys[run[1]])
+   line:SetWidth(2); line:SetPoint("TOP",segment,"TOP"); line:SetPoint("BOTTOM",segment,"BOTTOM")
+  else
+   segment:SetPoint("TOPLEFT",divider,"TOPLEFT",xs[run[1]],0); segment:SetSize(xs[run[2]]+ws[run[2]]-xs[run[1]],10)
+   line:SetHeight(2); line:SetPoint("LEFT",segment,"LEFT"); line:SetPoint("RIGHT",segment,"RIGHT")
+  end
+  segment:Show()
+ end
+ for i=#(runs or {})+1,#segments do segments[i]:Hide() end
+ return runs and #runs>0
 end
 
 function Config:RefreshStudioRatioControl(def,preset)
@@ -313,7 +355,7 @@ end
 function Config:StudioTrack(axis,add)
  local s=self._layoutStudio; local ok,why
  if add then ok,why=ns.Layouts:AddTrack(s.selectedId,axis) else ok,why=ns.Layouts:RemoveTrack(s.selectedId,axis) end
- if ok then s.selection=nil; s.ratioSelection=nil; s.error:SetText(""); self:StudioSaved() else s.error:SetText(why=="merged" and L.SPLIT_BEFORE_REMOVE or L.LAYOUT_LIMIT) end; self:RefreshLayoutStudio()
+ if ok then s.selection=nil; s.ratioSelection=nil; s.error:SetText(""); self:StudioSaved() else s.error:SetText(L.LAYOUT_LIMIT) end; self:RefreshLayoutStudio()
 end
 
 function Config:StudioMerge()

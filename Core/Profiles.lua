@@ -249,6 +249,14 @@ function ns:LoadSessionHistory()
     ns.Segments.history = {}
     for _, seg in ipairs(ns.db.savedHistory or {}) do
         seg._dataLoaded = (seg._dataLoaded == nil) and true or seg._dataLoaded
+        -- A 2.0 race briefly allowed the late final-fight session to overwrite
+        -- a normal/raid full-run title after Current had been aliased to it.
+        -- mapName remains frozen instance metadata, so repair only this
+        -- deterministic display field while preserving every recorded value.
+        if ns.Segments.NormalizeFullRunName
+            and seg._localID == ns.db.fullRunOverrideLocalID then
+            ns.Segments:NormalizeFullRunName(seg)
+        end
         -- ★ 老存档迁移:没 _localID 就分配一个
         if not seg._localID then
             seg._localID = ns.Segments:GenLocalID("legacy")

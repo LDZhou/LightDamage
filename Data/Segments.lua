@@ -311,10 +311,28 @@ end
 
 -- 离开副本生成全程段落后，段落选择切到全程，“当前”和“总计”都显示它。
 -- 覆盖 ID 存在角色存档中，因此重载后仍延续，直到新战斗、重置或删除。
+function Segments:NormalizeFullRunName(seg)
+    if not seg or not seg._isMerged or seg._builtByMythicPlus then return false end
+    local instanceName=seg.mapName or seg._instanceDisplayName
+    if type(instanceName)~="string" or instanceName=="" then return false end
+    local format=L.OVERALL_SEGMENT_NAME_FORMAT or "%s [Full Run]"
+    local expected=string.format(format,instanceName)
+    if seg.name==expected then return false end
+    seg.name=expected
+    if ns.HistoryStore then ns.HistoryStore:Invalidate(seg) end
+    return true
+end
+
 function Segments:SetFullRunOverride(seg)
     if not seg or not seg._localID then return end
+    self:NormalizeFullRunName(seg)
     ns.db.fullRunOverrideLocalID = seg._localID
     self._fullRunOverrideSegment = seg
+    -- During the post-instance override, Current and Total intentionally alias
+    -- the same immutable full-run archive.  Keep the data pointer aligned with
+    -- the visible selection as well; this also makes a SavedVariables reload
+    -- restore the latest full run instead of an empty transient Current shell.
+    self.current = seg
     self:ViewArchived(seg._localID)
 end
 
@@ -417,6 +435,13 @@ function Segments:BuildVirtualSegments()
     if not gateway or sessionsState ~= gateway.ACCESSIBLE
         or type(sessions) ~= "table" or #sessions == 0 then return {} end
 
+    -- Completion metadata and History rendering can race by one frame.  Refresh
+    -- the dedicated M+ overall classification before exposing raw rows so the
+    -- official run-wide source never appears as a duplicate user-facing fight.
+    if ns.CombatTracker and ns.CombatTracker.ClassifyLatestSyntheticMythicOverall then
+        ns.CombatTracker:ClassifyLatestSyntheticMythicOverall()
+    end
+
     -- 收集 history 中所有已归档段的 sessionID(归档段的原始来源)
     local archivedSIDs = {}
     local rawGeneration = gateway:GetRawGeneration()
@@ -445,6 +470,9 @@ function Segments:BuildVirtualSegments()
         local dur = durationPublic and rawDuration or 0
 
         local skip = false
+        local officialMythic = ns.CombatTracker
+            and ns.CombatTracker.IsSyntheticSessionID
+            and ns.CombatTracker:IsSyntheticSessionID(sid)
         if not sid then skip = true end
         -- Group combat state can remain true briefly after this session has
         -- completed.  Only hide the final row as live when its metadata does
@@ -452,19 +480,20 @@ function Segments:BuildVirtualSegments()
         local officiallyCompleted = ns.CombatTracker
             and ns.CombatTracker.IsCompletedSessionID
             and ns.CombatTracker:IsCompletedSessionID(sid)
-        local finalSessionStillLive = ns.state.inCombat and i == #sessions
+        local finalSessionStillLive = not officialMythic
+            and ns.state.inCombat and i == #sessions
             and not officiallyCompleted
             and not (durationState == gateway.ACCESSIBLE
                 and type(rawDuration) == "number" and rawDuration > 0)
         if finalSessionStillLive then skip = true end
         if archivedSIDs[sid] then skip = true end          -- 已经归档过
+        if ns.CombatTracker and ns.CombatTracker.IsSessionIndexArchivedForPendingBoundary
+            and ns.CombatTracker:IsSessionIndexArchivedForPendingBoundary(i) then skip = true end
         if isSessionIDHidden(sid) then skip = true end     -- 用户黑名单
         -- Rendering History must never *classify* a raw session.  Classification
         -- belongs to the instance/M+ lifecycle transaction and is scoped to the
         -- current raw epoch.  Calling the heuristic here used to let stale reset
         -- state hide an otherwise ordinary Blizzard session.
-        if ns.CombatTracker and ns.CombatTracker.IsSyntheticSessionID
-            and ns.CombatTracker:IsSyntheticSessionID(sid) then skip = true end
         if not skip then
             local now = GetTime()
             if nameState ~= gateway.ACCESSIBLE then sessionName = nil end
@@ -486,11 +515,56 @@ function Segments:BuildVirtualSegments()
                 deathLog = {},
                 enemyDamageTakenList = {},
             }
+            -- Blizzard's dedicated M+ run-wide row remains a virtual official
+            -- session until the exit transaction freezes it locally.  Expose
+            -- it in History immediately with LightDamage's product label, but
+            -- never mutate the Blizzard-owned metadata object or duplicate it.
+            if officialMythic then
+                local pending = ns.MythicPlus and ns.MythicPlus._pendingMythicSeg
+                local level = tonumber(pending and pending.level
+                    or (ns.CombatTracker and ns.CombatTracker._currentMythicLevel)) or 0
+                local mapName = pending and pending.mapName
+                    or (ns.CombatTracker and ns.CombatTracker._currentMythicMapName)
+                    or GetZoneText() or L.MYTHIC_PLUS
+                seg.type = "mythicplus"
+                seg.name = string.format("+%d %s", level, mapName)
+                seg.mythicLevel = level
+                seg.mapName = mapName
+                seg.success = pending and pending.success
+                seg._fromOfficialMythicOverall = true
+            end
             table.insert(result, seg)
         end
     end
 
     return result
+end
+
+-- Reload has no live local combat shell.  Restore the product-level Current to
+-- the newest valid segment, while preserving a generated full-run selection so
+-- Current and Total continue to show the same run until the next combat.
+function Segments:RestoreCurrentAfterReload()
+    if self.current and self.current.isActive then return self.current end
+    local fullRun = self:GetFullRunOverride()
+    if fullRun then
+        self.current = fullRun
+        self:ViewArchived(fullRun._localID)
+        return fullRun
+    end
+
+    local merged = self:GetMergedSegmentList()
+    local latest = merged and merged[1]
+    if latest then
+        if latest._isVirtual and ns.DamageMeterGateway then
+            latest._archiveGeneration = ns.DamageMeterGateway:GetRawGeneration()
+        end
+        self.current = latest
+        self:ViewCurrent()
+        return latest
+    end
+    self.current = nil
+    self:ViewCurrent()
+    return nil
 end
 
 -- ★ 把已归档段和虚拟段合并成"按时间倒序"的统一列表

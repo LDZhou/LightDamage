@@ -518,14 +518,52 @@ function Layouts:FindCell(def,r,c)
     for _,cell in ipairs(def.cells or {}) do if r>=cell.r0 and r<=cell.r1 and c>=cell.c0 and c<=cell.c1 then return cell end end
 end
 
+-- Return the orthogonal track runs where a logical row/column boundary is an
+-- actual cell edge. A merged cell crossing that boundary deliberately leaves
+-- a hole so editors never draw a divider through the middle of the cell.
+function Layouts:GetBoundaryRuns(def,axis,boundary)
+    if type(def)~="table" or (axis~="row" and axis~="col") then return {} end
+    local boundaryLimit=axis=="col" and def.cols or def.rows
+    boundary=tonumber(boundary)
+    if not boundary or boundary<1 or boundary>=boundaryLimit then return {} end
+    local trackLimit=axis=="col" and def.rows or def.cols
+    local runs,start={}
+    for track=1,trackLimit+1 do
+        local visible=false
+        if track<=trackLimit then
+            local before,after
+            if axis=="col" then
+                before=self:FindCell(def,track,boundary)
+                after=self:FindCell(def,track,boundary+1)
+            else
+                before=self:FindCell(def,boundary,track)
+                after=self:FindCell(def,boundary+1,track)
+            end
+            visible=before~=nil and after~=nil and before~=after
+        end
+        if visible and not start then
+            start=track
+        elseif not visible and start then
+            runs[#runs+1]={start,track-1}
+            start=nil
+        end
+    end
+    return runs
+end
+
 function Layouts:AddTrack(id,axis)
+    local current=self:GetLayout(id)
+    if not current or current.isPreset then return false,"definition" end
+    if axis~="row" and axis~="col" then return false,"axis" end
+    local count=axis=="row" and current.rows or current.cols
+    if count>=5 then return false,"limit" end
     return self:Commit(id,function(def)
         if axis=="row" then
-            assert(def.rows<5); def.rows=def.rows+1
+            def.rows=def.rows+1
             local keep=(def.rows-1)/def.rows; for i=1,#def.rowR do def.rowR[i]=def.rowR[i]*keep end; def.rowR[#def.rowR+1]=1/def.rows
             for c=1,def.cols do def.cells[#def.cells+1]={r0=def.rows,c0=c,r1=def.rows,c1=c,stat="damage",range="follow"} end
         else
-            assert(def.cols<5); def.cols=def.cols+1
+            def.cols=def.cols+1
             local keep=(def.cols-1)/def.cols; for i=1,#def.colR do def.colR[i]=def.colR[i]*keep end; def.colR[#def.colR+1]=1/def.cols
             for r=1,def.rows do def.cells[#def.cells+1]={r0=r,c0=def.cols,r1=r,c1=def.cols,stat="damage",range="follow"} end
         end
@@ -533,13 +571,23 @@ function Layouts:AddTrack(id,axis)
 end
 
 function Layouts:RemoveTrack(id,axis)
+    local current=self:GetLayout(id)
+    if not current or current.isPreset then return false,"definition" end
+    if axis~="row" and axis~="col" then return false,"axis" end
+    local limit=axis=="row" and current.rows or current.cols
+    if limit<=1 then return false,"limit" end
     return self:Commit(id,function(def)
-        local limit=axis=="row" and def.rows or def.cols; assert(limit>1)
-        for _,cell in ipairs(def.cells) do
-            local a0=axis=="row" and cell.r0 or cell.c0; local a1=axis=="row" and cell.r1 or cell.c1
-            assert(not (a0<limit and a1>=limit),"merged")
+        for i=#def.cells,1,-1 do
+            local cell=def.cells[i]
+            local startsOnRemovedTrack=(axis=="row" and cell.r0==limit) or (axis=="col" and cell.c0==limit)
+            if startsOnRemovedTrack then
+                table.remove(def.cells,i)
+            elseif axis=="row" and cell.r1==limit then
+                cell.r1=limit-1
+            elseif axis=="col" and cell.c1==limit then
+                cell.c1=limit-1
+            end
         end
-        for i=#def.cells,1,-1 do local cell=def.cells[i]; if (axis=="row" and cell.r0==limit) or (axis=="col" and cell.c0==limit) then table.remove(def.cells,i) end end
         if axis=="row" then def.rows=def.rows-1; table.remove(def.rowR) else def.cols=def.cols-1; table.remove(def.colR) end
     end)
 end

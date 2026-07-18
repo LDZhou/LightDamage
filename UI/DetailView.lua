@@ -1020,7 +1020,11 @@ function DV:GetSpellBreakdownExt(seg, guid, mode)
             local result = {}
             for spellKey, sd in pairs(spellTable) do
                 local spellID = sd.spellID or sd.id or spellKey
-                local amt = sd.damage or sd.hits or 0
+                -- Count-mode archives historically used either hits or damage.
+                -- Lua treats numeric zero as truthy, so `damage or hits` could
+                -- hide a valid official count stored only in hits.
+                local amt = sd.hits or 0
+                if amt <= 0 then amt = sd.damage or 0 end
                 if amt > 0 then
                     local sName = sd.name or ("spell:" .. spellID)
                     
@@ -1316,21 +1320,26 @@ end
 -- API 路径下的敌人承伤明细(虚拟段/current/overall)
 -- 查 EnemyDamageTaken source，按攻击玩家聚合 → 复用 ShowEnemyDamageTakenDetail 渲染
 -- ============================================================
-function DV:ShowEnemyDamageTakenFromAPI(creatureID, enemyName, totalAmount, sessionType, sessionID)
-    if IsSecret(creatureID) then
+function DV:ShowEnemyDamageTakenFromAPI(creatureID, enemyName, totalAmount, sessionType, sessionID, sourceGUID)
+    local refreshCreatureID, refreshSourceGUID = creatureID, sourceGUID
+    local creatureProtected = IsSecret(creatureID)
+    local guidProtected = IsSecret(sourceGUID)
+    if creatureProtected then creatureID = nil end
+    if guidProtected then sourceGUID = nil end
+    if creatureProtected and guidProtected then
         self:ShowCombatLocked(OpaqueOr(enemyName,"?"))
         self._lastRenderArgs = {
             type = "enemyDmgTakenAPI",
-            args = {creatureID, enemyName, totalAmount, sessionType, sessionID}
+            args = {refreshCreatureID, enemyName, totalAmount, sessionType, sessionID, refreshSourceGUID, n = 6}
         }
         return
     end
-    if creatureID == nil then
+    if creatureID == nil and sourceGUID == nil then
         if ns.state.inCombat or IsSecret(enemyName) or IsSecret(totalAmount) then self:ShowCombatLocked(OpaqueOr(enemyName,"?"))
         else self:ShowEnemyDamageTakenDetail(OpaqueOr(enemyName,"?"), {}, totalAmount or 0) end
         self._lastRenderArgs = {
             type = "enemyDmgTakenAPI",
-            args = {creatureID, enemyName, totalAmount, sessionType, sessionID}
+            args = {refreshCreatureID, enemyName, totalAmount, sessionType, sessionID, refreshSourceGUID, n = 6}
         }
         return
     end
@@ -1340,58 +1349,36 @@ function DV:ShowEnemyDamageTakenFromAPI(creatureID, enemyName, totalAmount, sess
     local srcData
     if sessionID then
         srcData = gateway and select(1, gateway:GetRawSource(
-            nil, sessionID, dmType, nil, creatureID))
+            nil, sessionID, dmType, sourceGUID, creatureID))
     else
         local sType = sessionType or Enum.DamageMeterSessionType.Current
         srcData = gateway and select(1, gateway:GetRawSource(
-            sType, nil, dmType, nil, creatureID))
+            sType, nil, dmType, sourceGUID, creatureID))
     end
 
     local sources = {}
-    local protected=false
-    local rawSpells
-    local sourceType=type(srcData)
-    local sourceReadable=sourceType=="table" and gateway and gateway:IsTableAccessible(srcData)
-    if sourceType~="nil" and not sourceReadable then protected=true end
-    if sourceReadable then
-        local ok,value=pcall(function() return srcData.combatSpells end)
-        if ok then rawSpells=value end
-    end
-    if type(rawSpells) ~= "nil" and (type(rawSpells)~="table" or not gateway:IsTableAccessible(rawSpells)) then
-        protected = true
-    elseif type(rawSpells) == "table" then
-        local agg = {}  -- name → {name, class, amount}
-        for _, sp in ipairs(rawSpells) do
-            if type(sp)=="table" and gateway:IsTableAccessible(sp) then
-            local details, detailsState = gateway:ReadTableField(sp, "combatSpellDetails")
-            if detailsState == gateway.ACCESSIBLE then
-                local pName, nameState = gateway:ReadField(details, "unitName")
-                local pClass, classState = gateway:ReadField(details, "unitClassFilename")
-                local amt, amountState = gateway:ReadField(details, "amount")
-                if nameState == gateway.ACCESSIBLE and amountState == gateway.ACCESSIBLE
-                    and type(pName)=="string" and type(amt)=="number" and amt>0 then
-                    if classState ~= gateway.ACCESSIBLE or type(pClass) ~= "string" then pClass=nil end
-                    if not agg[pName] then agg[pName]={name=pName,class=pClass,amount=0} end
-                    agg[pName].amount=agg[pName].amount+amt
-                end
-            end
-            end
-        end
-        for _, entry in pairs(agg) do
-            table.insert(sources, entry)
+    local protected = false
+    local sourceStatus
+    if gateway then
+        local extracted
+        extracted, sourceStatus = gateway:ExtractEnemyDamageSources(srcData)
+        if sourceStatus == gateway.ACCESSIBLE then
+            sources = extracted or sources
+        elseif sourceStatus == gateway.SECRET or sourceStatus == gateway.ERROR then
+            protected = true
         end
     end
 
     if protected or IsSecret(totalAmount) or (not srcData and ns.state.inCombat) then
         self:ShowCombatLocked(OpaqueOr(enemyName,"?"))
-        self._lastRenderArgs={type="enemyDmgTakenAPI",args={creatureID,enemyName,totalAmount,sessionType,sessionID}}
+        self._lastRenderArgs={type="enemyDmgTakenAPI",args={refreshCreatureID,enemyName,totalAmount,sessionType,sessionID,refreshSourceGUID,n=6}}
         return
     end
 
     self:ShowEnemyDamageTakenDetail(OpaqueOr(enemyName,"?"), sources, totalAmount or 0)
     self._lastRenderArgs = {
         type = "enemyDmgTakenAPI",
-        args = {creatureID, enemyName, totalAmount, sessionType, sessionID}
+        args = {refreshCreatureID, enemyName, totalAmount, sessionType, sessionID, refreshSourceGUID, n = 6}
     }
 end
 
@@ -1402,7 +1389,7 @@ function DV:Refresh()
             local a = self._lastRenderArgs.args
             if t == "spell" then self:RenderSpellList(unpack(a))
             elseif t == "spellAPI" then self:ShowSpellBreakdownFromAPI(unpack(a))
-            elseif t == "enemyDmgTakenAPI" then self:ShowEnemyDamageTakenFromAPI(unpack(a))
+            elseif t == "enemyDmgTakenAPI" then self:ShowEnemyDamageTakenFromAPI(unpack(a, 1, a.n or #a))
             elseif t == "death" then self:ShowDeathDetail(unpack(a))
             elseif t == "combat" then self:ShowCombatLocked(unpack(a))
             elseif t == "enemyDmgTaken" then self:ShowEnemyDamageTakenDetail(unpack(a)) end

@@ -181,6 +181,7 @@ end
 function CT:PersistLifecycleState()
     if type(LightDamageDB) ~= "table" then return end
     local saved = {schema = LIFECYCLE_SCHEMA, contexts = {}, completed = {}}
+    saved.combatGeneration = publicScalar(ns.Segments and ns.Segments._combatGeneration) or 0
     local world = self._worldSnapshot
     if world and world.inInstance and self._currentInstanceTag then
         local tag = self._currentInstanceTag
@@ -268,6 +269,18 @@ function CT:RestoreLifecycleState(current)
     end
 
     local pendingExit = copyPendingExitForSave(saved.pendingExit)
+    -- Combat generations are local identity tokens, but a pending exit also
+    -- persists its token.  Restore both sides of that comparison so a reload
+    -- cannot falsely look like "new combat happened" and suppress the full run.
+    -- Older lifecycle saves did not carry the explicit field; their pending
+    -- exit token is the lossless migration source.
+    local restoredGeneration = publicScalar(saved.combatGeneration)
+    if type(restoredGeneration) ~= "number" and pendingExit then
+        restoredGeneration = pendingExit.combatGeneration
+    end
+    if type(restoredGeneration) == "number" and ns.Segments then
+        ns.Segments._combatGeneration = math.max(0, restoredGeneration)
+    end
     self._restoredPendingReset = type(saved.pendingReset) == "table" and {
         reason = publicScalar(saved.pendingReset.reason) or "enter-instance",
         boundaryTag = publicScalar(saved.pendingReset.boundaryTag),
@@ -462,11 +475,12 @@ function CT:IsSyntheticMythicOverall(info, index, count)
     if not pending or not boundaryIsRelevant then return false end
     local level = tonumber(pending.level or self._currentMythicLevel) or 0
     local sessionName = info.name
-    if level <= 0 or type(sessionName) ~= "string" or index ~= count then return false end
+    if level <= 0 or type(sessionName) ~= "string" then return false end
 
-    -- 12.0.7 appends one run-wide M+ session after the ordinary combat
-    -- sessions.  Structural evidence is primary: it is the supplemental final
-    -- session of a completed challenge boundary and owns no combat context.
+    -- 12.0.7 publishes one Blizzard-owned run-wide M+ session alongside the
+    -- ordinary combat sessions.  Its position is not a stable API contract, so
+    -- never require it to be the final list item.  Structural evidence is
+    -- primary: it is supplemental to the real fight or owns no combat context.
     local structural = self._supplementalSessionIDs[sessionID] == true
         or (self._sessionContextByID[sessionID] == nil and boundary.startedAt ~= nil)
     if not structural then return false end
@@ -484,23 +498,56 @@ function CT:IsSyntheticMythicOverall(info, index, count)
 end
 
 function CT:ClassifyLatestSyntheticMythicOverall()
+    -- Avoid walking Blizzard's session list on ordinary History/UI refreshes.
+    -- Classification is meaningful only while a completed keystone boundary
+    -- still owns its pending metadata.
+    if not (ns.MythicPlus and ns.MythicPlus._pendingMythicSeg)
+        or not self._mythicRunBoundary then return false end
     local sessions, count = safeSessionCount()
     if not sessions or count <= 0 then return false end
-    local info, infoState = G:ReadField(sessions, count)
-    if infoState ~= G.ACCESSIBLE or type(info) ~= "table" then return false end
-    local sessionID, idState = G:ReadField(info, "sessionID")
-    local duration, durationState = G:ReadField(info, "durationSeconds")
-    local name, nameState = G:ReadField(info, "name")
-    if idState ~= G.ACCESSIBLE or type(sessionID) ~= "number"
-        or (durationState ~= G.ACCESSIBLE and durationState ~= G.MISSING)
-        or nameState ~= G.ACCESSIBLE or type(name) ~= "string" then
-        return false
+    local matchedID, matchedInfo
+    for index = count, 1, -1 do
+        local info, infoState = G:ReadField(sessions, index)
+        if infoState == G.ACCESSIBLE and type(info) == "table" then
+            local sessionID, idState = G:ReadField(info, "sessionID")
+            local duration, durationState = G:ReadField(info, "durationSeconds")
+            local name, nameState = G:ReadField(info, "name")
+            if idState == G.ACCESSIBLE and type(sessionID) == "number"
+                and nameState == G.ACCESSIBLE and type(name) == "string" then
+                local safeInfo = {
+                    sessionID = sessionID,
+                    durationSeconds = durationState == G.ACCESSIBLE and duration or nil,
+                    name = name,
+                }
+                if self:IsSyntheticMythicOverall(safeInfo, index, count) and not matchedID then
+                    matchedID, matchedInfo = sessionID, safeInfo
+                end
+            end
+        end
     end
-    return self:IsSyntheticMythicOverall({
-        sessionID = sessionID,
-        durationSeconds = durationState == G.ACCESSIBLE and duration or nil,
-        name = name,
-    }, count, count)
+    return matchedID ~= nil, matchedID, matchedInfo
+end
+
+function CT:GetOfficialMythicOverallSession()
+    local found, sessionID, info = self:ClassifyLatestSyntheticMythicOverall()
+    if not found then return nil end
+    return sessionID, info
+end
+
+-- While an automatic boundary is pending, the archive cursor is authoritative:
+-- every raw row at or before it has already committed locally.  This remains
+-- true across reload even if an earlier build detached legacy session handles.
+-- Suppress only the virtual duplicate; never delete either stored history or
+-- Blizzard data, and never apply this rule to the user's destructive Reset.
+function CT:IsSessionIndexArchivedForPendingBoundary(index)
+    if type(index) ~= "number" or index > (self._lastProcessedCount or 0) then return false end
+    for _, action in ipairs(self._actions or {}) do
+        if action.kind == "merge-instance"
+            or (action.kind == "meter-reset" and not action.discardRaw) then
+            return true
+        end
+    end
+    return false
 end
 
 function CT:ReclassifyPreKeystoneSegments(action)
@@ -533,12 +580,21 @@ end
 -- to that official session for post-combat display, but do not copy it into
 -- local History until an instance/reset boundary explicitly starts an archive
 -- transaction.
+local function mutableCurrentSegment()
+    local current=ns.Segments and ns.Segments.current
+    -- Locally archived rows are immutable and may also be aliased by Current
+    -- for presentation. They must never be enriched in place by a late API row.
+    if not current or current._localID or current._isMerged then return nil end
+    return current
+end
+
 function CT:BindFinishedCurrentSession(sessionID, info, generation)
-    if ns.state.inCombat or not ns.Segments or not ns.Segments.current then return false end
+    if not ns.Segments or not ns.Segments.current then return false end
     local currentGeneration = ns.Segments._combatGeneration or 0
     if generation == nil or generation ~= currentGeneration then return false end
     if not gatewayAccessible(sessionID) or type(sessionID) ~= "number" then return false end
-    local current = ns.Segments.current
+    local current=mutableCurrentSegment()
+    if not current then return false end
     current._sessionID = sessionID
     current._archiveGeneration = G:GetRawGeneration()
     current.isActive = false
@@ -557,6 +613,51 @@ function CT:BindFinishedCurrentSession(sessionID, info, generation)
         end
     end
     return true
+end
+
+-- A Damage Meter completion event can precede publication of the same row in
+-- GetAvailableCombatSessions.  Reconcile it again after the API settles so an
+-- empty local Current shell can never survive merely because one event-time
+-- metadata read was early or protected.
+function CT:ReconcileFinishedCurrentSession()
+    if not G or not ns.Segments or not ns.Segments.current then return false end
+    local generation = ns.Segments._combatGeneration or 0
+    if self._lastCompletedGeneration ~= generation then return false end
+
+    self:ClassifyLatestSyntheticMythicOverall()
+    local current=mutableCurrentSegment()
+    if not current then return false end
+    local sessions, count = safeSessionCount()
+    if not sessions then return false end
+    local preferred = self._primarySessionByGeneration[generation]
+    if current._archiveGeneration == G:GetRawGeneration() and current._sessionID then
+        preferred = current._sessionID
+    end
+
+    for index = count, 1, -1 do
+        local info, infoState = G:ReadField(sessions, index)
+        if infoState == G.ACCESSIBLE and type(info) == "table" then
+            local sessionID, idState = G:ReadField(info, "sessionID")
+            if idState == G.ACCESSIBLE and type(sessionID) == "number"
+                and not self:IsSyntheticSessionID(sessionID) then
+                local mappedGeneration = self._sessionGenerationByID[sessionID]
+                local completed = self:IsCompletedSessionID(sessionID)
+                local belongsToCurrent = sessionID == preferred
+                    or mappedGeneration == generation
+                    or (completed and self._lastCompletedGeneration == generation)
+                if belongsToCurrent then
+                    self._sessionGenerationByID[sessionID] = generation
+                    self._primarySessionByGeneration[generation] = sessionID
+                    self._meterObservedGenerations[generation] = true
+                    for _, context in ipairs(self._completedContexts) do
+                        if context.combatGeneration == generation then context._rawObserved = true end
+                    end
+                    return self:BindFinishedCurrentSession(sessionID, info, generation)
+                end
+            end
+        end
+    end
+    return false
 end
 
 function CT:ProcessArchiveTransactions(targetIndex)
@@ -634,8 +735,9 @@ function CT:ProcessArchiveTransactions(targetIndex)
         -- Current is a live API view during combat, so its local shell has no
         -- complete statistics.  Bind the authoritative finished session
         -- immediately; immutable archiving may continue in the background.
-        if not ns.state.inCombat and sameGeneration and authoritativeCurrent and ns.Segments.current then
-            local current = ns.Segments.current
+        local mutableCurrent=mutableCurrentSegment()
+        if not ns.state.inCombat and sameGeneration and authoritativeCurrent and mutableCurrent then
+            local current=mutableCurrent
             current._sessionID = sessionID
             current._archiveGeneration = G:GetRawGeneration()
             current.name = sessionName or current.name
@@ -664,7 +766,8 @@ function CT:ProcessArchiveTransactions(targetIndex)
         self._archiveFirstSeenAt[sessionID] = nil
         committedAny = true
 
-        if not ns.state.inCombat and sameGeneration then
+        if not ns.state.inCombat and sameGeneration
+            and not ns.Segments:GetFullRunOverride() then
             ns.Segments.current = seg
         end
         index = index + 1
@@ -861,6 +964,10 @@ function CT:ApplyDamageMeterResetState(internal, serial, deferPresentation)
         ns.UI._sessionCache = {}
         if ns.UI:IsVisible() then ns.UI:Refresh() end
     end
+    -- Persist detached handles only after the reset is authoritative.  Saving
+    -- them earlier creates a reload state containing both local archives and
+    -- the still-live Blizzard rows for the same fights.
+    if ns.SaveSessionHistory and not self._performingUserReset then ns:SaveSessionHistory() end
     self:PersistLifecycleState()
     return true
 end
@@ -958,32 +1065,15 @@ function CT:ExecuteMeterReset(reason, action)
     end
 
     if not action.rawEpochBegan then
-        -- 1.4.6's essential ordering was correct: once every old raw session is
-        -- safely local (or the user explicitly chose to discard it), detach old
-        -- handles *before* ResetAllCombatSessions.  Blizzard may reuse a numeric
-        -- sessionID synchronously while DAMAGE_METER_RESET arrives later.
-        self:ClearLoadedSessionIDs()
-        if G then G:InvalidateRaw("reset-requested") end
-        if ns.Segments and ns.Segments.ClearHiddenSessionIDs then
-            ns.Segments:ClearHiddenSessionIDs()
-        end
-        -- Every table keyed by a Blizzard session ID belongs to the old raw
-        -- epoch.  Clear it with the archived handles, before a reused ID can
-        -- be delivered by the current-session event stream.
-        self._sessionContextByID = {}
-        self._sessionGenerationByID = {}
-        self._meterObservedGenerations = {}
-        self._primarySessionByGeneration = {}
-        self._supplementalSessionIDs = {}
-        self._syntheticSessionIDs = {}
-        self._completedSessionIDs = {}
-        self._archiveFirstSeenAt = {}
-        self._activeCombatSessionID = nil
-        self._activeSessionCountAtStart = nil
+        -- Archive and presentation identities remain attached until reset is
+        -- confirmed.  If Blizzard accepts the request asynchronously, the old
+        -- raw rows therefore stay deduplicated and the M+ official-overall row
+        -- stays filtered instead of reappearing as a second History entry.
+        -- ApplyDamageMeterResetState performs the generation switch and handle
+        -- detachment atomically after event/observable-empty confirmation.
         action.combatGenerationAtReset = ns.Segments
             and ns.Segments._combatGeneration or 0
         action.rawEpochBegan = true
-        self._rawEpochResetSerial = action.resetSerial
     end
 
     if (self._confirmedResetGeneration or 0) >= action.resetSerial then
@@ -1123,7 +1213,15 @@ end
 function CT:WatchdogTick()
     -- Combat-end and Damage Meter events restart the worker.  There is no value
     -- in repeatedly walking archive candidates while the raw session is live.
-    if ns.state.inCombat then return true end
+    -- The group-combat flag can outlive Blizzard's completed-session event and
+    -- can also survive until the loading screen when leaving an instance.  Give
+    -- the event-driven worker one authoritative resync before deciding to stop;
+    -- otherwise an exit merge queued during that stale window is abandoned.
+    if ns.state.inCombat then
+        syncCombatState()
+        if ns.state.inCombat then return true end
+    end
+    local reboundCurrent = self:ReconcileFinishedCurrentSession()
     local dirty = G and G:ConsumeDirty()
     local hadDirty = dirty and next(dirty) ~= nil
     local beforeCursor = self._lastProcessedCount or 0
@@ -1135,7 +1233,7 @@ function CT:WatchdogTick()
     local archiveReady = true
     if needsArchive then archiveReady = self:ProcessArchiveTransactions() end
     local progressed = self:DrainActions(archiveReady)
-    local changed = beforeCursor ~= (self._lastProcessedCount or 0)
+    local changed = reboundCurrent or beforeCursor ~= (self._lastProcessedCount or 0)
         or beforeActions ~= #self._actions
         or beforePending ~= self._pendingArchiveIndex
     local resetOccurred = beforeResetGeneration ~= (self._confirmedResetGeneration or 0)
@@ -1336,13 +1434,14 @@ function CT:OnCombatEnded()
         self._completedSessionIDs[sessionID] = G and G:GetRawGeneration() or 0
         context._rawObserved = true
         self._primarySessionByGeneration[generation] = self._primarySessionByGeneration[generation] or sessionID
-        if ns.Segments and ns.Segments.current
+        local mutableCurrent=mutableCurrentSegment()
+        if mutableCurrent
             and generation == (ns.Segments._combatGeneration or 0) then
             -- Bind the identity immediately so History cannot briefly expose a
             -- duplicate while duration/name fields finish publishing.
-            ns.Segments.current._sessionID = sessionID
-            ns.Segments.current._archiveGeneration = G:GetRawGeneration()
-            ns.Segments.current.isActive = false
+            mutableCurrent._sessionID = sessionID
+            mutableCurrent._archiveGeneration = G:GetRawGeneration()
+            mutableCurrent.isActive = false
         end
         self._sessionContextByID[sessionID] = context
         self._sessionGenerationByID[sessionID] = generation
@@ -1439,7 +1538,7 @@ function CT:BeginMythicRun(afterReset)
     return action
 end
 
-function CT:QueueInstanceMerge(snapshot)
+function CT:QueueInstanceMerge(snapshot, boundaryCombatGeneration)
     local instanceTag = self._currentInstanceTag or (snapshot and snapshot.instanceTag)
     if not instanceTag then return end
     local _, count = safeSessionCount()
@@ -1447,31 +1546,65 @@ function CT:QueueInstanceMerge(snapshot)
     local scene = self._currentSceneKey or (snapshot and snapshot.scene) or "dungeon"
     local level = self._currentMythicLevel or 0
     local mapName = self._currentMythicMapName
+    local combatGeneration = type(boundaryCombatGeneration) == "number"
+        and boundaryCombatGeneration
+        or (ns.Segments and ns.Segments._combatGeneration or 0)
     self._pendingMergeArgs = {
         tag = instanceTag, lvl = level,
         mapName = mapName, instName = instanceName,
         exitingSceneKey = scene,
-        combatGeneration = ns.Segments and ns.Segments._combatGeneration or 0,
+        combatGeneration = combatGeneration,
         hadCombat = self._instanceHadCombatByTag[instanceTag] == true,
         overallComplete = self._overallCoverageByTag[instanceTag] ~= false,
     }
+    self._exitingInstanceTag = instanceTag
+    -- The dedicated Blizzard M+ run-wide session is already immutable at this
+    -- boundary.  Materialize it before the slower per-fight archive/reset
+    -- cleanup so the player sees the full run immediately after zoning out.
+    if scene == "mplus" and self.MaterializeOfficialMythicFullRun then
+        self:MaterializeOfficialMythicFullRun(instanceTag, level, mapName,
+            instanceName, combatGeneration)
+    end
     self:QueueAction("merge-instance", {
         throughIndex = count, tag = instanceTag,
         level = level, mapName = mapName,
         instanceName = instanceName, scene = scene,
-        combatGeneration = ns.Segments and ns.Segments._combatGeneration or 0,
+        combatGeneration = combatGeneration,
     })
-    self._exitingInstanceTag = instanceTag
     self:PersistLifecycleState()
+end
+
+-- Fast presentation and destructive cleanup deliberately use different
+-- boundaries.  Two consistent post-PLAYER_ENTERING_WORLD outdoor samples are
+-- enough to publish Blizzard's immutable M+ summary, but never authorize raw
+-- archiving or ResetAllCombatSessions.  The strict 1.5-second boundary below
+-- remains the sole owner of those destructive operations.
+function CT:TryFastPublishMythicExit(previous, current, pewSerial, combatGeneration)
+    if not previous or not previous.inInstance or current.inInstance then return false end
+    local scene = self._currentSceneKey or previous.scene
+    if scene ~= "mplus" or not self.MaterializeOfficialMythicFullRun then return false end
+    if pewSerial <= (self._consumedPlayerEnteringWorldSerial or 0) then return false end
+    local tag = self._currentInstanceTag or previous.instanceTag
+    if not tag then return false end
+    local fullRun = self:MaterializeOfficialMythicFullRun(tag,
+        self._currentMythicLevel or 0, self._currentMythicMapName,
+        self._currentInstanceName or previous.name, combatGeneration)
+    return fullRun ~= nil
 end
 
 function CT:HandleWorldTransition()
     if ns.UpdateInstanceStatus then ns:UpdateInstanceStatus() end
+    -- Leaving an instance removes the party/raid combat units immediately, but
+    -- PLAYER_REGEN_ENABLED is not guaranteed to be the last event we observe.
+    -- Clear a stale group-combat state before queueing the exit transaction so
+    -- its watchdog can archive and materialize the run-wide segment.
+    syncCombatState()
     local current = instanceSnapshot()
     -- Do not replace a confirmed instance identity with half-populated loading
     -- screen metadata.  A later scheduled probe will commit the stable value.
     if current.inInstance and not current.ready then return false end
     local previous = self._worldSnapshot
+    local acceptedBoundaryGeneration
 
     -- Loading screens can briefly report an outdoor or half-updated identity.
     -- A boundary can cause an eventual destructive meter reset.  Complete
@@ -1497,25 +1630,39 @@ function CT:HandleWorldTransition()
             self._pendingWorldSnapshotAt = GetTime()
             self._pendingWorldSnapshotCount = 1
             self._pendingWorldPEWSerial = outdoorExit and pewSerial or nil
+            local currentCombatGeneration = ns.Segments
+                and ns.Segments._combatGeneration or 0
+            self._pendingWorldCombatGeneration = outdoorExit
+                and type(self._playerEnteringWorldCombatGeneration) == "number"
+                and self._playerEnteringWorldCombatGeneration
+                or currentCombatGeneration
             return false
         end
         self._pendingWorldSnapshotCount = (self._pendingWorldSnapshotCount or 1) + 1
+        local pendingAge = GetTime() - (self._pendingWorldSnapshotAt or GetTime())
+        if outdoorExit and self._pendingWorldSnapshotCount >= 2 and pendingAge >= 0.08 then
+            self:TryFastPublishMythicExit(previous, current, pewSerial,
+                self._pendingWorldCombatGeneration)
+        end
         local minimumGap = outdoorExit and 1.5 or 0.20
         local minimumSamples = outdoorExit and 3 or 2
         if self._pendingWorldSnapshotCount < minimumSamples
-            or GetTime() - (self._pendingWorldSnapshotAt or GetTime()) < minimumGap then
+            or pendingAge < minimumGap then
             return false
         end
+        acceptedBoundaryGeneration = self._pendingWorldCombatGeneration
         if outdoorExit then self._consumedPlayerEnteringWorldSerial = pewSerial end
         self._pendingWorldSnapshot = nil
         self._pendingWorldSnapshotAt = nil
         self._pendingWorldSnapshotCount = nil
         self._pendingWorldPEWSerial = nil
+        self._pendingWorldCombatGeneration = nil
     else
         self._pendingWorldSnapshot = nil
         self._pendingWorldSnapshotAt = nil
         self._pendingWorldSnapshotCount = nil
         self._pendingWorldPEWSerial = nil
+        self._pendingWorldCombatGeneration = nil
         if current.inInstance and current.ready
             and (self._playerEnteringWorldSerial or 0) > (self._consumedPlayerEnteringWorldSerial or 0) then
             self._consumedPlayerEnteringWorldSerial = self._playerEnteringWorldSerial
@@ -1552,7 +1699,7 @@ function CT:HandleWorldTransition()
 
     if previous.inInstance and not current.inInstance then
         self._worldSnapshot = current
-        self:QueueInstanceMerge(previous)
+        self:QueueInstanceMerge(previous, acceptedBoundaryGeneration)
         self._currentSceneKey = "outdoor"
         -- Keep old tag/name until merge transaction commits.
     elseif not previous.inInstance and current.inInstance then
@@ -1569,7 +1716,7 @@ function CT:HandleWorldTransition()
             if ns.Segments then ns.Segments.overall = ns.Segments:NewSegment("overall", L.OVERALL) end
         end, self._currentInstanceTag)
     elseif previous.inInstance and current.inInstance and worldIdentityChanged(previous, current) then
-        self:QueueInstanceMerge(previous)
+        self:QueueInstanceMerge(previous, acceptedBoundaryGeneration)
         self._worldSnapshot = current
         self._currentMythicLevel = 0
         self._currentMythicMapName = nil
@@ -1594,6 +1741,8 @@ function CT:ScheduleWorldTransitionChecks(event)
     if event == "PLAYER_ENTERING_WORLD" then
         self._playerEnteringWorldSerial = (self._playerEnteringWorldSerial or 0) + 1
         self._playerEnteringWorldAt = GetTime()
+        self._playerEnteringWorldCombatGeneration = ns.Segments
+            and ns.Segments._combatGeneration or 0
     end
     self._worldTransitionToken = (self._worldTransitionToken or 0) + 1
     local token = self._worldTransitionToken
@@ -1602,7 +1751,7 @@ function CT:ScheduleWorldTransitionChecks(event)
     end
     -- Map/instance metadata can remain stale well beyond the loading screen.
     -- These event-scoped probes are bounded and have no steady-state CPU cost.
-    for _, delay in ipairs({0, 0.35, 1, 2, 4, 8, 12}) do
+    for _, delay in ipairs({0, 0.10, 0.35, 1, 2, 4, 8, 12}) do
         C_Timer.After(delay, check)
     end
 end
@@ -1665,7 +1814,13 @@ function CT:RegisterEvents()
                     latestID = latest.sessionID
                     latestDuration = latest.durationSeconds
                 end
-                if type(latestID) ~= "nil" and G:IsAccessible(latestID) and latestID == sessionID then
+                -- Completion metadata and the Blizzard M+ run-wide row may
+                -- publish in either order.  Classify every matching list item
+                -- before assigning this event to the just-finished fight.
+                CT:ClassifyLatestSyntheticMythicOverall()
+                local isMythicOverall = CT:IsSyntheticSessionID(sessionID)
+                if not isMythicOverall and type(latestID) ~= "nil"
+                    and G:IsAccessible(latestID) and latestID == sessionID then
                     local activeEvidence = CT._activeCombatSessionID == sessionID
                     local liveDuration = G:IsAccessible(latestDuration)
                         and type(latestDuration) == "number" and latestDuration <= 0
@@ -1675,7 +1830,8 @@ function CT:RegisterEvents()
                         generation = CT._lastCompletedGeneration
                     end
                 end
-                if generation ~= nil and CT._sessionGenerationByID[sessionID] == nil then
+                if not isMythicOverall and generation ~= nil
+                    and CT._sessionGenerationByID[sessionID] == nil then
                     local primary = CT._primarySessionByGeneration[generation]
                     if primary and primary ~= sessionID then
                         CT._supplementalSessionIDs[sessionID] = true
@@ -1690,11 +1846,15 @@ function CT:RegisterEvents()
                         if context.combatGeneration == generation then context._rawObserved = true end
                     end
                 end
-                if generation ~= nil and latestID == sessionID
-                    and not CT._supplementalSessionIDs[sessionID] then
-                    CT:BindFinishedCurrentSession(sessionID, latest, generation)
+                if generation ~= nil and not CT._supplementalSessionIDs[sessionID]
+                    and not isMythicOverall then
+                    -- The event sessionID is authoritative.  Bind it even if
+                    -- the lightweight list row is one frame late; optional
+                    -- name/duration enrichment is reconciled by the watchdog.
+                    CT:BindFinishedCurrentSession(sessionID,
+                        latestID == sessionID and latest or nil, generation)
                 end
-                CT:ClassifyLatestSyntheticMythicOverall()
+                CT:ReconcileFinishedCurrentSession()
                 CT:PersistLifecycleState()
             end
             if G then G:MarkDirty("archive") end
@@ -1773,6 +1933,10 @@ function CT:RegisterEvents()
             overallComplete = pendingExit.overallComplete,
         }
         self._exitingInstanceTag = pendingExit.tag
+        if pendingExit.scene == "mplus" and self.MaterializeOfficialMythicFullRun then
+            self:MaterializeOfficialMythicFullRun(pendingExit.tag, pendingExit.level,
+                pendingExit.mapName, pendingExit.instanceName, pendingExit.combatGeneration)
+        end
         self:QueueAction("merge-instance", {
             tag = pendingExit.tag, level = pendingExit.level,
             mapName = pendingExit.mapName, instanceName = pendingExit.instanceName,
@@ -1807,6 +1971,9 @@ function CT:RegisterEvents()
     if self._restoredPendingUserReset then
         self._restoredPendingUserReset = nil
         self:QueueUserReset()
+    end
+    if ns.Segments and ns.Segments.RestoreCurrentAfterReload then
+        ns.Segments:RestoreCurrentAfterReload()
     end
     self:PersistLifecycleState()
 end

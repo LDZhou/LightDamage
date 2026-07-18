@@ -367,6 +367,11 @@ local function readSourceIdentity(candidate, src, allowIncomplete, target)
     if status then
         identity._creatureStatus = status
         markIncomplete(candidate, "attribution", target)
+    elseif type(identity.creatureID) == "number" and identity.creatureID <= 0 then
+        -- The API field is optional; some rows expose the C-side sentinel 0.
+        -- Passing that sentinel back to a source-detail lookup can miss the
+        -- source even when its public GUID is valid.
+        identity.creatureID = nil
     end
     identity.name, status = stringField(src, "name", nil)
     if status then
@@ -490,10 +495,9 @@ local function archiveStat(candidate, selector, def, allowIncomplete)
     if type(dmType) == "nil" then return true end
     local session, sessionStatus = G:GetRawSession(selector.sessionType, selector.sessionID, dmType)
     if type(session) == "nil" then
-        -- Blizzard may omit any statistic session whose authoritative value is
-        -- exactly zero.  Missing means zero for every mode; secret/error still
-        -- keeps the core candidate pending.
-        if sessionStatus == G.MISSING then return true end
+        -- DamageMeterCombatSession is non-nil for a valid official selector,
+        -- including legitimate zero totals.  A missing whole session therefore
+        -- means publication is not complete yet and must never be frozen as 0.
         return nil, sessionStatus or G.ERROR
     end
     local total, status = numberField(session, "totalAmount", 0)
@@ -553,7 +557,6 @@ local function archiveDeaths(candidate, selector, allowIncomplete)
     if type(dmType) == "nil" then return true end
     local session, sessionStatus = G:GetRawSession(selector.sessionType, selector.sessionID, dmType)
     if type(session) == "nil" then
-        if sessionStatus == G.MISSING then candidate.totalDeaths = 0; return true end
         return nil, sessionStatus or G.ERROR
     end
     local totalDeaths, status = numberField(session, "totalAmount", 0)
@@ -575,87 +578,77 @@ local function archiveDeaths(candidate, selector, allowIncomplete)
             sawPositiveSource = true
             local identity; identity, status = readSourceIdentity(candidate, src, allowIncomplete)
             if not identity then return nil, status end
-            if not identity.creatureID then
-                local player = ensurePlayer(candidate, identity.key, identity.name,
-                    identity.class, identity.specIconID)
-                player.deaths = player.deaths + count
+            -- sourceCreatureID is an optional identity field on Blizzard's
+            -- DamageMeterCombatSource, including Deaths rows.  Its presence is
+            -- not an NPC/player discriminator and must never discard an
+            -- otherwise authoritative official death source.
+            local player = ensurePlayer(candidate, identity.key, identity.name,
+                identity.class, identity.specIconID)
+            player.deaths = player.deaths + count
 
-                local recapID; recapID, status = numberField(src, "deathRecapID", 0)
-                if status then
-                    local ok; ok, status = acceptOptionalFailure(candidate, status, "death", nil, allowIncomplete)
-                    if not ok then return nil, status end
-                    recapID = 0
-                end
-                local record, recapStatus
-                if recapID > 0 and ns.DeathTracker and ns.DeathTracker.BuildDeathRecordForArchive then
-                    record, recapStatus = ns.DeathTracker:BuildDeathRecordForArchive(recapID, src)
-                end
-                if not record then
-                    local ok; ok, status = acceptOptionalFailure(candidate,
-                        recapStatus or G.MISSING, "death", nil, allowIncomplete)
-                    if not ok then return nil, status end
-                    record = incompleteDeathRecord(identity, recapID, recapStatus)
-                elseif recapStatus ~= G.ACCESSIBLE then
-                    local ok; ok, status = acceptOptionalFailure(candidate, recapStatus,
-                        "death", record, allowIncomplete)
-                    if not ok then return nil, status end
-                elseif record._incomplete then
-                    markIncomplete(candidate, "death", record)
-                end
-                record.playerGUID = identity.key or record.playerGUID
-                record.playerName = identity.name or record.playerName
-                record.playerClass = identity.class or record.playerClass
-                record.isSelf = identity.isLocal and true or false
-                record._deathCount = count
-                table.insert(candidate.deathLog, record)
+            local recapID; recapID, status = numberField(src, "deathRecapID", 0)
+            if status then
+                local ok; ok, status = acceptOptionalFailure(candidate, status, "death", nil, allowIncomplete)
+                if not ok then return nil, status end
+                recapID = 0
             end
+            local record, recapStatus
+            if recapID > 0 and ns.DeathTracker and ns.DeathTracker.BuildDeathRecordForArchive then
+                record, recapStatus = ns.DeathTracker:BuildDeathRecordForArchive(recapID, src)
+            end
+            if not record then
+                local ok; ok, status = acceptOptionalFailure(candidate,
+                    recapStatus or G.MISSING, "death", nil, allowIncomplete)
+                if not ok then return nil, status end
+                record = incompleteDeathRecord(identity, recapID, recapStatus)
+            elseif recapStatus ~= G.ACCESSIBLE then
+                local ok; ok, status = acceptOptionalFailure(candidate, recapStatus,
+                    "death", record, allowIncomplete)
+                if not ok then return nil, status end
+            elseif record._incomplete then
+                markIncomplete(candidate, "death", record)
+            end
+            record.playerGUID = identity.key or record.playerGUID
+            record.playerName = identity.name or record.playerName
+            record.playerClass = identity.class or record.playerClass
+            record.isSelf = identity.isLocal and true or false
+            record._deathCount = count
+            table.insert(candidate.deathLog, record)
         end
     end
     if totalDeaths > 0 and not sawPositiveSource then return nil, G.MISSING end
     return true
 end
 
-local function archiveEnemySources(candidate, selector, dmType, identity, entry, allowIncomplete)
-    local sourceData, status = getSource(selector, dmType, identity.guid, identity.creatureID)
-    if type(sourceData) == "nil" then
-        return acceptOptionalFailure(candidate, status or G.MISSING, "enemySource", entry, allowIncomplete)
-    end
-    local spells; spells, status = G:ReadTableField(sourceData, "combatSpells")
-    if status ~= G.ACCESSIBLE then
-        return acceptOptionalFailure(candidate, status, "enemySource", entry, allowIncomplete)
-    end
+-- EnemyDamageTaken identifies the contributing unit in combatSpellDetails, but
+-- the contribution value belongs to the parent DamageMeterCombatSpell row.
+-- Keep this extraction shared by live details and archived details so the two
+-- views cannot drift to different interpretations of Blizzard's structure.
+function G:ExtractEnemyDamageSources(sourceData)
+    if type(sourceData) == "nil" then return nil, self.MISSING end
+    if type(sourceData) ~= "table" then return nil, self.ERROR end
+    if not self:IsTableAccessible(sourceData) then return nil, self.SECRET end
+
+    local spells, status = self:ReadTableField(sourceData, "combatSpells")
+    if status ~= self.ACCESSIBLE then return nil, status end
+
     local sourceMap = {}
+    local incomplete = false
     for _, sp in ipairs(spells) do
-        if type(sp) ~= "table" or not G:IsTableAccessible(sp) then
-            local inaccessible = type(sp) == "table" and G.SECRET or G.ERROR
-            local ok; ok, status = acceptOptionalFailure(candidate, inaccessible,
-                "enemySource", entry, allowIncomplete)
-            if not ok then return nil, status end
+        if type(sp) ~= "table" or not self:IsTableAccessible(sp) then
+            incomplete = true
         else
-            local details; details, status = G:ReadTableField(sp, "combatSpellDetails")
-            if status == G.ACCESSIBLE then
+            local amount, amountStatus = numberField(sp, "totalAmount", nil)
+            local details; details, status = self:ReadTableField(sp, "combatSpellDetails")
+            if amountStatus then incomplete = true end
+            if status == self.ACCESSIBLE then
                 local unitName; unitName, status = stringField(details, "unitName", nil)
-                if status then
-                    local ok; ok, status = acceptOptionalFailure(candidate, status,
-                        "enemySource", entry, allowIncomplete)
-                    if not ok then return nil, status end
-                end
+                if status then incomplete = true end
                 local unitClass; unitClass, status = stringField(details, "unitClassFilename", nil)
                 if status then
-                    local ok; ok, status = acceptOptionalFailure(candidate, status,
-                        "enemySource", entry, allowIncomplete)
-                    if not ok then return nil, status end
+                    incomplete = true
                     unitClass = nil
                 end
-                local amount; amount, status = numberField(details, "amount", nil)
-                if status then
-                    local ok; ok, status = acceptOptionalFailure(candidate, status,
-                        "enemySource", entry, allowIncomplete)
-                    if not ok then return nil, status end
-                end
-                -- combatSpellDetails.amount is the only official attribution
-                -- for this unitName.  Never assign the spell-wide totalAmount
-                -- to a single source when Blizzard omitted the detail amount.
                 if unitName and type(amount) == "number" and amount > 0 then
                     local row = sourceMap[unitName]
                     if not row then
@@ -664,17 +657,28 @@ local function archiveEnemySources(candidate, selector, dmType, identity, entry,
                     end
                     row.amount = row.amount + amount
                 end
-            elseif status ~= G.MISSING then
-                local ok; ok, status = acceptOptionalFailure(candidate, status,
-                    "enemySource", entry, allowIncomplete)
-                if not ok then return nil, status end
             else
-                markIncomplete(candidate, "enemySource", entry)
+                incomplete = true
             end
         end
     end
-    for _, row in pairs(sourceMap) do table.insert(entry.sources, row) end
-    table.sort(entry.sources, function(a, b) return a.amount > b.amount end)
+    local sources = {}
+    for _, row in pairs(sourceMap) do table.insert(sources, row) end
+    table.sort(sources, function(a, b) return a.amount > b.amount end)
+    return sources, self.ACCESSIBLE, incomplete
+end
+
+local function archiveEnemySources(candidate, selector, dmType, identity, entry, allowIncomplete)
+    local sourceData, status = getSource(selector, dmType, identity.guid, identity.creatureID)
+    if type(sourceData) == "nil" then
+        return acceptOptionalFailure(candidate, status or G.MISSING, "enemySource", entry, allowIncomplete)
+    end
+    local sources, sourceStatus, incomplete = G:ExtractEnemyDamageSources(sourceData)
+    if sourceStatus ~= G.ACCESSIBLE then
+        return acceptOptionalFailure(candidate, sourceStatus, "enemySource", entry, allowIncomplete)
+    end
+    entry.sources = sources
+    if incomplete then markIncomplete(candidate, "enemySource", entry) end
     return true
 end
 
@@ -683,7 +687,6 @@ local function archiveEnemyDamage(candidate, selector, allowIncomplete)
     if type(dmType) == "nil" then return true end
     local session, sessionStatus = G:GetRawSession(selector.sessionType, selector.sessionID, dmType)
     if type(session) == "nil" then
-        if sessionStatus == G.MISSING then candidate.totalEnemyDamageTaken = 0; return true end
         return nil, sessionStatus or G.ERROR
     end
     local sessionTotal, status = numberField(session, "totalAmount", 0)
