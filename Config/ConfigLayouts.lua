@@ -3,7 +3,7 @@ local addonName,ns=...
 local L=ns.L
 local Config=ns.Config
 
-local STAT_KEYS={damage="DAMAGE",healing="HEALING",damageTaken="DAMAGE_TAKEN",deaths="DEATHS",enemyDamageTaken="ENEMY_DAMAGE_TAKEN",interrupts="INTERRUPTS",dispels="DISPELS"}
+local STAT_KEYS={damage="DAMAGE",healing="HEALING",damageTaken="DAMAGE_TAKEN",avoidableDamageTaken="AVOIDABLE_DAMAGE_TAKEN",deaths="DEATHS",enemyDamageTaken="ENEMY_DAMAGE_TAKEN",interrupts="INTERRUPTS",dispels="DISPELS"}
 local SCENE_KEYS={mplus="SCENE_MPLUS",raid="SCENE_RAID",dungeon="SCENE_DUNGEON",arena="SCENE_ARENA",battleground="SCENE_BATTLEGROUND",outdoor="SCENE_OUTDOOR"}
 
 local function txt(parent,size,text,point,x,y)
@@ -454,6 +454,10 @@ y=self:Slider(inner,L.MAX_HISTORY_SEGMENTS,y,5,100,1,
             ns.Segments:SetViewSegment(ns.Segments.viewIndex)
         end
     end)
+ y=y-10; y=self:H(inner,L.CONFIG_SMART_REFRESH,y)
+ y=self:Desc(inner,y,L.CONFIG_REFRESH_CPU_HINT)
+ y=self:Slider(inner,L.CONFIG_COMBAT_REFRESH_SECONDS,y,.1,1,.1,function() return ns.db.smartRefresh.combatInterval end,function(v) ns.db.smartRefresh.combatInterval=v end)
+ y=self:Slider(inner,L.CONFIG_OUT_OF_COMBAT_REFRESH_SECONDS,y,.5,5,.5,function() return ns.db.smartRefresh.idleInterval end,function(v) ns.db.smartRefresh.idleInterval=v end)
  inner:SetHeight(math.abs(y)+30)
 end
 
@@ -491,9 +495,8 @@ function Config:RebuildBehaviorPage()
  y=self:Check(inner,L.CONFIG_ENABLE_HIDE_ANIMATION,y,function() return ns.db.fade.enableAnim end,function(v) ns.db.fade.enableAnim=v end)
  y=self:Slider(inner,L.CONFIG_HIDE_ANIMATION_DURATION,y,.1,2,.1,function() return ns.db.fade.animDuration or .5 end,function(v) ns.db.fade.animDuration=v end)
 
- y=y-10; y=self:H(inner,L.CONFIG_SMART_REFRESH,y)
- y=self:Slider(inner,L.CONFIG_COMBAT_REFRESH_SECONDS,y,.1,1,.1,function() return ns.db.smartRefresh.combatInterval end,function(v) ns.db.smartRefresh.combatInterval=v end)
- y=self:Slider(inner,L.CONFIG_OUT_OF_COMBAT_REFRESH_SECONDS,y,.5,5,.5,function() return ns.db.smartRefresh.idleInterval end,function(v) ns.db.smartRefresh.idleInterval=v end)
+ -- Smart refresh is a data-freshness setting, so it lives at the bottom of the
+ -- Data page next to the other tracking options, not with collapse/fade.
  inner:SetHeight(math.abs(y)+30)
  self:UpdatePageScroll("perf")
 end

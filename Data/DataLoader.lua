@@ -67,6 +67,13 @@ function CT:CommitArchiveCandidate(candidate, opts)
     return seg
 end
 
+-- Rates are Blizzard's to report, never ours to derive.  Every per-second value
+-- in a segment is copied verbatim from C_DamageMeter, including the run-wide
+-- rate on the dedicated Mythic+ session, which is why a full run is built from
+-- that official session rather than stitched together here.  This local
+-- aggregation only ever runs for a subset Blizzard publishes no session for
+-- (currently raid boss-attempts-only), and a rate for a subset is not something
+-- the API stated -- so it is left absent rather than computed.
 local function mergeSpellMap(target, source)
     for storageKey, spell in pairs(source or {}) do
         local spellID = spell.spellID or spell.id or storageKey
@@ -76,6 +83,8 @@ local function mergeSpellMap(target, source)
             out.spellID = type(spellID) == "number" and spellID or nil
             target[storageKey] = out
         end
+        out.name = out.name or spell.name
+        out.school = out.school or spell.school
         out.damage = (out.damage or 0) + (spell.damage or 0)
         out.healing = (out.healing or 0) + (spell.healing or 0)
         out.absorbed = (out.absorbed or 0) + (spell.absorbed or 0)
@@ -83,7 +92,6 @@ local function mergeSpellMap(target, source)
         out.crits = (out.crits or 0) + (spell.crits or 0)
         out.maxHit = math.max(out.maxHit or 0, spell.maxHit or 0)
         out.maxCrit = math.max(out.maxCrit or 0, spell.maxCrit or 0)
-        if spell.isAvoidable then out.isAvoidable = true end
         if spell.isPet then out.isPet = true end
         if spell.petName and spell.petName ~= "" then out.petName = spell.petName end
     end
@@ -108,11 +116,15 @@ local function mergePlayer(target, source)
     target.specIconID = source.specIconID or target.specIconID
     target.ilvl = math.max(target.ilvl or 0, source.ilvl or 0)
     target.score = math.max(target.score or 0, source.score or 0)
-    for _, field in ipairs({"damage", "healing", "overhealing", "absorbed", "damageTaken", "deaths", "interrupts", "dispels", "activeTime"}) do
+    for _, field in ipairs({"damage", "healing", "overhealing", "absorbed", "damageTaken",
+        "avoidableDamageTaken", "deaths", "interrupts", "dispels", "activeTime"}) do
         target[field] = (target[field] or 0) + (source[field] or 0)
     end
+    -- A row restored from an older SavedVariables snapshot predates this table.
+    target.avoidableDamageTakenSpells = target.avoidableDamageTakenSpells or {}
     mergeSpellMap(target.spells, source.spells)
     mergeSpellMap(target.damageTakenSpells, source.damageTakenSpells)
+    mergeSpellMap(target.avoidableDamageTakenSpells, source.avoidableDamageTakenSpells)
     mergeSpellMap(target.interruptSpells, source.interruptSpells)
     mergeSpellMap(target.dispelSpells, source.dispelSpells)
     for petKey, pet in pairs(source.pets or {}) do
@@ -148,6 +160,8 @@ local function mergeEnemyList(target, source)
                 merged = {name = row.name, class = row.class, amount = 0}
                 sourceMap[row.name] = merged; table.insert(out.sources, merged)
             end
+            -- A later fight can carry the class a first, anonymous row lacked.
+            merged.class = merged.class or row.class
             merged.amount = merged.amount + (row.amount or 0)
         end
         table.sort(out.sources, function(a, b) return a.amount > b.amount end)
@@ -166,10 +180,20 @@ function CT:MergeLocalSegments(segments, meta)
         merged.totalDamage = merged.totalDamage + (seg.totalDamage or 0)
         merged.totalHealing = merged.totalHealing + (seg.totalHealing or 0)
         merged.totalDamageTaken = merged.totalDamageTaken + (seg.totalDamageTaken or 0)
+        merged.totalAvoidableDamageTaken = (merged.totalAvoidableDamageTaken or 0)
+            + (seg.totalAvoidableDamageTaken or 0)
+        merged.totalDeaths = (merged.totalDeaths or 0) + (seg.totalDeaths or 0)
+        merged.totalEnemyDamageTaken = (merged.totalEnemyDamageTaken or 0)
+            + (seg.totalEnemyDamageTaken or 0)
         for guid, player in pairs(seg.players or {}) do
             local out = merged.players[guid]
-            if not out then out = ns.Segments:NewPlayerData(guid, player.name, player.class); merged.players[guid] = out end
-            mergePlayer(out, player)
+            if not out then
+                out = ns.Segments:NewPlayerData(guid, player.name, player.class)
+                merged.players[guid] = out
+            end
+            -- NewPlayerData declines a protected identity.  Archived rows are
+            -- public by construction, but never merge into a nil row.
+            if out then mergePlayer(out, player) end
         end
         for _, death in ipairs(seg.deathLog or {}) do table.insert(merged.deathLog, CopyTable(death)) end
         mergeEnemyList(merged.enemyDamageTakenList, seg.enemyDamageTakenList)

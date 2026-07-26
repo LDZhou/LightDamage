@@ -1,2 +1,68 @@
-.DS_Store
+# This repository is the live addon folder, so it also holds development files
+# that are not part of the shipped addon.  Everything ignored here still exists
+# on disk and keeps working in-game; it is simply not published.
+#
+# What IS shipped (never ignore): LightDamage.toc, Core/, Data/, UI/, Config/,
+# Libs/, Textures/, README.md.
+
+# ---------------------------------------------------------------------------
+# Development and test infrastructure
+# ---------------------------------------------------------------------------
+tests/
+tools/
+# The CI workflow drives tools/test_all.ps1, so it cannot run without the two
+# directories above.  Un-ignore all three together if you ever want CI back.
+.github/
+
+# ---------------------------------------------------------------------------
+# Internal design notes and working documents
+# ---------------------------------------------------------------------------
+docs/
+LightDamage-2.0-Product-Spec.zhCN.md
+LightDamage-API-Audit-v1.4.6-vs-current.zhCN.md
 changes.diff
+*.patch
+*.orig
+*.rej
+
+# ---------------------------------------------------------------------------
+# Agent / editor / IDE local state
+# ---------------------------------------------------------------------------
+.claude/
+.agents/
+.cursor/
+.vscode/
+.idea/
+*.code-workspace
+
+# ---------------------------------------------------------------------------
+# Packaging output
+# ---------------------------------------------------------------------------
+.release/
+release/
+dist/
+*.zip
+*.7z
+*.rar
+*.tar.gz
+
+# ---------------------------------------------------------------------------
+# Test-runtime dependencies (Node / Python)
+# ---------------------------------------------------------------------------
+node_modules/
+.pnpm-store/
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# ---------------------------------------------------------------------------
+# Editor and OS cruft
+# ---------------------------------------------------------------------------
+*.bak
+*.tmp
+*.swp
+*~
+.DS_Store
+Thumbs.db
+desktop.ini

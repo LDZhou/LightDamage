@@ -64,9 +64,17 @@ function UI:BuildLocalPlayerSnapshot()
         ilvl = math.floor(equipped or 0)
     end
 
+    -- Class is part of the identity fallback the bar fill uses when a live
+    -- combat row does not carry classFilename; UnitClass always works.
+    local class = cache.class
+    if type(class) ~= "string" or class == "" then
+        local _, classFilename = UnitClass("player")
+        class = classFilename
+    end
+
     self._localPlayerSnapshot = {
         guid = guid, specID = specID, specIconID = specIconID,
-        ilvl = ilvl, score = score,
+        class = class, ilvl = ilvl, score = score,
     }
     return self._localPlayerSnapshot
 end
@@ -114,13 +122,17 @@ function UI:ObserveDamageMeterSourceOnce(source)
     if gateway and not gateway:IsTableAccessible(source) then return end
     local seen = self._observedSources
     if not seen then seen = {}; self._observedSources = seen end
+    -- source is table-accessible (checked above), so direct field reads cannot
+    -- error; only the value may be secret, which IsAccessible guards.  This runs
+    -- per source per refresh, so the former pcall(function()...) wrappers were
+    -- pure per-frame closure garbage.
     local key
-    local okLocal, localValue = pcall(function() return source.isLocalPlayer end)
-    if okLocal and (not gateway or gateway:IsAccessible(localValue)) and localValue == true then
+    local localValue = source.isLocalPlayer
+    if (not gateway or gateway:IsAccessible(localValue)) and localValue == true then
         key = "local"
     else
-        local okGUID, guid = pcall(function() return source.sourceGUID end)
-        if okGUID and (not gateway or gateway:IsAccessible(guid)) and type(guid) == "string" then
+        local guid = source.sourceGUID
+        if (not gateway or gateway:IsAccessible(guid)) and type(guid) == "string" then
             key = guid
         end
     end
@@ -300,6 +312,10 @@ function UI:Refresh()
     self:BeginDataRefresh()
 
     local segs = ns.Segments
+    -- Reuse one merged-segment build across every consumer in this refresh; the
+    -- data cannot change during a synchronous refresh, so this is identical to
+    -- rebuilding each call, minus the repeated allocations and API reads.
+    if segs then segs:BeginMergeCache() end
     local currentSource = self:GetDisplaySource("current")
     local totalSource = self:GetDisplaySource("total")
     local seg, dur = currentSource.segment, currentSource.duration
@@ -345,6 +361,8 @@ function UI:Refresh()
             self:SetModeHeaderText(self.ovrPriHead.label, string.format(L.OVERALL_MODE_HEADER_FORMAT, ovrTitleWord, modeLabel), mode)
         end
     end
+
+    if segs then segs:EndMergeCache() end
 end
 
 function UI:FillOvrBars(isSplitView, sp, mode)

@@ -20,7 +20,8 @@ Layouts.MIN_ROW_H = 36
 Layouts.GAP = 2
 
 Layouts.SCENES = { "mplus", "raid", "dungeon", "arena", "battleground", "outdoor" }
-Layouts.STATS = { "damage", "healing", "damageTaken", "deaths", "enemyDamageTaken", "interrupts", "dispels" }
+Layouts.STATS = { "damage", "healing", "interrupts", "dispels", "deaths",
+    "damageTaken", "avoidableDamageTaken", "enemyDamageTaken" }
 Layouts.RANGES = { "follow", "total" }
 local SCENE_NAME_KEYS={mplus="SCENE_MPLUS",raid="SCENE_RAID",dungeon="SCENE_DUNGEON",arena="SCENE_ARENA",battleground="SCENE_BATTLEGROUND",outdoor="SCENE_OUTDOOR"}
 
@@ -391,6 +392,9 @@ function Layouts:MigrateProfile(profile)
     if profile.display then
         if profile.display.mode == "split" then profile.display.mode="overview" end
         if profile.display.mode ~= "overview" and not VALID_STAT[profile.display.mode] then profile.display.mode="overview" end
+        -- The text shadow is a fixed (+1, -1) drop drawn by the addon; the old
+        -- size setting no longer exists and its saved value is dead weight.
+        profile.display.fontShadowSize=nil
     end
     for id,def in pairs(profile.layoutDefs) do
         local migratedScene=id:match("^migrated_(.+)$")

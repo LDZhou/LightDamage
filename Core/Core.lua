@@ -51,8 +51,8 @@ ns.defaults = {
         sceneAnchor = "TOPLEFT",
         sceneSizes = {},
         themeColor = {0, 0, 0, 1},
-        bgColor    = {0.02, 0.02, 0.025, 0.58},
-        ovrBgColor = {0.025, 0.035, 0.05, 0.62},
+        bgColor    = {0.02, 0.02, 0.025, 0.80},
+        ovrBgColor = {0.025, 0.035, 0.05, 0.82},
     },
     detailWindow = {
         width = 380, height = 420,
@@ -102,7 +102,7 @@ ns.defaults = {
         headerFontSize = 9,
         headerFontOutline = "OUTLINE",
         headerFontShadow  = false,
-        headerFontColor   = {0.55, 0.55, 0.55, 0.9},
+        headerFontColor   = {0.66, 0.66, 0.66, 0.95},
         nameFont     = STANDARD_TEXT_FONT,
         nameFontSize = 13,
         nameFontOutline = "OUTLINE",
@@ -119,7 +119,8 @@ ns.defaults = {
             damage           = {1.0, 0.82, 0.0, 1},
             healing          = {0.4, 1.0, 0.4, 1},
             damageTaken      = {1.0, 0.3, 0.3, 1},
-            enemyDamageTaken = {0.78, 0.08, 0.10, 1},
+            avoidableDamageTaken = {1.0, 0.65, 0.1, 1},
+            enemyDamageTaken = {0.92, 0.22, 0.18, 1},
             deaths           = {0.0, 0.65, 1.0, 1},
             interrupts       = {0.0, 0.65, 1.0, 1},
             dispels          = {0.0, 0.65, 1.0, 1},
@@ -127,14 +128,17 @@ ns.defaults = {
         alwaysShowSelf = false,
         useShortTabs   = false,
         tabLabelStyle  = "full",
+        -- Which statistics get their own bottom-bar button; the rest are
+        -- reachable through the More menu.  Order comes from ns.MODE_ORDER.
         bottomBarModes = {
             damage = true,
             healing = true,
-            damageTaken = false,
-            deaths = true,
-            enemyDamageTaken = true,
             interrupts = false,
             dispels = false,
+            deaths = true,
+            damageTaken = false,
+            avoidableDamageTaken = false,
+            enemyDamageTaken = true,
         },
         bottomBarSchema = 1,
     },
@@ -177,7 +181,7 @@ ns.defaults = {
         historyDisplayLimit = 20,
     },
     smartRefresh = {
-        combatInterval = 0.3,
+        combatInterval = 0.6,
         idleInterval   = 2.0,
     },
     layoutSchema = 3,
@@ -403,6 +407,10 @@ function Core:OnInitialize()
             "GROUP_ROSTER_UPDATE", "CHALLENGE_MODE_START",
             "CHALLENGE_MODE_COMPLETED", "CHALLENGE_MODE_RESET",
             "PLAYER_DEAD", "PLAYER_LOGOUT",
+            -- The two 12.x edges at which protected combat data becomes
+            -- readable.  A battleground's fights are unarchivable until the
+            -- match restriction lifts, so these are what let History keep them.
+            "PVP_MATCH_COMPLETE", "ADDON_RESTRICTION_STATE_CHANGED",
         }
         for _, ev in ipairs(events) do self:RegisterEvent(ev) end
         if ns.CombatTracker then ns.CombatTracker:RegisterEvents() end
@@ -441,6 +449,12 @@ function Core:OnEvent(event, ...)
         ns:OnEncounterStart(...)
     elseif event == "ENCOUNTER_END" then
         ns:OnEncounterEnd(...)
+    elseif event == "PVP_MATCH_COMPLETE" or event == "ADDON_RESTRICTION_STATE_CHANGED" then
+        -- Nothing is read from the payload: these only mark the moment a
+        -- previously protected session may have become archivable.
+        if ns.CombatTracker and ns.CombatTracker.OnRestrictionEdge then
+            ns.CombatTracker:OnRestrictionEdge(event)
+        end
     elseif event == "PLAYER_ENTERING_WORLD" then
         ns:InvalidateGUIDCache()
         C_Timer.After(0.3, function()
@@ -540,8 +554,19 @@ end
 -- ============================================================
 -- 智能刷新系统
 -- ============================================================
-local refreshTimer
+-- A single explicit repeating ticker drives live refresh.  It runs only while
+-- the window is shown AND there is something to refresh (in combat, or a
+-- pending dirty mark), and is cancelled outright when idle-and-clean or hidden.
+-- Events (combat edges, DAMAGE_METER_*, view changes) call RequestRefresh,
+-- which re-arms the ticker on demand.  Using NewTicker+Cancel instead of a
+-- self-rescheduling NewTimer chain makes a leaked/duplicated refresh loop
+-- structurally impossible, and stopping when idle removes the steady-state
+-- out-of-combat poll.
+local refreshTicker
+local refreshTickerInterval
+local immediateTimer
 local refreshDirty = true
+local refreshing = false
 
 local function RefreshInterval()
     local settings = ns.db and ns.db.smartRefresh or ns.defaults.smartRefresh
@@ -549,44 +574,77 @@ local function RefreshInterval()
     return math.max(0.1, tonumber(value) or (ns.state.inCombat and 0.3 or 2.0))
 end
 
-local function CancelRefreshTimer()
-    if refreshTimer then
-        refreshTimer:Cancel()
-        refreshTimer = nil
-    end
+local function WindowShown()
+    return (ns.UI and ns.UI.frame and ns.UI.frame:IsShown()) and true or false
 end
 
-local function RunScheduledRefresh()
-    refreshTimer = nil
-    if not ns.UI or not ns.UI.frame or not ns.UI.frame:IsShown() then return end
+local function StopRefreshTicker()
+    if refreshTicker then refreshTicker:Cancel(); refreshTicker = nil end
+    refreshTickerInterval = nil
+end
 
+local RunScheduledRefresh
+
+-- Arm the repeating ticker iff there is a reason to.  Idempotent: never creates
+-- a second ticker, and re-creates it only when the combat/idle cadence changed
+-- (a NewTicker's interval is fixed at creation).
+local function EnsureRefreshTicker()
+    if not WindowShown() then StopRefreshTicker(); return end
+    if not ns.state.inCombat and not refreshDirty then return end
+    local interval = RefreshInterval()
+    if refreshTicker and refreshTickerInterval == interval then return end
+    StopRefreshTicker()
+    refreshTickerInterval = interval
+    refreshTicker = C_Timer.NewTicker(interval, function() RunScheduledRefresh() end)
+end
+
+RunScheduledRefresh = function()
+    -- A combat-edge sync inside PullCurrentData can call RequestRefresh, which
+    -- may re-enter here via the immediate one-shot; never overlap a refresh.
+    if refreshing then return end
+    if not WindowShown() then StopRefreshTicker(); return end
+    refreshing = true
     refreshDirty = false
+    local _tRefresh = debugprofilestop and debugprofilestop() or nil
     if ns.CombatTracker then ns.CombatTracker:PullCurrentData() end
     if ns.DetailView and ns.DetailView:IsVisible() then
         pcall(function() ns.DetailView:Refresh() end)
     end
+    if _tRefresh then
+        ns._refreshMs = (ns._refreshMs or 0) + (debugprofilestop() - _tRefresh)
+        ns._refreshCount = (ns._refreshCount or 0) + 1
+    end
+    refreshing = false
 
-    -- Live combat data has no reliable public dirty event.  Preserve the
-    -- configured cadence while visible, but keep no high-frequency ticker
-    -- alive for a hidden window.
-    refreshTimer = C_Timer.NewTimer(RefreshInterval(), RunScheduledRefresh)
+    if not WindowShown() then StopRefreshTicker(); return end
+    -- Idle and nothing dirty: stop entirely; an event will re-arm us.
+    if not ns.state.inCombat and not refreshDirty then StopRefreshTicker(); return end
+    -- Adopt a changed combat/idle cadence.
+    EnsureRefreshTicker()
 end
 
 function ns:RequestRefresh(reason, immediate)
     refreshDirty = true
+    if ns.UI then ns.UI._barsDirty = true end
     if ns.DamageMeterGateway and ns.DamageMeterGateway.MarkDirty then
         ns.DamageMeterGateway:MarkDirty(reason or "ui")
     end
-    if not ns.UI or not ns.UI.frame or not ns.UI.frame:IsShown() then
-        CancelRefreshTimer()
+    if not WindowShown() then
+        StopRefreshTicker()
+        if immediateTimer then immediateTimer:Cancel(); immediateTimer = nil end
         return
     end
     if immediate then
-        CancelRefreshTimer()
-        refreshTimer = C_Timer.NewTimer(0, RunScheduledRefresh)
-    elseif not refreshTimer then
-        refreshTimer = C_Timer.NewTimer(RefreshInterval(), RunScheduledRefresh)
+        -- Run one refresh on the next frame (never synchronously: an edge sync
+        -- inside a refresh calls RequestRefresh, which would otherwise recurse),
+        -- then make sure the repeating ticker is running.
+        if immediateTimer then immediateTimer:Cancel() end
+        immediateTimer = C_Timer.NewTimer(0, function()
+            immediateTimer = nil
+            RunScheduledRefresh()
+        end)
     end
+    EnsureRefreshTicker()
 end
 
 -- Alias used by data gateway/history-store style modules.
@@ -597,7 +655,10 @@ function ns:AttachRefreshVisibilityHooks()
     if not frame or frame._lightDamageRefreshHooks then return false end
     frame._lightDamageRefreshHooks = true
     frame:HookScript("OnShow", function() ns:RequestRefresh("window-show", true) end)
-    frame:HookScript("OnHide", function() CancelRefreshTimer() end)
+    frame:HookScript("OnHide", function()
+        StopRefreshTicker()
+        if immediateTimer then immediateTimer:Cancel(); immediateTimer = nil end
+    end)
     return true
 end
 
@@ -833,6 +894,169 @@ function ns:HandleSlashCommand(msg)
             end
             print(L.MSG_LIGHT_DAMAGE_BASELINE_MANUALLY_RESET)
         end
+    elseif msg == "resetlog" then
+        ns._resetLog = not ns._resetLog and true or false
+        if ns._resetLog then
+            print("|cffff8800[resetlog]|r ON — now do 团本->野外->普通副本->大秘境. Watch the "
+                .. "REQUEST / BEFORE / AFTER / DEFERRED lines; send them to me.")
+        else
+            print("|cffff8800[resetlog]|r OFF")
+        end
+    elseif msg == "shadow" then
+        -- Two independent questions, answered in one command:
+        --  1. Did LightDamage's shadow actually reach the live FontStrings?
+        --     (dump GetShadowColor/GetShadowOffset straight off the bars)
+        --  2. Does this client render a FontString shadow at all here?
+        --     (an A/B swatch built OUTSIDE the addon's font pipeline, so no
+        --      refresh, cache or config path can influence it)
+        local db = ns.db.display or {}
+        print(string.format("|cff33ccffshadow diag|r  fontShadow=%s nameFontShadow=%s outline=%s (drop is fixed: X 0.5, Y 0.5, black 50%%)",
+            tostring(db.fontShadow), tostring(db.nameFontShadow), tostring(db.fontOutline)))
+        local cells = ns.UI and ns.UI._activeGridCells
+        local bar = (cells and cells[1] and cells[1].bars and cells[1].bars[1])
+            or (ns.UI and ns.UI.priBars and ns.UI.priBars[1])
+        if bar then
+            for _, fsName in ipairs({"rawValue", "rawTotalValue", "value", "name", "rawName"}) do
+                local fs = bar[fsName]
+                if fs and fs.GetShadowColor then
+                    local _, fsz, fl = fs:GetFont()
+                    local twin = fs._ldShadowFS
+                    local twinText = twin and twin:GetText()
+                    print(string.format("  %-14s shown=%s font(%s,%s) drawnShadow=%s offset=%s twinShown=%s text=%s",
+                        fsName, tostring(fs:IsShown()), tostring(fsz), tostring(fl),
+                        tostring(fs._ldShadowActive == true),
+                        tostring(fs._ldShadowOffset),
+                        tostring(twin and twin:IsShown()),
+                        twinText ~= nil and tostring(twinText) or "<none>"))
+                end
+            end
+        else
+            print("  (no visible bar -- open the meter with combat data first)")
+        end
+
+        local swatch = ns._shadowSwatch
+        if swatch then
+            swatch:Hide(); ns._shadowSwatch = nil
+            print("|cff33ccffshadow diag|r  A/B swatch hidden")
+        else
+            swatch = CreateFrame("Frame", nil, UIParent)
+            swatch:SetSize(380, 196); swatch:SetPoint("CENTER", 0, 200)
+            swatch:SetFrameStrata("FULLSCREEN_DIALOG")
+            local bg = swatch:CreateTexture(nil, "BACKGROUND")
+            bg:SetAllPoints(); bg:SetColorTexture(0.35, 0.35, 0.40, 1)
+            local font = db.font or STANDARD_TEXT_FONT
+            local size = db.fontSizeBase or 13
+            local outline = ns.NormalizeFontOutline and ns:NormalizeFontOutline(db.fontOutline)
+                or db.fontOutline or ""
+            local scale = swatch:GetEffectiveScale()
+            if type(scale) ~= "number" or scale <= 0 then scale = 1 end
+            local offset = 8 / scale
+            -- Row A is the isolated client test: Blizzard's own font, no flags
+            -- at all.  Row B adds only the player's font+outline flags, so if A
+            -- has a shadow and B does not, the flags (MONOCHROME in particular)
+            -- are what suppress it.  Row C is the no-shadow control.
+            local rows = {
+                {label = "A  native API, default font", font = STANDARD_TEXT_FONT, outline = "", offset = offset},
+                {label = "B  native API, your font", font = font, outline = outline, offset = offset},
+                {label = "C  no shadow (control)", font = font, outline = outline, offset = 0},
+            }
+            for index, row in ipairs(rows) do
+                local fs = swatch:CreateFontString(nil, "OVERLAY")
+                local applied = fs:SetFont(row.font, size + 6, row.outline)
+                fs:SetPoint("TOP", swatch, "TOP", 0, -16 - (index - 1) * 42)
+                fs:SetTextColor(1, 1, 1, 1)
+                fs:SetText(row.label)
+                if row.offset > 0 then
+                    fs:SetShadowColor(1, 0, 0, 1)
+                    fs:SetShadowOffset(row.offset, -row.offset)
+                else
+                    fs:SetShadowColor(0, 0, 0, 0)
+                    fs:SetShadowOffset(0, 0)
+                end
+                local livePath, liveSize, liveFlags = fs:GetFont()
+                local sr, sg, sb, sa = fs:GetShadowColor()
+                local sx, sy = fs:GetShadowOffset()
+                print(string.format("  row %s setFont=%s flags=%q size=%s shadow=(%s,%s,%s,%s) offset=(%.2f,%.2f) path=%s",
+                    row.label:sub(1, 1), tostring(applied), tostring(liveFlags), tostring(liveSize),
+                    tostring(sr), tostring(sg), tostring(sb), tostring(sa),
+                    tonumber(sx) or 0, tonumber(sy) or 0, tostring(livePath)))
+            end
+            -- Row D is exactly what LightDamage now ships: a second FontString
+            -- drawn underneath at the design spec (X 0.5, Y 0.5, black 50%),
+            -- with no outline, which needs no client shadow support at all.
+            local drop = 0.5 / scale
+            local drawn = swatch:CreateFontString(nil, "ARTWORK")
+            drawn:SetFont(font, size + 6, "")
+            drawn:SetPoint("TOP", swatch, "TOP", drop, -(16 + 3 * 42) - drop)
+            drawn:SetTextColor(0, 0, 0, 0.5)
+            drawn:SetText("D  drawn shadow, shipping look")
+            local real = swatch:CreateFontString(nil, "OVERLAY")
+            real:SetFont(font, size + 6, outline)
+            real:SetPoint("TOP", swatch, "TOP", 0, -(16 + 3 * 42))
+            real:SetTextColor(1, 1, 1, 1)
+            real:SetText("D  drawn shadow, shipping look")
+            print(string.format("|cff33ccffshadow diag|r  swatch scale=%.3f: rows A/B use 8 real px (%.2f local), row D uses 0.5 real px (%.2f local)",
+                scale, offset, drop))
+            print("  rows A/B use the native API (dead on this client); row D is the drawn shadow.")
+            swatch:Show()
+            ns._shadowSwatch = swatch
+            print("|cff33ccffshadow diag|r  A/B/C swatch shown above the screen centre. "
+                .. "Run /ld shadow again to hide it.")
+        end
+    elseif msg == "cpu" or msg == "diag" then
+        -- Read-only snapshot of everything that can accumulate during a run.
+        -- Run it during the climb and again right after /reload; whichever
+        -- number is large during play but small after reload is the leak.
+        local function countKeys(t)
+            local n = 0
+            if type(t) == "table" then for _ in pairs(t) do n = n + 1 end end
+            return n
+        end
+        local CT, segs = ns.CombatTracker, ns.Segments
+        local count = 0
+        local G = ns.DamageMeterGateway
+        if G then
+            local s, st = G:GetAvailableSessionsRaw()
+            if st == G.ACCESSIBLE and type(s) == "table" then count = #s end
+        end
+        print("|cff33ccffLightDamage diag|r  inCombat=" .. tostring(ns.state.inCombat)
+            .. "  scene=" .. tostring(ns.state.sceneKey))
+        print(string.format("  Blizzard sessions=%d  cursor=%s  history=%d",
+            count, tostring(CT and CT._lastProcessedCount), segs and #(segs.history or {}) or 0))
+        if CT then
+            print(string.format("  completedContexts=%d  sessionContextByID=%d  completedSessionIDs=%d",
+                #(CT._completedContexts or {}), countKeys(CT._sessionContextByID), countKeys(CT._completedSessionIDs)))
+            print(string.format("  sessionGenByID=%d  primaryByGen=%d  observedGen=%d",
+                countKeys(CT._sessionGenerationByID), countKeys(CT._primarySessionByGeneration),
+                countKeys(CT._meterObservedGenerations)))
+            print(string.format("  synthetic=%d  supplemental=%d  archiveFirstSeen=%d  pendingActions=%d",
+                countKeys(CT._syntheticSessionIDs), countKeys(CT._supplementalSessionIDs),
+                countKeys(CT._archiveFirstSeenAt), #(CT._actions or {})))
+            print(string.format("  watchdog=%s  edgeWatcher=%s  mythicBoundary=%s  pendingMythic=%s",
+                tostring(CT._watchdog ~= nil), tostring(CT._combatEdgeWatcher ~= nil),
+                tostring(CT._mythicRunBoundary ~= nil),
+                tostring(ns.MythicPlus and ns.MythicPlus._pendingMythicSeg ~= nil)))
+        end
+        print(string.format("  playerCache=%d", countKeys(ns.PlayerInfoCache)))
+        local ev = CT and CT._evCounts or {}
+        print(string.format("  events cur=%d combat=%d flushes=%d regen=%d  |  GetAvailableSessions realcalls=%s",
+            ev.DAMAGE_METER_CURRENT_SESSION_UPDATED or 0, ev.DAMAGE_METER_COMBAT_SESSION_UPDATED or 0,
+            CT and CT._combatFlushCount or 0,
+            (ev.PLAYER_REGEN_DISABLED or 0) + (ev.PLAYER_REGEN_ENABLED or 0),
+            tostring(G and G._sessionsRealCalls or 0)))
+        print(string.format("  timing flushMs=%.0f (n=%d)  refreshMs=%.0f (n=%d)",
+            CT and CT._flushMs or 0, CT and CT._combatFlushCount or 0,
+            ns._refreshMs or 0, ns._refreshCount or 0))
+        if UpdateAddOnMemoryUsage and GetAddOnMemoryUsage then
+            UpdateAddOnMemoryUsage()
+            print(string.format("  memory=%.0f KB", GetAddOnMemoryUsage("LightDamage") or 0))
+        end
+        if GetCVar and GetCVar("scriptProfile") == "1" and UpdateAddOnCPUUsage and GetAddOnCPUUsage then
+            UpdateAddOnCPUUsage()
+            print(string.format("  cpu(cumulative)=%.1f ms", GetAddOnCPUUsage("LightDamage") or 0))
+        else
+            print("  cpu: run '/console scriptProfile 1' then /reload to enable CPU numbers")
+        end
     elseif msg == "debug" then
         ns:PrintDebugInfo()
     elseif msg == "api" then
@@ -843,6 +1067,8 @@ function ns:HandleSlashCommand(msg)
         ns:DebugRecapFields()
     elseif msg == "deathdebug" then
         ns:DebugDeathRecapIDs()
+    elseif msg == "avoidable" then
+        ns:DebugAvoidableDamageTaken()
     elseif msg == "overheal" then
         local gateway = ns.DamageMeterGateway
         if not gateway or ns.state.inCombat then print(L.COMBAT_DATA_LOCKED); return end
@@ -949,6 +1175,99 @@ function ns:DebugDeathRecapIDs()
         end
     end
     print(L.DEBUG_END)
+end
+
+-- /ld avoidable -- read-only probe for the golden "[Avoidable]" marker in the
+-- damage-taken breakdown.  The marker is driven by the official per-spell
+-- isAvoidable flag on DamageTaken rows, but 12.1 also publishes a dedicated
+-- Enum.DamageMeterType.AvoidableDamageTaken meter type.  This prints both so it
+-- is unambiguous which one the live client actually populates: the state column
+-- distinguishes an absent field from a protected one, which no amount of
+-- reading the addon's own code can decide.
+function ns:DebugAvoidableDamageTaken()
+    print("|cff00ccff[Light Damage] avoidable damage-taken probe|r")
+    local gateway = ns.DamageMeterGateway
+    if not gateway then print("  gateway missing"); return end
+    if ns.state.inCombat then print("  " .. tostring(L.COMBAT_DATA_LOCKED)); return end
+
+    local dmTaken = Enum and Enum.DamageMeterType and Enum.DamageMeterType.DamageTaken
+    local dmAvoidable = Enum and Enum.DamageMeterType and Enum.DamageMeterType.AvoidableDamageTaken
+    print(string.format("  Enum.DamageMeterType.DamageTaken=%s  AvoidableDamageTaken=%s",
+        tostring(dmTaken), tostring(dmAvoidable)))
+
+    local sessions, sessionsState = gateway:GetAvailableSessionsRaw()
+    if sessionsState ~= gateway.ACCESSIBLE or type(sessions) ~= "table" or #sessions == 0 then
+        print("  no readable session list (state=" .. tostring(sessionsState) .. ")")
+        return
+    end
+    local last, lastState = gateway:ReadField(sessions, #sessions)
+    local sessionID, idState = gateway:ReadField(last, "sessionID")
+    if lastState ~= gateway.ACCESSIBLE or idState ~= gateway.ACCESSIBLE
+        or type(sessionID) ~= "number" then
+        print("  newest session id unreadable (state=" .. tostring(idState) .. ")")
+        return
+    end
+    local sessionName, nameState = gateway:ReadField(last, "name")
+    print(string.format("  newest session #%d name=%s", sessionID,
+        (nameState == gateway.ACCESSIBLE and type(sessionName) == "string")
+            and sessionName or ("<" .. tostring(nameState) .. ">")))
+
+    local playerGUID = ns.state.playerGUID or (UnitGUID and UnitGUID("player"))
+
+    local function dumpSpells(label, dmType)
+        if type(dmType) == "nil" then
+            print("  " .. label .. ": meter type not present on this client")
+            return
+        end
+        local source, sourceState = gateway:GetRawSource(nil, sessionID, dmType, playerGUID)
+        if sourceState ~= gateway.ACCESSIBLE then
+            print(string.format("  %s: no readable source for the local player (state=%s)",
+                label, tostring(sourceState)))
+            return
+        end
+        local spells, spellsState = gateway:ReadTableField(source, "combatSpells")
+        if spellsState ~= gateway.ACCESSIBLE then
+            print(string.format("  %s: combatSpells state=%s", label, tostring(spellsState)))
+            return
+        end
+        print(string.format("  %s: %d spell row(s)", label, #spells))
+        -- Every value below is printed only once the gateway says it is public,
+        -- so the probe itself can never taint a frame or format a secret.
+        local flagged = 0
+        for index, sp in ipairs(spells) do
+            local spellID, spellIDState = gateway:ReadField(sp, "spellID")
+            local amount, amountState = gateway:ReadField(sp, "totalAmount")
+            local avoidable, avoidableState = gateway:ReadField(sp, "isAvoidable")
+            if avoidableState == gateway.ACCESSIBLE and avoidable == true then
+                flagged = flagged + 1
+            end
+            if index <= 12 then
+                local label = "<" .. tostring(spellIDState) .. ">"
+                if spellIDState == gateway.ACCESSIBLE and type(spellID) == "number" then
+                    label = "spell:" .. spellID
+                    if C_Spell and C_Spell.GetSpellName then
+                        local name = C_Spell.GetSpellName(spellID)
+                        if gateway:IsAccessible(name) and type(name) == "string" and name ~= "" then
+                            label = name
+                        end
+                    end
+                end
+                local amountText = "<" .. tostring(amountState) .. ">"
+                if amountState == gateway.ACCESSIBLE and type(amount) == "number" then
+                    amountText = string.format("%.0f", amount)
+                end
+                local flagText = avoidableState == gateway.ACCESSIBLE
+                    and tostring(avoidable) or "<" .. tostring(avoidableState) .. ">"
+                print(string.format("    %-28s amount=%-12s isAvoidable=%s",
+                    label, amountText, flagText))
+            end
+        end
+        print(string.format("    -> %d row(s) with isAvoidable == true", flagged))
+    end
+
+    dumpSpells("DamageTaken", dmTaken)
+    dumpSpells("AvoidableDamageTaken", dmAvoidable)
+    print("|cff00ccff[Light Damage] probe end|r")
 end
 
 function ns:DebugRecapFields()

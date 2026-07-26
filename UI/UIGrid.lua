@@ -86,7 +86,9 @@ function UI:ResetCellData()
     self._pinnedSelfCache={}
 end
 
-local TAB_DEFS={{m="overview",k="OVERVIEW"},{m="damage",k="DAMAGE"},{m="healing",k="HEALING"},{m="damageTaken",k="DAMAGE_TAKEN"},{m="deaths",k="DEATHS"},{m="enemyDamageTaken",k="ENEMY_DAMAGE_TAKEN"},{m="interrupts",k="INTERRUPTS"},{m="dispels",k="DISPELS"}}
+-- Overview is pinned first; the rest are laid out in ns.MODE_ORDER, so keep the
+-- button definitions in that same order to stay readable.
+local TAB_DEFS={{m="overview",k="OVERVIEW"},{m="damage",k="DAMAGE"},{m="healing",k="HEALING"},{m="interrupts",k="INTERRUPTS"},{m="dispels",k="DISPELS"},{m="deaths",k="DEATHS"},{m="damageTaken",k="DAMAGE_TAKEN"},{m="avoidableDamageTaken",k="AVOIDABLE_DAMAGE_TAKEN"},{m="enemyDamageTaken",k="ENEMY_DAMAGE_TAKEN"}}
 
 local function safeTextWidth(fs)
     local getter=fs and (fs.GetUnboundedStringWidth or fs.GetStringWidth)
@@ -354,7 +356,7 @@ function UI:DoLayout()
 end
 
 function UI:ApplyTheme()
-    local dbw=ns.db.window; local tc=dbw.themeColor or {0,0,0,1}; local bc=dbw.bgColor or {.02,.02,.025,.58}
+    local dbw=ns.db.window; local tc=dbw.themeColor or {0,0,0,1}; local bc=dbw.bgColor or {.02,.02,.025,.80}
     if self.frame then self.frame:SetBackdropColor(unpack(bc)) end
     if self.titleBg then self.titleBg:SetColorTexture(unpack(tc)) end
     if self.tabBg then self.tabBg:SetColorTexture(unpack(tc)) end
@@ -375,8 +377,8 @@ function UI:ApplyAllFonts()
     for _,cell in ipairs(self.gridCells or {}) do
         self:ApplyFont(cell.head.label,hFont,hSz,hOut,hShad); self:ApplyFont(cell.head.info,hFont,hSz,hOut,hShad)
         if cell.head.rawInfo then self:ApplyFont(cell.head.rawInfo,hFont,hSz,hOut,hShad) end
-        self:SetFontStringColor(cell.head.info,"headerFontColor",{.55,.55,.55,.9})
-        if cell.head.rawInfo then self:SetFontStringColor(cell.head.rawInfo,"headerFontColor",{.55,.55,.55,.9}) end
+        self:SetFontStringColor(cell.head.info,"headerFontColor",{.66,.66,.66,.95})
+        if cell.head.rawInfo then self:SetFontStringColor(cell.head.rawInfo,"headerFontColor",{.66,.66,.66,.95}) end
     end
 end
 
@@ -409,6 +411,18 @@ function UI:Refresh()
         self:RefreshTitle()
     end
     if self._collapsed then return end
+    -- Tier 1 (Details' need_refresh gate): during combat the ticker fires every
+    -- combatInterval, but the cell data only changes on a session event.  If
+    -- nothing marked the bars dirty since the last pass, they already show the
+    -- right numbers, so skip the per-cell fill AND its allocating C_DamageMeter
+    -- reads -- the dominant source of combat GC churn.  A 1s ceiling forces a
+    -- periodic full pass so any missed invalidation self-heals within 1s.
+    if ns.state.inCombat and not self._previewContext and not self._barsDirty
+        and (now - (self._lastBarRender or 0)) < 1.0 then
+        return
+    end
+    self._barsDirty = false
+    self._lastBarRender = now
     for _,cell in ipairs(self._activeGridCells or {}) do
         local seg,dur,sessionType,sessionID,source=self:ResolveCellSource(cell)
         self:FillModeBars(cell.bars,cell.list,cell.head,cell.stat,seg,dur,sessionType,sessionID,source)

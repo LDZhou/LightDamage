@@ -24,7 +24,10 @@ function Config:BuildLayoutPage()
 
     local posesLR = { {l=L.LEFT, v=1}, {l=L.RIGHT, v=2} }; local posesTB = { {l=L.TOP, v=1}, {l=L.BOTTOM, v=2} }
     local dirs = { {l=L.CONFIG_LEFT_RIGHT_SPLIT, v="LR"}, {l=L.CONFIG_TOP_BOTTOM_SPLIT, v="TB"} }
-    local allModes = { {l=L.DAMAGE, v="damage"}, {l=L.HEALING, v="healing"}, {l=L.DAMAGE_TAKEN, v="damageTaken"}, {l=L.DEATHS, v="deaths"}, {l=L.ENEMY_DAMAGE_TAKEN, v="enemyDamageTaken"}, {l=L.INTERRUPTS, v="interrupts"}, {l=L.DISPELS, v="dispels"} }
+    local allModes = {}
+    for _, mode in ipairs(ns.MODE_ORDER) do
+        allModes[#allModes + 1] = {l = L[ns.MODE_NAMES[mode] or mode], v = mode}
+    end
 
     local sec2 = CreateFrame("Frame", nil, inner); sec2:SetWidth(inner:GetWidth()); local y2 = 0
     y2 = self:H(sec2, L.CONFIG_CURRENT_AND_OVERALL_WINDOW, y2)
@@ -338,13 +341,16 @@ function Config:AddDataTitleColorControls(parent, y, refreshFn)
                 if refreshFn then refreshFn() elseif ns.UI then ns.UI:Refresh() end
             end)
     end
-    Add(L.DAMAGE .. L.CONFIG_TITLE_COLOR_SUFFIX, "damage", {1.0, 0.82, 0.0, 1})
-    Add(L.HEALING .. L.CONFIG_TITLE_COLOR_SUFFIX, "healing", {0.4, 1.0, 0.4, 1})
-    Add(L.DAMAGE_TAKEN .. L.CONFIG_TITLE_COLOR_SUFFIX, "damageTaken", {1.0, 0.3, 0.3, 1})
-    Add(L.ENEMY_DAMAGE_TAKEN .. L.CONFIG_TITLE_COLOR_SUFFIX, "enemyDamageTaken", {1.0, 0.3, 0.3, 1})
-    Add(L.DEATHS .. L.CONFIG_TITLE_COLOR_SUFFIX, "deaths", {0.0, 0.65, 1.0, 1})
-    Add(L.INTERRUPTS .. L.CONFIG_TITLE_COLOR_SUFFIX, "interrupts", {0.0, 0.65, 1.0, 1})
-    Add(L.DISPELS .. L.CONFIG_TITLE_COLOR_SUFFIX, "dispels", {0.0, 0.65, 1.0, 1})
+    local fallbacks = {
+        damage = {1.0, 0.82, 0.0, 1}, healing = {0.4, 1.0, 0.4, 1},
+        interrupts = {0.0, 0.65, 1.0, 1}, dispels = {0.0, 0.65, 1.0, 1},
+        deaths = {0.0, 0.65, 1.0, 1}, damageTaken = {1.0, 0.3, 0.3, 1},
+        avoidableDamageTaken = {1.0, 0.65, 0.1, 1}, enemyDamageTaken = {1.0, 0.3, 0.3, 1},
+    }
+    for _, mode in ipairs(ns.MODE_ORDER) do
+        Add(L[ns.MODE_NAMES[mode] or mode] .. L.CONFIG_TITLE_COLOR_SUFFIX, mode,
+            fallbacks[mode] or {1, 1, 1, 1})
+    end
     return y
 end
 
@@ -366,6 +372,9 @@ function Config:BuildLookPage()
     local function RefreshFonts()
         if ns.UI then
             ns.UI._lastFontHash = nil
+            -- A font/shadow edit must repaint the bars even if the player is in
+            -- combat, so bypass the Tier-1 "nothing changed" render gate.
+            ns.UI._barsDirty = true
             ns.UI:ApplyAllFonts()
             ns.UI:LayoutTabs()
             ns.UI:Refresh()
@@ -388,13 +397,16 @@ function Config:BuildLookPage()
     page = NewSubPage("colors"); y = 0
     y = self:H(page, L.CONFIG_WINDOW_AND_BACKGROUND_COLORS, y)
     y = self:ColorSwatch(page, L.CONFIG_TITLE_TAB_THEME_COLOR, y, function() local c = ns.db.window.themeColor or {0, 0, 0, 1}; return c[1], c[2], c[3], c[4] end, function(r, g, b, a) ns.db.window.themeColor = {r, g, b, a}; if ns.UI and ns.UI.ApplyTheme then ns.UI:ApplyTheme() end end)
-    y = self:ColorSwatch(page, L.CONFIG_DATA_BACKGROUND_COLOR, y, function() local c = ns.db.window.bgColor or {0.02, 0.02, 0.025, 0.58}; return c[1], c[2], c[3], c[4] end, function(r, g, b, a) ns.db.window.bgColor = {r, g, b, a}; if ns.UI and ns.UI.ApplyTheme then ns.UI:ApplyTheme() end end)
-    y = self:ColorSwatch(page, L.CONFIG_OVERALL_COLUMN_BACKGROUND_COLOR, y, function() local c = ns.db.window.ovrBgColor or {0.025, 0.035, 0.05, 0.62}; return c[1], c[2], c[3], c[4] end, function(r, g, b, a) ns.db.window.ovrBgColor = {r, g, b, a}; if ns.UI and ns.UI.ApplyTheme then ns.UI:ApplyTheme() end end)
+    y = self:ColorSwatch(page, L.CONFIG_DATA_BACKGROUND_COLOR, y, function() local c = ns.db.window.bgColor or {0.02, 0.02, 0.025, 0.80}; return c[1], c[2], c[3], c[4] end, function(r, g, b, a) ns.db.window.bgColor = {r, g, b, a}; if ns.UI and ns.UI.ApplyTheme then ns.UI:ApplyTheme() end end)
+    y = self:ColorSwatch(page, L.CONFIG_OVERALL_COLUMN_BACKGROUND_COLOR, y, function() local c = ns.db.window.ovrBgColor or {0.025, 0.035, 0.05, 0.82}; return c[1], c[2], c[3], c[4] end, function(r, g, b, a) ns.db.window.ovrBgColor = {r, g, b, a}; if ns.UI and ns.UI.ApplyTheme then ns.UI:ApplyTheme() end end)
     y = y - 8; y = self:H(page, L.CONFIG_DATA_TITLE_COLORS, y)
     y = self:AddDataTitleColorControls(page, y, RefreshFonts)
     page:SetHeight(math.abs(y) + 8)
 
     page = NewSubPage("fonts"); y = 0
+    -- The shadow is a fixed (+1, -1) drop with no size control: it is drawn by
+    -- the addon (the client never paints FontString shadows) and one real pixel
+    -- is the whole point of a drop shadow at these font sizes.
     y = self:AddFontSettingsBlock(page, y, L.CONFIG_BASE_TEXT_FONT_SETTINGS, {font="font", size="fontSizeBase", outline="fontOutline", shadow="fontShadow", color="fontColor", colorFallback={1, 1, 1, 0.93}}, 13, RefreshFonts)
     y = self:AddFontSettingsBlock(page, y, L.CONFIG_TOP_TITLE_FONT_SETTINGS, {font="titleFont", size="titleFontSize", outline="titleFontOutline", shadow="titleFontShadow", color="titleFontColor", colorFallback={1, 1, 1, 0.93}}, 10, RefreshFonts)
     y = self:AddFontSettingsBlock(page, y, L.CONFIG_DATA_HEADER_FONT_SETTINGS, {font="headerFont", size="headerFontSize", outline="headerFontOutline", shadow="headerFontShadow"}, 9, RefreshFonts)
@@ -445,7 +457,10 @@ end
 -- ============================================================
 -- Perf 页
 -- ============================================================
-function Config:BuildPerfPage()
+-- Kept only as a migration/reference implementation, like BuildLegacyDataPage.
+-- The active behaviour page is built by ConfigLayouts.lua; the distinct name
+-- stops load order from silently deciding which one the player sees.
+function Config:BuildLegacyPerfPage()
     local inner = self.pages["perf"].inner; local y = 0
     y = self:H(inner, L.CONFIG_SMART_REFRESH, y)
     y = self:Slider(inner, L.CONFIG_COMBAT_REFRESH_SECONDS, y, 0.1, 1.0, 0.1, function() return ns.db.smartRefresh.combatInterval end, function(v) ns.db.smartRefresh.combatInterval=v end)

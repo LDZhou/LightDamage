@@ -25,9 +25,11 @@ CT._meterObservedGenerations = {}
 CT._primarySessionByGeneration = {}
 CT._supplementalSessionIDs = {}
 CT._syntheticSessionIDs = {}
+CT._consumedOfficialFullRunIDs = {}
 CT._completedSessionIDs = {}
 CT._archiveFirstSeenAt = {}
 CT._overallCoverageByTag = {}
+CT._runWideTruncatedByTag = {}
 CT._instanceHadCombatByTag = {}
 CT._resetGeneration = 0
 CT._confirmedResetGeneration = 0
@@ -40,6 +42,22 @@ CT._currentInstanceType = nil
 CT._currentSceneKey = "outdoor"
 
 local SESSION_PUBLICATION_GRACE = 12.0
+-- An instance boundary is a product event, not a request.  Waiting for the API
+-- to settle is an optimisation; past this deadline the exit transaction runs
+-- against whatever data exists right now.  Kept well beyond the publication
+-- grace so a healthy client always takes the normal, fully-archived path.
+local BOUNDARY_FORCE_DEADLINE = 20.0
+-- ...unless the client itself states why the data is unreadable.  In a PvP
+-- match every opposing row stays protected until Blizzard lifts the match
+-- restriction, which can easily outlast the blind deadline -- and giving up
+-- there resets the meter while the fights are still unarchivable, so leaving
+-- the battleground left an empty History.  While an official restriction
+-- explains the block the boundary keeps waiting, up to this absolute cap so a
+-- restriction that never clears can still never strand the queue.
+local RESTRICTED_BOUNDARY_DEADLINE = 300.0
+-- Restrictions that legitimately keep official combat data protected.  Read by
+-- name so a client without one of them simply contributes nothing.
+local ARCHIVE_RESTRICTION_TYPES = {"PvPMatch", "Combat", "Encounter"}
 
 local function gatewayAccessible(value)
     return not G or G:IsAccessible(value)
@@ -250,6 +268,27 @@ function CT:PersistLifecycleState()
     LightDamageDB.lightDamageLifecycle = saved
 end
 
+-- Coalesce frequent lifecycle persistence into one write on the next frame.  The
+-- SavedVariables snapshot only needs to be correct at a reload/logout boundary,
+-- not rebuilt synchronously on every combat edge and session event.  Critical
+-- boundaries (resets, exits) keep calling PersistLifecycleState directly, and
+-- PLAYER_LOGOUT flushes any pending write so nothing is lost on relog.
+function CT:SchedulePersist()
+    if self._persistScheduled then return end
+    self._persistScheduled = true
+    C_Timer.After(0, function()
+        self._persistScheduled = false
+        CT:PersistLifecycleState()
+    end)
+end
+
+function CT:FlushPendingPersist()
+    if self._persistScheduled then
+        self._persistScheduled = false
+        self:PersistLifecycleState()
+    end
+end
+
 function CT:RestoreLifecycleState(current)
     local saved = type(LightDamageDB) == "table" and LightDamageDB.lightDamageLifecycle
     if type(saved) ~= "table" or saved.schema ~= LIFECYCLE_SCHEMA then return false, nil end
@@ -431,9 +470,20 @@ function CT:IsOverallCompleteForTag(instanceTag)
     return instanceTag ~= nil and self._overallCoverageByTag[instanceTag] ~= false
 end
 
+-- Blizzard's dedicated run-wide session is immutable and scoped to one run, so
+-- unlike the rolling Overall accumulator it cannot be polluted by a later fight
+-- or by data from before the instance.  Only a reset inside the run truncates
+-- it.  Keeping this separate from Overall coverage is what lets a full run take
+-- Blizzard's own run-wide numbers -- including the run's DPS/HPS -- instead of
+-- falling back to a locally stitched segment that has no official rate at all.
+function CT:IsOfficialRunWideComplete(instanceTag)
+    return instanceTag ~= nil and self._runWideTruncatedByTag[instanceTag] ~= true
+end
+
 function CT:ReleaseOverallCoverage(instanceTag)
     if not instanceTag then return end
     self._overallCoverageByTag[instanceTag] = nil
+    self._runWideTruncatedByTag[instanceTag] = nil
     self._instanceHadCombatByTag[instanceTag] = nil
     if self._entryResetPendingTag == instanceTag then
         self._entryResetPendingTag = nil
@@ -532,6 +582,21 @@ function CT:GetOfficialMythicOverallSession()
     local found, sessionID, info = self:ClassifyLatestSyntheticMythicOverall()
     if not found then return nil end
     return sessionID, info
+end
+
+-- Blizzard's dedicated M+ run-wide row stays an ordinary official History row
+-- for the whole run.  The exit transaction that copies it into LightDamage's
+-- own full-run segment is the single owner that retires it, so History never
+-- shows the same run twice.  Epoch-scoped: a confirmed meter reset clears it.
+function CT:MarkOfficialFullRunConsumed(sessionID)
+    if type(sessionID) ~= "number" then return false end
+    self._consumedOfficialFullRunIDs[sessionID] = G and G:GetRawGeneration() or 0
+    return true
+end
+
+function CT:IsOfficialFullRunConsumed(sessionID)
+    local generation = G and G:GetRawGeneration() or 0
+    return sessionID ~= nil and self._consumedOfficialFullRunIDs[sessionID] == generation
 end
 
 -- While an automatic boundary is pending, the archive cursor is authoritative:
@@ -836,7 +901,11 @@ end
 
 local RESET_RETRY_DELAYS = {0, 1.25, 3, 6, 10}
 
-function CT:ReconcileCompletedContexts(action, instanceTag, discardPublished)
+-- `force` is used by an overdue instance boundary: the transaction is running
+-- against the data that exists now, so every shell it is overriding must be
+-- consumed here.  Leaving them behind would only move the stall one action down
+-- the queue, onto the meter reset that follows the merge.
+function CT:ReconcileCompletedContexts(action, instanceTag, discardPublished, force)
     local now = GetTime()
     for index = #self._completedContexts, 1, -1 do
         local context = self._completedContexts[index]
@@ -845,28 +914,50 @@ function CT:ReconcileCompletedContexts(action, instanceTag, discardPublished)
             local observed = context._rawObserved
                 or (context.combatGeneration ~= nil
                     and self._meterObservedGenerations[context.combatGeneration] == true)
-            if observed then
+            local age
+            if type(context._completedWallTime) == "number" then
+                age = math.max(0, time() - context._completedWallTime)
+            else
+                age = math.max(0, now - (context._completedAt or now))
+            end
+            if force then
+                table.remove(self._completedContexts, index)
+            elseif observed then
                 if discardPublished then
                     -- Explicit user Reset only needs proof that Blizzard
                     -- published the finished session; the user asked to delete
                     -- it, so consume the metadata shell without archiving.
                     table.remove(self._completedContexts, index)
-                else
+                elseif hasUnprocessedSessions() then
+                    -- A published row is still queued for archiving.  This is
+                    -- the only state in which waiting can still accomplish
+                    -- something: ProcessArchiveTransactions consumes the shell.
                     return false
+                elseif age < SESSION_PUBLICATION_GRACE then
+                    return false
+                else
+                    -- Published, but the cursor has already passed every
+                    -- session, so assignContext can never be reached again and
+                    -- nothing will ever consume this shell.  It happens
+                    -- whenever combats outnumber published sessions (two pulls
+                    -- sharing one row, a supplemental row, or the synthetic M+
+                    -- run-wide row, which advances the cursor without taking a
+                    -- context).  Blocking here stalled the head of the action
+                    -- queue forever: no full run, no meter reset, and the next
+                    -- instance inherited the previous run's Total.  The fight's
+                    -- data is already archived; drop the metadata shell.
+                    table.remove(self._completedContexts, index)
                 end
             else
-                -- Automatic boundaries never time out a missing core session:
-                -- the context survives reload and remains pending until the
-                -- official row can be archived.  An explicit destructive Reset
-                -- may conclude after the grace window only when Blizzard never
-                -- published a session at all.
-                if not discardPublished then return false end
-                local age
-                if type(context._completedWallTime) == "number" then
-                    age = math.max(0, time() - context._completedWallTime)
-                else
-                    age = math.max(0, now - (context._completedAt or now))
-                end
+                -- Blizzard published no session for this combat.  Waiting is
+                -- right for a late publication, but it must be bounded: an
+                -- orphan context used to block its instance-exit transaction
+                -- forever, and because DrainActions only ever works on the head
+                -- of the queue, that one shell stalled every later boundary too
+                -- -- no full run, no meter reset, and the next instance
+                -- inherited the previous run's Total.  After the publication
+                -- grace window the shell is dropped.  No official row is
+                -- discarded here; there is none to discard.
                 if age < SESSION_PUBLICATION_GRACE then return false end
                 table.remove(self._completedContexts, index)
             end
@@ -929,6 +1020,12 @@ function CT:ApplyDamageMeterResetState(internal, serial, deferPresentation)
         -- A user/foreign mid-run reset makes Blizzard Overall incomplete for
         -- the physical instance.  Exit must use tagged local sessions.
         self._overallCoverageByTag[activeTag] = false
+        -- It also restarts Blizzard's dedicated run-wide session, so that row
+        -- no longer covers the whole run either.  This is the *only* way that
+        -- immutable row can become incomplete, and it is tracked separately:
+        -- everything else that clears Overall coverage (a late entry reset, a
+        -- later outdoor fight) cannot touch a run-scoped session.
+        self._runWideTruncatedByTag[activeTag] = true
     end
     -- Reset invalidates Blizzard session IDs and the client may reuse them in
     -- the next run.  The archived data is already fully local at this point;
@@ -947,6 +1044,7 @@ function CT:ApplyDamageMeterResetState(internal, serial, deferPresentation)
         self._primarySessionByGeneration = {}
         self._supplementalSessionIDs = {}
         self._syntheticSessionIDs = {}
+        self._consumedOfficialFullRunIDs = {}
         self._completedSessionIDs = {}
         self._archiveFirstSeenAt = {}
     end
@@ -1051,13 +1149,43 @@ end
 -- means that the request was accepted (or intercepted by another addon).  The
 -- action completes after DAMAGE_METER_RESET, or after the public session list
 -- and every supported Overall statistic independently prove the meter empty.
+-- Debug (/ld resetlog): read the live Overall DamageDone total so we can see,
+-- before/after each ResetAllCombatSessions, whether the Blizzard Overall session
+-- (which the Total column reads) actually gets emptied by the reset.
+function CT:LogResetState(label)
+    local totalStr, count = "?", "?"
+    if G then
+        local sessions, st = G:GetAvailableSessionsRaw()
+        if st == G.ACCESSIBLE and type(sessions) == "table" then count = tostring(#sessions) end
+        local overall = Enum and Enum.DamageMeterSessionType and Enum.DamageMeterSessionType.Overall
+        local dmg = Enum and Enum.DamageMeterType and Enum.DamageMeterType.DamageDone
+        if overall and dmg then
+            local session, sstate = G:GetRawSession(overall, nil, dmg)
+            if sstate == G.ACCESSIBLE and G:IsTableAccessible(session) then
+                local total = session.totalAmount
+                if G:IsAccessibleFast(total) and type(total) == "number" then
+                    totalStr = string.format("%.0f", total)
+                else totalStr = "secret" end
+            else totalStr = "none(" .. tostring(sstate) .. ")" end
+        end
+    end
+    print(string.format("|cffff8800[resetlog]|r %-34s overallDmg=%s sessions=%s scene=%s",
+        tostring(label), totalStr, count, tostring(ns.state and ns.state.sceneKey)))
+end
+
 function CT:ExecuteMeterReset(reason, action)
     action = action or {}
     local resetAPI = C_DamageMeter and C_DamageMeter.ResetAllCombatSessions
     if type(resetAPI) ~= "function" then return false, "api-missing" end
     if not action.resetSerial then
         if GetTime() < (self._resetSettleUntil or 0) then return false, "reset-settling" end
-        if not action.discardRaw and not self:CanResetMeter() then return false, "archive-pending" end
+        -- An overdue boundary has already given up on the unreadable rows; the
+        -- archive precondition would otherwise keep this reset queued forever
+        -- and hand the next instance the previous run's Total.
+        local forced = action.forcedBoundary == true or self:IsBoundaryOverdue(action)
+        if not action.discardRaw and not forced and not self:CanResetMeter() then
+            return false, "archive-pending"
+        end
         self._resetGeneration = self._resetGeneration + 1
         action.resetSerial = self._resetGeneration
         action.resetAttempts = 0
@@ -1105,9 +1233,14 @@ function CT:ExecuteMeterReset(reason, action)
 
     action.lastResetAttemptAt = now
     action.resetAttempts = attempts + 1
+    if ns._resetLog then self:LogResetState("BEFORE ResetAll (" .. tostring(reason) .. ")") end
     self._insideResetCall = true
     local ok = pcall(resetAPI)
     self._insideResetCall = nil
+    if ns._resetLog then
+        self:LogResetState("AFTER  ResetAll ok=" .. tostring(ok)
+            .. " empty=" .. tostring(self:IsBlizzardMeterEmpty()))
+    end
     if not ok then return false, "reset-failed" end
     if (self._confirmedResetGeneration or 0) >= action.resetSerial then
         return true, "reset-confirmed"
@@ -1128,9 +1261,16 @@ function CT:HandleDamageMeterReset()
         -- request: in that case the matching reset event is the boundary proof,
         -- and retrying ResetAllCombatSessions would erase the new fight.
         local action = self._actions[1]
-        local postResetCombat = action and action.resetSerial == internalSerial
-            and self:HasPostResetCombatEvidence(action)
-        if not self:IsBlizzardMeterEmpty() and not postResetCombat then
+        local ours = action and action.resetSerial == internalSerial
+        local postResetCombat = ours and self:HasPostResetCombatEvidence(action)
+        -- IsBlizzardMeterEmpty proves emptiness by reading the statistics, so it
+        -- cannot return true while those values are protected -- which is the
+        -- normal state in an arena.  The event still carries our own reset
+        -- serial, so once the boundary is overdue that identity is the proof;
+        -- otherwise the reset would be retried forever and the boundary, its
+        -- callback and every later exit would stay queued behind it.
+        local overdue = ours and self:IsBoundaryOverdue(action)
+        if not self:IsBlizzardMeterEmpty() and not postResetCombat and not overdue then
             self:StartWatchdog()
             return
         end
@@ -1151,11 +1291,74 @@ function CT:PerformQueuedUserReset(action)
     return self:CompleteResetActionOnce(action)
 end
 
+-- A boundary is overdue once it has waited longer than any healthy client
+-- needs.  Past that point every precondition below becomes advisory: the exit
+-- runs against the data that exists now.  This is the only thing that saves a
+-- boundary whose blocker can never clear -- an arena/battleground session whose
+-- opposing rows stay protected for the entire match is never readable, so
+-- waiting for it does not preserve data, it only strands the exit and leaks the
+-- run into the next Total.
+-- 12.x exposes why addon data is restricted instead of making us infer it from
+-- protected values.  Asking the client is only meaningful while the archive is
+-- actually blocked on protected data; a restriction that is active for some
+-- unrelated reason must never extend a boundary that could already commit.
+function CT:IsArchiveRestrictedByClient()
+    if not G or self._pendingArchiveReason ~= G.SECRET then return false end
+    -- The player has already entered the next instance.  That run needs a clean
+    -- Total more than the previous one needs its protected rows, so stop
+    -- extending and let the blind deadline finish the old boundary.
+    if ns.state.isInInstance then return false end
+    local api = C_RestrictedActions and C_RestrictedActions.GetAddOnRestrictionState
+    local types = Enum and Enum.AddOnRestrictionType
+    if type(api) ~= "function" or type(types) ~= "table" then return false end
+    local inactive = Enum.AddOnRestrictionState and Enum.AddOnRestrictionState.Inactive or 0
+    for _, name in ipairs(ARCHIVE_RESTRICTION_TYPES) do
+        local restrictionType = types[name]
+        if restrictionType ~= nil then
+            local ok, state = pcall(api, restrictionType)
+            if ok and state ~= nil and state ~= inactive then return true, name end
+        end
+    end
+    return false
+end
+
+function CT:IsBoundaryOverdue(action)
+    if not action then return false end
+    -- An exit that already ran forced hands that status to the reset it queues:
+    -- the same unreadable rows would otherwise make the follow-up reset wait out
+    -- the deadline a second time before it could clear the meter.
+    if action.forcedBoundary == true then return true end
+    if action.kind ~= "merge-instance" and action.kind ~= "meter-reset" then return false end
+    local waited = GetTime() - (action.queuedAt or GetTime())
+    -- The absolute cap is unconditional: liveness never depends on the client
+    -- eventually telling us the restriction ended.
+    if waited >= RESTRICTED_BOUNDARY_DEADLINE then return true end
+    if waited < BOUNDARY_FORCE_DEADLINE then return false end
+    -- Past the blind deadline the boundary would normally give up.  Keep waiting
+    -- only while the client states a restriction that explains the unreadable
+    -- rows -- that is exactly the PvP case, and the data really does arrive.
+    return not self:IsArchiveRestrictedByClient()
+end
+
+-- PVP_MATCH_COMPLETE and ADDON_RESTRICTION_STATE_CHANGED are the edges at which
+-- previously protected combat data becomes readable.  They carry no payload we
+-- archive; they only tell the event-driven worker that retrying is now worth it,
+-- so a battleground's fights are archived the moment the match restriction ends
+-- instead of on the next slow watchdog tick.
+function CT:OnRestrictionEdge(reason)
+    if G then G:MarkDirty(reason or "restriction-edge") end
+    self:StartWatchdog()
+end
+
 function CT:DrainActions(archiveReady)
     local action = self._actions[1]
     if not action then return true end
     if ns.state.inCombat then return false end
-    if archiveReady == false then return false end
+    local overdue = self:IsBoundaryOverdue(action)
+    -- An unreadable session blocks the archive cursor forever.  Without this
+    -- exemption it also blocked the queue here, before the merge branch could
+    -- ever consult its own force deadline.
+    if archiveReady == false and not overdue then return false end
 
     local done = false
     if action.kind == "user-reset" then
@@ -1170,8 +1373,9 @@ function CT:DrainActions(archiveReady)
     elseif action.kind == "meter-reset" then
         -- Before clearing Blizzard state, also archive any combat that started
         -- while this reset was waiting (notably outdoor combat after an exit).
-        if hasUnprocessedSessions() then return false end
-        if not self:ReconcileCompletedContexts(action) then return false end
+        if hasUnprocessedSessions() and not overdue then return false end
+        if not self:ReconcileCompletedContexts(action, nil, false, overdue) then return false end
+        action.forcedBoundary = action.forcedBoundary or overdue
         if action.reason == "challenge-start" then self:ReclassifyPreKeystoneSegments(action) end
         if not action.rawEpochBegan and self._entryResetPendingTag
             and self._coverageCombatBeforeReset then
@@ -1188,16 +1392,39 @@ function CT:DrainActions(archiveReady)
             self:CompleteResetActionOnce(action)
         else
             done = self:ExecuteMeterReset(action.reason, action)
+            if ns._resetLog and not done then
+                print("|cffff8800[resetlog]|r DEFERRED reason=" .. tostring(action.reason)
+                    .. " (queued, not yet executed)")
+            end
             if done then self:CompleteResetActionOnce(action) end
         end
     elseif action.kind == "merge-instance" then
         -- The session list can lag combat end.  A completed context is the
         -- authoritative indication that one more raw archive is still owed.
-        if hasUnprocessedSessions() then return false end
-        if not self:ReconcileCompletedContexts(action, action.tag) then return false end
+        -- Both checks below are waits, never vetoes: DrainActions only ever
+        -- works on the head of the queue, so a precondition that never clears
+        -- holds every later boundary hostage too.  After the deadline the exit
+        -- runs on the data that is actually available.
+        local forced = overdue
+        if forced then
+            self:ReconcileCompletedContexts(action, action.tag, false, true)
+        else
+            if hasUnprocessedSessions() then return false end
+            if not self:ReconcileCompletedContexts(action, action.tag) then return false end
+        end
         if self.MergeAndCleanInstance then
             done = self:MergeAndCleanInstance(action.tag, action.level, action.mapName,
-                action.instanceName, action.scene, action.combatGeneration, false) == true
+                action.instanceName, action.scene, action.combatGeneration, forced) == true
+        end
+        if done and forced then
+            -- MergeAndCleanInstance queues the coordinated reset for this same
+            -- boundary; propagate the forced status so it is not blocked again
+            -- by the very rows the merge just gave up on.
+            for _, queued in ipairs(self._actions) do
+                if queued.kind == "meter-reset" and not queued.resetSerial then
+                    queued.forcedBoundary = true
+                end
+            end
         end
     elseif action.kind == "callback" then
         done = true
@@ -1293,6 +1520,10 @@ function CT:QueueUserReset(onComplete)
 end
 
 function CT:RequestMeterReset(reason, after, boundaryTag)
+    if ns._resetLog then
+        print(string.format("|cffff8800[resetlog]|r REQUEST reason=%s tag=%s inCombat=%s",
+            tostring(reason), tostring(boundaryTag), tostring(ns.state.inCombat)))
+    end
     -- Core and the lifecycle coordinator can observe the same zone transition.
     -- One physical ResetAll satisfies every not-yet-started boundary request.
     -- Coalesce across queued callbacks (not only adjacent/same-tag requests) so
@@ -1465,7 +1696,7 @@ function CT:OnCombatEnded()
     self._activeCombatGeneration = nil
     self._activeCombatContext = nil
     if G then G:MarkDirty("combat-ended") end
-    self:PersistLifecycleState()
+    self:SchedulePersist()
     self:StartWatchdog()
     if ns.HistoryList and ns.HistoryList.IsOpen and ns.HistoryList:IsOpen() then
         ns.HistoryList:Rebuild()
@@ -1510,7 +1741,7 @@ function CT:OnCombatStarted()
     if self._activeCombatSessionID then
         self._primarySessionByGeneration[combatGeneration] = self._activeCombatSessionID
     end
-    self:PersistLifecycleState()
+    self:SchedulePersist()
 end
 
 function CT:StartCombatEdgeWatcher()
@@ -1558,13 +1789,9 @@ function CT:QueueInstanceMerge(snapshot, boundaryCombatGeneration)
         overallComplete = self._overallCoverageByTag[instanceTag] ~= false,
     }
     self._exitingInstanceTag = instanceTag
-    -- The dedicated Blizzard M+ run-wide session is already immutable at this
-    -- boundary.  Materialize it before the slower per-fight archive/reset
-    -- cleanup so the player sees the full run immediately after zoning out.
-    if scene == "mplus" and self.MaterializeOfficialMythicFullRun then
-        self:MaterializeOfficialMythicFullRun(instanceTag, level, mapName,
-            instanceName, combatGeneration)
-    end
+    -- Mythic+ uses exactly the same full-run boundary as a normal dungeon: the
+    -- queued merge transaction is the only producer.  Its single extra step is
+    -- to prefer Blizzard's dedicated run-wide session as the data source.
     self:QueueAction("merge-instance", {
         throughIndex = count, tag = instanceTag,
         level = level, mapName = mapName,
@@ -1572,24 +1799,6 @@ function CT:QueueInstanceMerge(snapshot, boundaryCombatGeneration)
         combatGeneration = combatGeneration,
     })
     self:PersistLifecycleState()
-end
-
--- Fast presentation and destructive cleanup deliberately use different
--- boundaries.  Two consistent post-PLAYER_ENTERING_WORLD outdoor samples are
--- enough to publish Blizzard's immutable M+ summary, but never authorize raw
--- archiving or ResetAllCombatSessions.  The strict 1.5-second boundary below
--- remains the sole owner of those destructive operations.
-function CT:TryFastPublishMythicExit(previous, current, pewSerial, combatGeneration)
-    if not previous or not previous.inInstance or current.inInstance then return false end
-    local scene = self._currentSceneKey or previous.scene
-    if scene ~= "mplus" or not self.MaterializeOfficialMythicFullRun then return false end
-    if pewSerial <= (self._consumedPlayerEnteringWorldSerial or 0) then return false end
-    local tag = self._currentInstanceTag or previous.instanceTag
-    if not tag then return false end
-    local fullRun = self:MaterializeOfficialMythicFullRun(tag,
-        self._currentMythicLevel or 0, self._currentMythicMapName,
-        self._currentInstanceName or previous.name, combatGeneration)
-    return fullRun ~= nil
 end
 
 function CT:HandleWorldTransition()
@@ -1640,10 +1849,6 @@ function CT:HandleWorldTransition()
         end
         self._pendingWorldSnapshotCount = (self._pendingWorldSnapshotCount or 1) + 1
         local pendingAge = GetTime() - (self._pendingWorldSnapshotAt or GetTime())
-        if outdoorExit and self._pendingWorldSnapshotCount >= 2 and pendingAge >= 0.08 then
-            self:TryFastPublishMythicExit(previous, current, pewSerial,
-                self._pendingWorldCombatGeneration)
-        end
         local minimumGap = outdoorExit and 1.5 or 0.20
         local minimumSamples = outdoorExit and 3 or 2
         if self._pendingWorldSnapshotCount < minimumSamples
@@ -1761,6 +1966,117 @@ function CT:PullCurrentData()
     if ns.UI and ns.UI:IsVisible() then ns.UI:Refresh() end
 end
 
+-- DAMAGE_METER_COMBAT_SESSION_UPDATED fires hundreds of times per second during
+-- AoE (measured ~4000 events/minute).  Its body is idempotent for a given
+-- finished session -- reading the session list, classifying the synthetic M+
+-- row, binding and reconciling all reach the same state whether run once or a
+-- thousand times in one frame -- so running it on every raw event was the
+-- dominant source of in-combat GC churn and CPU.  QueueCombatSessionUpdate
+-- coalesces a burst into a single next-frame flush while never dropping a
+-- distinct finished session id.
+function CT:ProcessCombatSessionUpdate(damageMeterType, sessionID)
+    CT._combatFlushCount = (CT._combatFlushCount or 0) + 1
+    local _tFlush = debugprofilestop and debugprofilestop() or nil
+    if damageMeterType == Enum.DamageMeterType.DamageDone
+        and G and G:IsAccessible(sessionID) and type(sessionID) == "number" and sessionID ~= 0 then
+        CT._completedSessionIDs[sessionID] = G:GetRawGeneration()
+        -- The live/current session is the final available entry.  An
+        -- older delayed event arriving during a later fight must never
+        -- claim that later fight's generation.
+        local generation
+        local sessions, count = safeSessionCount()
+        local latest = sessions and sessions[count]
+        local latestID, latestDuration
+        if latest and G:IsTableAccessible(latest) then
+            latestID = latest.sessionID
+            latestDuration = latest.durationSeconds
+        end
+        -- Completion metadata and the Blizzard M+ run-wide row may
+        -- publish in either order.  Classify every matching list item
+        -- before assigning this event to the just-finished fight.
+        CT:ClassifyLatestSyntheticMythicOverall()
+        local isMythicOverall = CT:IsSyntheticSessionID(sessionID)
+        if not isMythicOverall and type(latestID) ~= "nil"
+            and G:IsAccessible(latestID) and latestID == sessionID then
+            local activeEvidence = CT._activeCombatSessionID == sessionID
+            local liveDuration = G:IsAccessible(latestDuration)
+                and type(latestDuration) == "number" and latestDuration <= 0
+            if activeEvidence or (ns.state.inCombat and liveDuration) then
+                generation = ns.Segments and ns.Segments._combatGeneration or 0
+            else
+                generation = CT._lastCompletedGeneration
+            end
+        end
+        if not isMythicOverall and generation ~= nil
+            and CT._sessionGenerationByID[sessionID] == nil then
+            local primary = CT._primarySessionByGeneration[generation]
+            if primary and primary ~= sessionID then
+                CT._supplementalSessionIDs[sessionID] = true
+            else
+                CT._primarySessionByGeneration[generation] = sessionID
+                CT._sessionGenerationByID[sessionID] = generation
+            end
+        end
+        if generation ~= nil then
+            CT._meterObservedGenerations[generation] = true
+            for _, context in ipairs(CT._completedContexts) do
+                if context.combatGeneration == generation then context._rawObserved = true end
+            end
+        end
+        if generation ~= nil and not CT._supplementalSessionIDs[sessionID]
+            and not isMythicOverall then
+            -- The event sessionID is authoritative.  Bind it even if
+            -- the lightweight list row is one frame late; optional
+            -- name/duration enrichment is reconciled by the watchdog.
+            CT:BindFinishedCurrentSession(sessionID,
+                latestID == sessionID and latest or nil, generation)
+        end
+        CT:ReconcileFinishedCurrentSession()
+        CT:SchedulePersist()
+    end
+    if G then G:MarkDirty("archive") end
+    -- The live current session just changed: let the render's Tier-1 gate know
+    -- the bars need a real pass on the next combat tick.
+    if ns.UI then ns.UI._barsDirty = true end
+    CT:StartWatchdog()
+    if ns.HistoryList and ns.HistoryList.IsOpen and ns.HistoryList:IsOpen() then
+        ns.HistoryList:Rebuild()
+    end
+    if _tFlush then CT._flushMs = (CT._flushMs or 0) + (debugprofilestop() - _tFlush) end
+end
+
+-- Run the coalesced burst.  Fires on the next frame after the first event of a
+-- burst, and inline (from QueueCombatSessionUpdate) when a distinct finished
+-- session id would otherwise be overwritten before it was processed.
+function CT:FlushCombatSessionUpdate()
+    if not self._combatUpdateScheduled and self._pendingCombatSessionID == nil then return end
+    self._combatUpdateScheduled = false
+    local sessionID = self._pendingCombatSessionID
+    self._pendingCombatSessionID = nil
+    self:ProcessCombatSessionUpdate(
+        sessionID ~= nil and Enum.DamageMeterType.DamageDone or nil, sessionID)
+end
+
+function CT:QueueCombatSessionUpdate(damageMeterType, sessionID)
+    -- Only a valid DamageDone session carries per-id block work; any other meter
+    -- type or an inaccessible id only owes the once-per-frame tail, so it merely
+    -- needs a flush scheduled.
+    if damageMeterType == Enum.DamageMeterType.DamageDone
+        and G and G:IsAccessible(sessionID) and type(sessionID) == "number" and sessionID ~= 0 then
+        -- A different id arriving while one is still pending is a distinct
+        -- finished fight in the same frame -- flush the pending one first so a
+        -- same-frame combat boundary is never dropped.
+        if self._pendingCombatSessionID ~= nil and self._pendingCombatSessionID ~= sessionID then
+            self:FlushCombatSessionUpdate()
+        end
+        self._pendingCombatSessionID = sessionID
+    end
+    if not self._combatUpdateScheduled then
+        self._combatUpdateScheduled = true
+        C_Timer.After(0, function() CT:FlushCombatSessionUpdate() end)
+    end
+end
+
 function CT:RegisterEvents()
     if self._frame then return end
     local frame = CreateFrame("Frame")
@@ -1770,9 +2086,12 @@ function CT:RegisterEvents()
         "ZONE_CHANGED_NEW_AREA", "CHALLENGE_MODE_START", "CHALLENGE_MODE_COMPLETED",
         "CHALLENGE_MODE_RESET", "DAMAGE_METER_CURRENT_SESSION_UPDATED",
         "DAMAGE_METER_COMBAT_SESSION_UPDATED", "DAMAGE_METER_RESET",
+        "PLAYER_LOGOUT",
     }
     for _, event in ipairs(events) do pcall(frame.RegisterEvent, frame, event) end
     frame:SetScript("OnEvent", function(_, event, ...)
+        CT._evCounts = CT._evCounts or {}
+        CT._evCounts[event] = (CT._evCounts[event] or 0) + 1
         if event == "PLAYER_REGEN_DISABLED" then
             if not ns.state.inCombat then ns:EnterCombat() end
             CT:OnCombatStarted()
@@ -1781,89 +2100,41 @@ function CT:RegisterEvents()
             if ns.state.inCombat then CT:StartCombatEdgeWatcher() end
             CT:StartWatchdog()
         elseif event == "DAMAGE_METER_CURRENT_SESSION_UPDATED" then
-            syncCombatState()
-            if ns.state.inCombat and ns.Segments then
-                local generation = ns.Segments._combatGeneration or 0
-                local sessions, count = safeSessionCount()
-                local latest = sessions and sessions[count]
-                if latest and G and G:IsTableAccessible(latest)
-                    and gatewayAccessible(latest.durationSeconds)
-                    and type(latest.durationSeconds) == "number" and latest.durationSeconds <= 0
-                    and gatewayAccessible(latest.sessionID) and type(latest.sessionID) == "number" then
-                    CT._activeCombatSessionID = latest.sessionID
-                    CT._primarySessionByGeneration[generation] = latest.sessionID
-                    CT._meterObservedGenerations[generation] = true
+            -- This event carries no payload and can fire many times per second.
+            -- The only work it strictly owes is waking the render tick (which
+            -- itself syncs the group-combat edge via PullCurrentData).  The
+            -- group scan and the allocating session-list read that captures the
+            -- live session id are throttled: catching an edge within 0.2s is
+            -- already finer than the render cadence, so doing it on every raw
+            -- event was pure overhead.
+            local now = GetTime()
+            if now - (CT._lastCurrentScanAt or 0) >= 0.2 then
+                CT._lastCurrentScanAt = now
+                syncCombatState()
+                if ns.state.inCombat and ns.Segments then
+                    local generation = ns.Segments._combatGeneration or 0
+                    local sessions, count = safeSessionCount()
+                    local latest = sessions and sessions[count]
+                    if latest and G and G:IsTableAccessible(latest)
+                        and gatewayAccessible(latest.durationSeconds)
+                        and type(latest.durationSeconds) == "number" and latest.durationSeconds <= 0
+                        and gatewayAccessible(latest.sessionID) and type(latest.sessionID) == "number" then
+                        CT._activeCombatSessionID = latest.sessionID
+                        CT._primarySessionByGeneration[generation] = latest.sessionID
+                        CT._meterObservedGenerations[generation] = true
+                    end
                 end
+                if ns.state.inCombat and not UnitAffectingCombat("player") then CT:StartCombatEdgeWatcher() end
             end
-            if ns.state.inCombat and not UnitAffectingCombat("player") then CT:StartCombatEdgeWatcher() end
             if G then G:MarkDirty("current") end
             if ns.RequestRefresh then ns:RequestRefresh("damage-meter-current") end
         elseif event == "DAMAGE_METER_COMBAT_SESSION_UPDATED" then
             local damageMeterType, sessionID = ...
-            if damageMeterType == Enum.DamageMeterType.DamageDone
-                and G and G:IsAccessible(sessionID) and type(sessionID) == "number" and sessionID ~= 0 then
-                CT._completedSessionIDs[sessionID] = G:GetRawGeneration()
-                -- The live/current session is the final available entry.  An
-                -- older delayed event arriving during a later fight must never
-                -- claim that later fight's generation.
-                local generation
-                local sessions, count = safeSessionCount()
-                local latest = sessions and sessions[count]
-                local latestID, latestDuration
-                if latest and G:IsTableAccessible(latest) then
-                    latestID = latest.sessionID
-                    latestDuration = latest.durationSeconds
-                end
-                -- Completion metadata and the Blizzard M+ run-wide row may
-                -- publish in either order.  Classify every matching list item
-                -- before assigning this event to the just-finished fight.
-                CT:ClassifyLatestSyntheticMythicOverall()
-                local isMythicOverall = CT:IsSyntheticSessionID(sessionID)
-                if not isMythicOverall and type(latestID) ~= "nil"
-                    and G:IsAccessible(latestID) and latestID == sessionID then
-                    local activeEvidence = CT._activeCombatSessionID == sessionID
-                    local liveDuration = G:IsAccessible(latestDuration)
-                        and type(latestDuration) == "number" and latestDuration <= 0
-                    if activeEvidence or (ns.state.inCombat and liveDuration) then
-                        generation = ns.Segments and ns.Segments._combatGeneration or 0
-                    else
-                        generation = CT._lastCompletedGeneration
-                    end
-                end
-                if not isMythicOverall and generation ~= nil
-                    and CT._sessionGenerationByID[sessionID] == nil then
-                    local primary = CT._primarySessionByGeneration[generation]
-                    if primary and primary ~= sessionID then
-                        CT._supplementalSessionIDs[sessionID] = true
-                    else
-                        CT._primarySessionByGeneration[generation] = sessionID
-                        CT._sessionGenerationByID[sessionID] = generation
-                    end
-                end
-                if generation ~= nil then
-                    CT._meterObservedGenerations[generation] = true
-                    for _, context in ipairs(CT._completedContexts) do
-                        if context.combatGeneration == generation then context._rawObserved = true end
-                    end
-                end
-                if generation ~= nil and not CT._supplementalSessionIDs[sessionID]
-                    and not isMythicOverall then
-                    -- The event sessionID is authoritative.  Bind it even if
-                    -- the lightweight list row is one frame late; optional
-                    -- name/duration enrichment is reconciled by the watchdog.
-                    CT:BindFinishedCurrentSession(sessionID,
-                        latestID == sessionID and latest or nil, generation)
-                end
-                CT:ReconcileFinishedCurrentSession()
-                CT:PersistLifecycleState()
-            end
-            if G then G:MarkDirty("archive") end
-            CT:StartWatchdog()
-            if ns.HistoryList and ns.HistoryList.IsOpen and ns.HistoryList:IsOpen() then
-                ns.HistoryList:Rebuild()
-            end
+            CT:QueueCombatSessionUpdate(damageMeterType, sessionID)
         elseif event == "DAMAGE_METER_RESET" then
             CT:HandleDamageMeterReset()
+        elseif event == "PLAYER_LOGOUT" then
+            CT:FlushPendingPersist()
         elseif event == "PLAYER_ENTERING_WORLD" or event == "ZONE_CHANGED_NEW_AREA" then
             CT:ScheduleWorldTransitionChecks(event)
         elseif event == "CHALLENGE_MODE_START" then
@@ -1933,10 +2204,6 @@ function CT:RegisterEvents()
             overallComplete = pendingExit.overallComplete,
         }
         self._exitingInstanceTag = pendingExit.tag
-        if pendingExit.scene == "mplus" and self.MaterializeOfficialMythicFullRun then
-            self:MaterializeOfficialMythicFullRun(pendingExit.tag, pendingExit.level,
-                pendingExit.mapName, pendingExit.instanceName, pendingExit.combatGeneration)
-        end
         self:QueueAction("merge-instance", {
             tag = pendingExit.tag, level = pendingExit.level,
             mapName = pendingExit.mapName, instanceName = pendingExit.instanceName,

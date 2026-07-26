@@ -57,6 +57,7 @@ function Analysis:GetSorted(segment, mode)
             if mode == "damage"         then perSec = pd.damagePerSec
             elseif mode == "healing"    then perSec = pd.healingPerSec
             elseif mode == "damageTaken" then perSec = pd.damageTakenPerSec
+            elseif mode == "avoidableDamageTaken" then perSec = pd.avoidableDamageTakenPerSec
             end
 
             table.insert(result, {
@@ -106,6 +107,8 @@ function Analysis:GetPlayerValue(pd, mode, segment)
         return pd.healing
     elseif mode == "damageTaken" then
         return pd.damageTaken
+    elseif mode == "avoidableDamageTaken" then
+        return pd.avoidableDamageTaken or 0
     elseif mode == "deaths" then
         return pd.deaths
     elseif mode == "interrupts" then
@@ -125,6 +128,8 @@ function Analysis:GetPetTotal(pd, mode)
             total = total + (pet.healing or 0)
         elseif mode == "damageTaken" then
             total = total + (pet.damageTaken or 0)
+        elseif mode == "avoidableDamageTaken" then
+            total = total + (pet.avoidableDamageTaken or 0)
         elseif mode == "interrupts" then
             total = total + (pet.interrupts or 0)
         elseif mode == "dispels" then
@@ -149,6 +154,8 @@ function Analysis:GetSpellBreakdown(segment, guid, mode)
     local sourceTable = pd.spells
     if mode == "damageTaken" then
         sourceTable = pd.damageTakenSpells or {}
+    elseif mode == "avoidableDamageTaken" then
+        sourceTable = pd.avoidableDamageTakenSpells or {}
     elseif mode == "interrupts" then
         sourceTable = pd.interruptSpells or {}
     elseif mode == "dispels" then
@@ -162,7 +169,7 @@ function Analysis:GetSpellBreakdown(segment, guid, mode)
             value = sd.damage or 0
         elseif mode == "healing" then
             value = sd.healing or 0
-        elseif mode == "damageTaken" then
+        elseif mode == "damageTaken" or mode == "avoidableDamageTaken" then
             value = sd.damage or 0
         elseif mode == "interrupts" or mode == "dispels" then
             value = sd.hits or sd.damage or 0
@@ -197,6 +204,8 @@ function Analysis:GetSpellBreakdown(segment, guid, mode)
             local petSpellMap = pet.spells or {}
             if mode == "damageTaken" then
                 petSpellMap = pet.damageTakenSpells or {}
+            elseif mode == "avoidableDamageTaken" then
+                petSpellMap = pet.avoidableDamageTakenSpells or {}
             elseif mode == "interrupts" then
                 petSpellMap = pet.interruptSpells or {}
             elseif mode == "dispels" then
@@ -209,7 +218,7 @@ function Analysis:GetSpellBreakdown(segment, guid, mode)
                     value = sd.damage or 0
                 elseif mode == "healing" then
                     value = sd.healing or 0
-                elseif mode == "damageTaken" then
+                elseif mode == "damageTaken" or mode == "avoidableDamageTaken" then
                     value = sd.damage or 0
                 elseif mode == "interrupts" or mode == "dispels" then
                     value = sd.hits or sd.damage or 0

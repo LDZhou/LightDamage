@@ -39,6 +39,7 @@ function Segments:NewSegment(segType, name)
         totalDamage      = 0,
         totalHealing     = 0,
         totalDamageTaken = 0,
+        totalAvoidableDamageTaken = 0,
         totalDeaths      = 0,
         totalEnemyDamageTaken = 0,
 
@@ -85,6 +86,7 @@ function Segments:NewPlayerData(guid, name, class)
         score  = cache.score or 0,
 
         damage      = 0, healing     = 0, overhealing = 0, absorbed    = 0, damageTaken = 0,
+        avoidableDamageTaken = 0,
         deaths      = 0, interrupts  = 0, dispels     = 0,
 
         spells          = {},
@@ -92,6 +94,7 @@ function Segments:NewPlayerData(guid, name, class)
         interruptSpells = {},
         dispelSpells    = {},
         damageTakenSpells = {},
+        avoidableDamageTakenSpells = {},
 
         activeTime     = 0, lastActionTime = 0,
     }
@@ -327,6 +330,10 @@ function Segments:SetFullRunOverride(seg)
     if not seg or not seg._localID then return end
     self:NormalizeFullRunName(seg)
     ns.db.fullRunOverrideLocalID = seg._localID
+    if ns._resetLog then
+        print("|cffff8800[resetlog]|r override SET localID=" .. tostring(seg._localID)
+            .. " isMerged=" .. tostring(seg._isMerged) .. " name=" .. tostring(seg.name))
+    end
     self._fullRunOverrideSegment = seg
     -- During the post-instance override, Current and Total intentionally alias
     -- the same immutable full-run archive.  Keep the data pointer aligned with
@@ -338,6 +345,9 @@ end
 
 function Segments:ClearFullRunOverride()
     local id = ns.db and ns.db.fullRunOverrideLocalID
+    if ns._resetLog and id then
+        print("|cffff8800[resetlog]|r override CLEARED (was localID=" .. tostring(id) .. ")")
+    end
     local cached = self._fullRunOverrideSegment
     if ns.db then ns.db.fullRunOverrideLocalID = nil end
     self._fullRunOverrideSegment = nil
@@ -355,11 +365,18 @@ function Segments:GetFullRunOverride()
     if not id then return nil end
     local cached = self._fullRunOverrideSegment
     if cached and cached._localID == id and cached._isMerged then return cached end
+    local sawId, sawIdMerged
     for _, seg in ipairs(self.history or {}) do
+        if seg._localID == id then sawId = true; sawIdMerged = seg._isMerged end
         if seg._localID == id and seg._isMerged then
             self._fullRunOverrideSegment = seg
             return seg
         end
+    end
+    if ns._resetLog then
+        print("|cffff8800[resetlog]|r override localID=" .. tostring(id)
+            .. " NOT matched (inHistory=" .. tostring(sawId)
+            .. " isMerged=" .. tostring(sawIdMerged) .. ") -> clearing")
     end
     self:ClearFullRunOverride()
     return nil
@@ -487,6 +504,11 @@ function Segments:BuildVirtualSegments()
                 and type(rawDuration) == "number" and rawDuration > 0)
         if finalSessionStillLive then skip = true end
         if archivedSIDs[sid] then skip = true end          -- 已经归档过
+        -- The exit transaction already copied Blizzard's dedicated M+ run-wide
+        -- session into LightDamage's own full-run segment.  Its source row is
+        -- retired here so the same run cannot appear twice in History.
+        if ns.CombatTracker and ns.CombatTracker.IsOfficialFullRunConsumed
+            and ns.CombatTracker:IsOfficialFullRunConsumed(sid) then skip = true end
         if ns.CombatTracker and ns.CombatTracker.IsSessionIndexArchivedForPendingBoundary
             and ns.CombatTracker:IsSessionIndexArchivedForPendingBoundary(i) then skip = true end
         if isSessionIDHidden(sid) then skip = true end     -- 用户黑名单
@@ -515,24 +537,12 @@ function Segments:BuildVirtualSegments()
                 deathLog = {},
                 enemyDamageTakenList = {},
             }
-            -- Blizzard's dedicated M+ run-wide row remains a virtual official
-            -- session until the exit transaction freezes it locally.  Expose
-            -- it in History immediately with LightDamage's product label, but
-            -- never mutate the Blizzard-owned metadata object or duplicate it.
-            if officialMythic then
-                local pending = ns.MythicPlus and ns.MythicPlus._pendingMythicSeg
-                local level = tonumber(pending and pending.level
-                    or (ns.CombatTracker and ns.CombatTracker._currentMythicLevel)) or 0
-                local mapName = pending and pending.mapName
-                    or (ns.CombatTracker and ns.CombatTracker._currentMythicMapName)
-                    or GetZoneText() or L.MYTHIC_PLUS
-                seg.type = "mythicplus"
-                seg.name = string.format("+%d %s", level, mapName)
-                seg.mythicLevel = level
-                seg.mapName = mapName
-                seg.success = pending and pending.success
-                seg._fromOfficialMythicOverall = true
-            end
+            -- Blizzard's dedicated M+ run-wide row stays an ordinary official
+            -- session row, under Blizzard's own name, for as long as it lives.
+            -- Classification exists only so the archive never duplicates it and
+            -- so the exit transaction can find it; it is never renamed here.
+            -- LightDamage's own full-run segment is produced at the exit
+            -- boundary, exactly like a normal dungeon.
             table.insert(result, seg)
         end
     end
@@ -567,9 +577,44 @@ function Segments:RestoreCurrentAfterReload()
     return nil
 end
 
+-- ★ 把某个已归档段提到 history 最前(视为最新)。
+--   离开副本时，全程段落先被物化到 history[1]，随后退出事务把每个残余
+--   的单场战斗也归档到 history[1],会把全程段落挤到最旧的位置,于是它
+--   渲染在整场副本第一条战斗之前。归档全部完成后把全程段落重新提到最新,
+--   即可保证它稳定停在历史区末尾(“当前”之上)。
+function Segments:PromoteHistorySegment(seg)
+    if not seg then return false end
+    local hist = self.history
+    if not hist or hist[1] == seg then return false end
+    for i = 2, #hist do
+        if hist[i] == seg then
+            table.remove(hist, i)
+            table.insert(hist, 1, seg)
+            return true
+        end
+    end
+    return false
+end
+
+-- ★ 单次刷新内的合并列表缓存。GetMergedSegmentList 在一次 UI 刷新里会被
+--   GetViewSegment / ResolveDisplaySource / 标题 等多处调用,每次都要重建
+--   虚拟段(会读一次 C_DamageMeter 并分配一批表)。缓存只在一次同步刷新期间
+--   有效(BeginMergeCache→EndMergeCache),期间底层数据不会变,所以复用结果与
+--   逐次重建完全等价;刷新之外一律现建,不存在跨帧陈旧。
+function Segments:BeginMergeCache()
+    self._mergeCacheActive = true
+    self._mergeCache = nil
+end
+
+function Segments:EndMergeCache()
+    self._mergeCacheActive = false
+    self._mergeCache = nil
+end
+
 -- ★ 把已归档段和虚拟段合并成"按时间倒序"的统一列表
 --   (最新在前;current/overall 不在内)
 function Segments:GetMergedSegmentList()
+    if self._mergeCacheActive and self._mergeCache then return self._mergeCache end
     local merged = {}
 
     -- 虚拟段（最新的在前，因为是按 sessionID 倒序拼的）
@@ -585,6 +630,7 @@ function Segments:GetMergedSegmentList()
         end
     end
 
+    if self._mergeCacheActive then self._mergeCache = merged end
     return merged
 end
 

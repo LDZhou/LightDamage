@@ -17,18 +17,19 @@ local DEFAULT_FONT_COLOR = {1, 1, 1, 0.93}
 local NEUTRAL_CLASS_COLOR = {0.5, 0.5, 0.5}
 -- Hostile red: vivid enough to read as an enemy at a glance, with a slight
 -- deep-red bias so it remains distinct from alerts and healing/pastel bars.
-local ENEMY_BAR_COLOR = {0.78, 0.08, 0.10}
+local ENEMY_BAR_COLOR = {0.92, 0.22, 0.18}
 
+-- Rendering only: use the pcall-free fast accessibility path (see gateway).
 local function _isSecretValue(value)
     local gateway=ns.DamageMeterGateway
-    if gateway then return not gateway:IsAccessible(value) end
+    if gateway then return not gateway:IsAccessibleFast(value) end
     return issecretvalue and issecretvalue(value) or false
 end
 
 local function _isReadableTable(value)
     if type(value) ~= "table" then return false end
     local gateway = ns.DamageMeterGateway
-    return not gateway or gateway:IsTableAccessible(value)
+    return not gateway or gateway:IsTableAccessibleFast(value)
 end
 
 local function _clearOpaqueText(fs)
@@ -71,6 +72,8 @@ function UI:ReleaseBarData(bar)
     bar._data=nil; bar._guid=nil; bar._nameStr=nil; bar._classStr=nil
     bar._mode=nil; bar._isDeath=false; bar._detailSegment=nil
     bar._detailRange=nil; bar._detailDisplaySource=nil
+    -- Force a full render the next time this recycled bar is filled.
+    bar._fillKey=nil; bar._fillShown=nil; bar._lastTotal=nil; bar._lastMax=nil
 end
 
 function UI:PositionBarRow(bar, listObj, index, height, gap)
@@ -451,10 +454,11 @@ function UI:FillBarsFromAPI(bars, listObj, mode, sessionType, sessionID, rawSess
         sessionType or (not sessionID and Enum.DamageMeterSessionType.Current or nil), sessionID, dmType)
 
     if not _isReadableTable(session) then self:UpdateScrollState(listObj, 0); for _, bar in ipairs(bars) do bar.frame:Hide(); self:ReleaseBarData(bar) end; return end
-    local okSources, sources = pcall(function() return session.combatSources end)
-    if not okSources or not _isReadableTable(sources) then self:UpdateScrollState(listObj, 0); for _, bar in ipairs(bars) do bar.frame:Hide(); self:ReleaseBarData(bar) end; return end
-    local maxAmt
-    pcall(function() maxAmt = session.maxAmount end)
+    -- session passed _isReadableTable above, so it is index-safe: read its
+    -- fields directly instead of allocating a pcall closure on every refresh.
+    local sources = session.combatSources
+    if not _isReadableTable(sources) then self:UpdateScrollState(listObj, 0); for _, bar in ipairs(bars) do bar.frame:Hide(); self:ReleaseBarData(bar) end; return end
+    local maxAmt = session.maxAmount
     local count = math.min(#sources, MAX_BARS)
     if listObj and listObj._cell and self.EnsureCellBars then
         self:EnsureCellBars(listObj._cell, count)
@@ -466,10 +470,11 @@ function UI:FillBarsFromAPI(bars, listObj, mode, sessionType, sessionID, rawSess
     local tr, tg, tb, ta = self:GetDisplayColor("fontColor", DEFAULT_FONT_COLOR)
     local fixedNameColor = (ns.db.display.nameColorMode == "custom") and ns.db.display.nameFontColor or nil
     local gateway=ns.DamageMeterGateway
-    local maxSecret=gateway and not gateway:IsAccessible(maxAmt)
+    local maxSecret=gateway and not gateway:IsAccessibleFast(maxAmt)
         or (not gateway and issecretvalue and issecretvalue(maxAmt)) or false
     local maxValue
     if maxSecret then maxValue=maxAmt else maxValue=maxAmt or 1 end
+    local now = GetTime()
 
     for i, bar in ipairs(bars) do
         if i <= count then
@@ -480,15 +485,95 @@ function UI:FillBarsFromAPI(bars, listObj, mode, sessionType, sessionID, rawSess
                 self:ReleaseBarData(bar)
             else
             self:ObserveDamageMeterSourceOnce(src)
+            local rawGuid = src.sourceGUID
+            local guidKey = ((not gateway or gateway:IsAccessibleFast(rawGuid))
+                and type(rawGuid) == "string" and rawGuid ~= "") and rawGuid or nil
+            if guidKey and bar._fillKey == guidKey and bar._fillMode == mode
+                and bar._fillShown and (now - (bar._fillTime or 0)) < 0.75 then
+                -- Fast path: the same source still occupies this slot and its
+                -- structure (position, fonts, name, class colour, spec icon,
+                -- rank) was fully drawn by a full render < 0.75s ago.  Only the
+                -- number and the bar width change per tick, so re-issue just
+                -- those and skip ~15 redundant per-bar WoW calls.  The 0.75s
+                -- ceiling forces a periodic full render, so a late spec icon or
+                -- a config edit self-heals within 0.75s (transient, never data).
+                -- Tier 3 (Details' percent==last_value): if this bar's amount
+                -- and the top value are both unchanged, its width and number are
+                -- already correct -- skip even the value update.
+                local total = src.totalAmount
+                local totalNum = ((not gateway or gateway:IsAccessibleFast(total))
+                    and type(total) == "number") and total or nil
+                if totalNum ~= nil and totalNum == bar._lastTotal
+                    and not maxSecret and maxValue == bar._lastMax then
+                    bar.frame:Show()
+                else
+                    pcall(_safeSetStatusBar,bar.statusbar,maxValue,src.totalAmount)
+                    local rawRate = src.amountPerSecond
+                    local rateAvailable = _isSecretValue(rawRate) or type(rawRate) == "number"
+                    local amountSecret,rateSecret=self:SetAPIBarValue(bar,src.totalAmount,rawRate,
+                        ns.db.display.showPerSecond and rateAvailable,COUNT_MODES[mode],L.COUNT_SUFFIX)
+                    self:SetBarValueTextColor(bar,tr,tg,tb,ta)
+                    if bar._apiData then
+                        bar._apiData.totalAmount = src.totalAmount
+                        bar._apiData.amountPerSecond = src.amountPerSecond
+                        bar._apiData.isSecretAmount = amountSecret
+                        bar._apiData.isSecretRate = rateSecret
+                    end
+                    self:PrioritizeBarValue(bar, amountSecret or rateSecret)
+                    bar.frame:Show()
+                    bar._lastTotal = totalNum
+                    bar._lastMax = (not maxSecret) and maxValue or nil
+                end
+            else
             self:PositionBarRow(bar,listObj,i,bh,gap)
             self:AnchorBarTexts(bar); self:SetDeathColumnLayout(bar,false); self:ResetBarValueDisplay(bar); self:ApplyFont(bar.rank, font, fSz-1, fOut, fShad); self:ApplyBarNameFonts(bar,nameFont,nameSz,nameOut,nameShad); self:ApplyBarValueFonts(bar,font,fSz-1,fOut,fShad)
             bar.fill:Hide(); bar.statusbar:Show()
+            -- Identity is resolved before the visuals so the live row, the
+            -- roster cache and the local snapshot can each supply what the
+            -- others lack.  Blizzard does not publish classFilename/specIconID
+            -- on every combat row of every raid member, and the specID path
+            -- (inspect) is suspended for the whole fight -- which is why the
+            -- icons used to appear only on the regen edge.
+            local guid = src.sourceGUID
+            local isSecretGuid = gateway and not gateway:IsAccessibleFast(guid)
+                or (not gateway and issecretvalue and issecretvalue(guid)) or false
+            local localPlayer = (not gateway or gateway:IsAccessibleFast(src.isLocalPlayer))
+                and src.isLocalPlayer == true
+            local identity, specID, ilvl, score = nil, nil, 0, 0
+            if localPlayer then
+                identity = self:GetLocalPlayerSnapshot()
+            elseif not isSecretGuid then
+                identity = ns.PlayerInfoCache and ns.PlayerInfoCache[guid]
+            end
+            if identity then
+                specID = identity.specID
+                ilvl = identity.ilvl or 0
+                score = identity.score or 0
+            end
+
             local rawClass = src.classFilename
-            local cls = (gateway and gateway:IsAccessible(rawClass)
+            local cls = (gateway and gateway:IsAccessibleFast(rawClass)
                 and type(rawClass) == "string" and rawClass ~= "") and rawClass or nil
+            -- The roster scan reads UnitClass for every group member and keeps
+            -- running in combat, so the cache can cover a row that does not
+            -- carry its own class this frame.
+            if not cls and identity and type(identity.class) == "string"
+                and identity.class ~= "" then cls = identity.class end
             local rawSpecIconID = src.specIconID
-            local specIconID = (gateway and gateway:IsAccessible(rawSpecIconID)
-                and type(rawSpecIconID) == "number") and rawSpecIconID or nil
+            local specIconID = (gateway and gateway:IsAccessibleFast(rawSpecIconID)
+                and type(rawSpecIconID) == "number" and rawSpecIconID > 0) and rawSpecIconID or nil
+            -- ObserveDamageMeterSourceOnce caches this NeverSecret field the
+            -- first frame any row publishes it; reuse it for later frames and
+            -- for rows that never carry it.
+            if not specIconID and identity and type(identity.specIconID) == "number"
+                and identity.specIconID > 0 then specIconID = identity.specIconID end
+            -- Last resort, exactly what Details does: a protected icon value is
+            -- still a valid argument to a secret-capable texture setter.  Never
+            -- turn "cannot read" into "no icon".
+            local secretIconID = (type(rawSpecIconID) ~= "nil" and not specIconID
+                and gateway and not gateway:IsAccessibleFast(rawSpecIconID))
+                and rawSpecIconID or nil
+
             local cc = mode == "enemyDamageTaken" and ENEMY_BAR_COLOR
                 or (cls and ns.CLASS_COLORS[cls]) or NEUTRAL_CLASS_COLOR
 
@@ -504,7 +589,7 @@ function UI:FillBarsFromAPI(bars, listObj, mode, sessionType, sessionID, rawSess
 
             local nameRaw = src.name
             local nameStr = ""
-            local isSecret = gateway and not gateway:IsAccessible(nameRaw)
+            local isSecret = gateway and not gateway:IsAccessibleFast(nameRaw)
                 or (not gateway and issecretvalue and issecretvalue(nameRaw)) or false
 
             if isSecret then
@@ -532,21 +617,7 @@ function UI:FillBarsFromAPI(bars, listObj, mode, sessionType, sessionID, rawSess
             bar._apiData.isSecretAmount=amountSecret
             bar._apiData.isSecretRate=rateSecret
             bar._data = bar._apiData; bar._mode = mode; bar._isDeath = false
-            local guid = src.sourceGUID; bar._guid = guid; bar._classStr = cls
-            local isSecretGuid = gateway and not gateway:IsAccessible(guid)
-                or (not gateway and issecretvalue and issecretvalue(guid)) or false
-            local specID, ilvl, score = nil, 0, 0
-            local localPlayer = (not gateway or gateway:IsAccessible(src.isLocalPlayer))
-                and src.isLocalPlayer == true
-            if localPlayer then
-                local snapshot = self:GetLocalPlayerSnapshot()
-                specID = snapshot and snapshot.specID
-                ilvl = snapshot and snapshot.ilvl or 0
-                score = snapshot and snapshot.score or 0
-            elseif not isSecretGuid then
-                local cache = ns.PlayerInfoCache and ns.PlayerInfoCache[guid] or {}
-                specID = cache.specID; ilvl = cache.ilvl or 0; score = cache.score or 0
-            end
+            bar._guid = guid; bar._classStr = cls
             bar._apiData.isLocalPlayer = localPlayer
             bar._apiData.specID = specID; bar._apiData.ilvl = ilvl; bar._apiData.score = score
             bar._apiData.specIconID = specIconID
@@ -554,10 +625,17 @@ function UI:FillBarsFromAPI(bars, listObj, mode, sessionType, sessionID, rawSess
             if bar.specIcon then
                 local icon = ns:GetSpecIcon(specID, cls, specIconID)
                 if bar._mode == "enemyDamageTaken" then icon = "Interface\\TargetingFrame\\UI-TargetingFrame-Skull" end
-                if ns.db.display.showSpecIcon and icon then bar.specIcon:SetTexture(icon); bar.specIcon:Show() else bar.specIcon:Hide() end
+                if not ns.db.display.showSpecIcon then bar.specIcon:Hide()
+                elseif icon then bar.specIcon:SetTexture(icon); bar.specIcon:Show()
+                elseif type(secretIconID) ~= "nil" then
+                    bar.specIcon:SetTexture(secretIconID); bar.specIcon:Show()
+                else bar.specIcon:Hide() end
             end
             self:PrioritizeBarValue(bar, amountSecret or rateSecret)
             bar.frame:Show()
+            bar._fillKey = guidKey; bar._fillMode = mode; bar._fillTime = now; bar._fillShown = true
+            bar._lastTotal = nil; bar._lastMax = nil
+            end
             end
         else
             if bars[i].specIcon then bars[i].specIcon:Hide() end

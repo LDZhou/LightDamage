@@ -51,6 +51,7 @@ local function compactSegment(seg)
         endTime = seg.endTime, duration = seg.duration, isActive = false,
         totalDamage = seg.totalDamage, totalHealing = seg.totalHealing,
         totalDamageTaken = seg.totalDamageTaken,
+        totalAvoidableDamageTaken = seg.totalAvoidableDamageTaken,
         totalDeaths = seg.totalDeaths,
         totalEnemyDamageTaken = seg.totalEnemyDamageTaken,
         encounterID = seg.encounterID, encounterName = seg.encounterName,

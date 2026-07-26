@@ -32,8 +32,8 @@ local function rowsFor(kind)
  return NORMAL
 end
 
-local function makeSpell(id,name,amount,hits,avoidable)
- local sp=ns.Segments:NewSpellData(id,name,1); sp.damage=amount; sp.healing=amount; sp.hits=hits; sp.crits=math.floor(hits/3); sp.isAvoidable=avoidable
+local function makeSpell(id,name,amount,hits)
+ local sp=ns.Segments:NewSpellData(id,name,1); sp.damage=amount; sp.healing=amount; sp.hits=hits; sp.crits=math.floor(hits/3)
  return sp
 end
 
@@ -46,20 +46,24 @@ local function makeSegment(name,duration,rows,mult,kind)
  local impactName=long and "CatastrophicallyHeavyImpactAbilityWithLongName" or "Heavy Impact"
  local interruptName=long and "ExceptionallyLongSpellLockInterruptName" or "Spell Lock"
  local dispelName=long and "RemarkablyLongPurificationDispelName" or "Purify"
- local td,th,tt=0,0,0
+ local td,th,tt,ta=0,0,0,0
  for i,r in ipairs(rows) do
   local guid="Preview-"..i; local p=ns.Segments:NewPlayerData(guid,r[1],r[2]); local m=mult or 1
   p.damage=math.floor(r[3]*m); p.healing=math.floor(r[4]*m); p.damageTaken=math.floor(r[5]*m)
   p.deaths=r[6]; p.interrupts=r[7]; p.dispels=r[8]; p.activeTime=duration
-  p.spells[1000+i]=makeSpell(1000+i,strikeName,math.floor(p.damage*.62),37,false)
-  p.spells[2000+i]=makeSpell(2000+i,burstName,math.floor(p.damage*.38),12,false)
-  p.damageTakenSpells[3000+i]=makeSpell(3000+i,avoidableName,math.floor(p.damageTaken*.45),8,true)
-  p.damageTakenSpells[4000+i]=makeSpell(4000+i,impactName,math.floor(p.damageTaken*.55),15,false)
-  p.interruptSpells[5000+i]=makeSpell(5000+i,interruptName,p.interrupts,p.interrupts,false)
-  p.dispelSpells[6000+i]=makeSpell(6000+i,dispelName,p.dispels,p.dispels,false)
-  seg.players[guid]=p; td=td+p.damage; th=th+p.healing; tt=tt+p.damageTaken
+  p.spells[1000+i]=makeSpell(1000+i,strikeName,math.floor(p.damage*.62),37)
+  p.spells[2000+i]=makeSpell(2000+i,burstName,math.floor(p.damage*.38),12)
+  p.damageTakenSpells[3000+i]=makeSpell(3000+i,avoidableName,math.floor(p.damageTaken*.45),8)
+  p.damageTakenSpells[4000+i]=makeSpell(4000+i,impactName,math.floor(p.damageTaken*.55),15)
+  p.interruptSpells[5000+i]=makeSpell(5000+i,interruptName,p.interrupts,p.interrupts)
+  p.dispelSpells[6000+i]=makeSpell(6000+i,dispelName,p.dispels,p.dispels)
+  -- Avoidable damage is a separate official statistic, so preview it as its own
+  -- subset of the damage this player took rather than as a flag on those rows.
+  p.avoidableDamageTaken=math.floor(p.damageTaken*.45)
+  p.avoidableDamageTakenSpells[3000+i]=makeSpell(3000+i,avoidableName,p.avoidableDamageTaken,8)
+  seg.players[guid]=p; td=td+p.damage; th=th+p.healing; tt=tt+p.damageTaken; ta=ta+p.avoidableDamageTaken
  end
- seg.totalDamage=td; seg.totalHealing=th; seg.totalDamageTaken=tt
+ seg.totalDamage=td; seg.totalHealing=th; seg.totalDamageTaken=tt; seg.totalAvoidableDamageTaken=ta
  if #rows>0 then
   seg.deathLog={{playerName=rows[math.min(2,#rows)][1],playerGUID="Preview-2",playerClass=rows[math.min(2,#rows)][2],isSelf=false,killingAbility=long and "CataclysmicallyLongLethalBlastAbilityName" or "Cataclysmic Blast",killerName=long and "AncientTrainingBossWithAnExcessivelyLongName" or "Training Boss",events={},totalDamageTaken=450000,totalHealingReceived=80000,timeSpan=3.2,timestamp=time(),gameTime=GetTime()}}
  end

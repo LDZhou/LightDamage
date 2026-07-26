@@ -38,6 +38,10 @@ local MODE_TO_DM = {
     interrupts  = Enum.DamageMeterType.Interrupts,
     dispels     = Enum.DamageMeterType.Dispels,
     deaths      = Enum.DamageMeterType.Deaths,
+    -- Blizzard publishes avoidable damage taken as its own meter type rather
+    -- than as a flag on the DamageTaken rows, so it is read as an ordinary
+    -- statistic and shown as-is.
+    avoidableDamageTaken = Enum.DamageMeterType.AvoidableDamageTaken,
     enemyDamageTaken   = Enum.DamageMeterType.EnemyDamageTaken,
 }
 UI.MODE_TO_DM = MODE_TO_DM
@@ -124,7 +128,7 @@ end
 function UI:ApplyTheme()
     local dbw = ns.db.window
     local tc = dbw.themeColor or {0, 0, 0, 1}
-    local bc = dbw.bgColor    or {0.02, 0.02, 0.025, 0.58}
+    local bc = dbw.bgColor    or {0.02, 0.02, 0.025, 0.80}
     if self.frame    then self.frame:SetBackdropColor(unpack(bc)) end
     if self.titleBg  then self.titleBg:SetColorTexture(unpack(tc)) end
     if self.tabBg    then self.tabBg:SetColorTexture(unpack(tc)) end
@@ -135,7 +139,7 @@ function UI:ApplyTheme()
     if self.ovrPriHead then self.ovrPriHead.bg:SetColorTexture(unpack(sc)) end
     if self.ovrSecHead then self.ovrSecHead.bg:SetColorTexture(unpack(sc)) end
     if self.ovrContainer then
-    local c = dbw.ovrBgColor or {0.025, 0.035, 0.05, 0.62}
+    local c = dbw.ovrBgColor or {0.025, 0.035, 0.05, 0.82}
         self.ovrContainer:SetBackdropColor(unpack(c))
     end
 end
@@ -190,6 +194,7 @@ function UI:GetModeTitleColor(mode)
     local fallback = mode == "damage" and T.dmgC
         or mode == "healing" and T.healC
         or mode == "damageTaken" and T.takenC
+        or mode == "avoidableDamageTaken" and T.takenC
         or mode == "enemyDamageTaken" and T.takenC
         or T.accent
     local c = colors and colors[mode] or fallback
@@ -218,15 +223,113 @@ function UI:SetTabTextColor(tabText, active)
     end
 end
 
+-- The retail client accepts SetShadowColor/SetShadowOffset and stores them --
+-- the getters read back exactly what was written -- but never paints the
+-- result.  Verified in game with /ld shadow: a forced 8-real-pixel red shadow,
+-- on Blizzard's own font with no flags at all, renders nothing.  So the shadow
+-- is drawn here instead, out of FontStrings under the real text.
+--
+-- Spec: X 0.5, Y 0.5, blur 0, spread 0, #000000 50%.  Blur is zero, so this is
+-- a single plain copy -- no outline, no stacking -- and every part of the spec
+-- is reproduced exactly.  Y is positive-down in the spec and negative-down in
+-- frame coordinates.
+local SHADOW_X, SHADOW_Y = 0.5, -0.5
+local SHADOW_LAYERS = {
+    {flags = "", alpha = 0.50},
+}
+
+local function syncShadowText(fs)
+    local layers = fs._ldShadowLayers
+    if not layers then return end
+    local shown = fs._ldShadowActive == true and fs:IsShown() and true or false
+    local text
+    if shown then
+        text = fs:GetText()
+        local gateway = ns.DamageMeterGateway
+        if text == nil then
+            text = ""
+        elseif gateway and not gateway:IsAccessibleFast(text) then
+            -- A protected value passes straight through, exactly as the visible
+            -- row already hands it to its own FontString.  What must never
+            -- happen is Lua reading or manipulating it, so it skips the colour
+            -- pass below -- blanking it here is what left protected player
+            -- names with no shadow while everyone else had one.
+        elseif type(text) ~= "string" then
+            text = ""
+        elseif text:find("|c", 1, true) then
+            -- An embedded colour escape would paint the shadow in that colour.
+            text = (text:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""))
+        end
+    end
+    for _, layer in ipairs(layers) do
+        if text ~= nil then layer:SetText(text) end
+        layer:SetShown(shown)
+    end
+end
+
+local function syncShadowShown(fs)
+    local layers = fs._ldShadowLayers
+    if not layers then return end
+    local shown = fs._ldShadowActive == true and fs:IsShown() and true or false
+    for _, layer in ipairs(layers) do layer:SetShown(shown) end
+end
+
+local function ensureShadowLayers(fs)
+    if fs._ldShadowLayers then return fs._ldShadowLayers end
+    local parent = fs.GetParent and fs:GetParent()
+    if not parent or not parent.CreateFontString then return nil end
+    local layers = {}
+    for index = 1, #SHADOW_LAYERS do
+        local layer = parent:CreateFontString(nil, "ARTWORK")
+        -- Keep the stack's own order fixed: the blur copy under the core, both
+        -- still under the real text on OVERLAY.
+        if layer.SetDrawLayer then layer:SetDrawLayer("ARTWORK", index - #SHADOW_LAYERS) end
+        layer:Hide()
+        layers[index] = layer
+    end
+    fs._ldShadowLayers = layers
+    fs._ldShadowFS = layers[#layers]
+    -- Mirror every text write at the source instead of touching the ~40 call
+    -- sites that set bar names, values, headers and tab labels.
+    if hooksecurefunc then
+        hooksecurefunc(fs, "SetText", syncShadowText)
+        if fs.SetFormattedText then hooksecurefunc(fs, "SetFormattedText", syncShadowText) end
+        if fs.ClearText then hooksecurefunc(fs, "ClearText", syncShadowText) end
+        hooksecurefunc(fs, "Show", syncShadowShown)
+        hooksecurefunc(fs, "Hide", syncShadowShown)
+        if fs.SetShown then hooksecurefunc(fs, "SetShown", syncShadowShown) end
+    end
+    return layers
+end
+
 function UI:ApplyFont(fs, font, size, outline, shadow)
     if not fs then return false end
     font = font or STANDARD_TEXT_FONT
     size = tonumber(size) or 10
     outline = ns.NormalizeFontOutline and ns:NormalizeFontOutline(outline) or outline
     shadow = shadow and true or false
+    -- The drop is fixed, not a setting.  Offsets live in the FontString's own
+    -- coordinate space, which the UI scale and the window's own scale then
+    -- shrink, so the spec's pixels are converted into real screen pixels: at an
+    -- effective scale of 0.6 a literal 1 lands on 0.6 of a pixel and renders as
+    -- a blurred half-tone instead of a clean one-pixel drop.
+    local offsetX, offsetY = 0, 0
+    if shadow then
+        local scale = fs.GetEffectiveScale and fs:GetEffectiveScale() or 1
+        if type(scale) ~= "number" or scale ~= scale or scale <= 0 then scale = 1 end
+        offsetX, offsetY = SHADOW_X / scale, SHADOW_Y / scale
+    end
     if fs._ldFontValid and fs._ldFont == font and fs._ldFontSize == size
         and fs._ldFontOutline == outline and fs._ldFontShadow == shadow then
-        return true
+        -- The cache records what LightDamage last *requested*.  Verify the stack
+        -- actually matches that request before trusting it: a stale "already
+        -- correct" is exactly what makes a shadow toggle look permanently dead.
+        local wantStack = shadow
+        local hasStack = fs._ldShadowActive == true and fs._ldShadowLayers ~= nil
+        if wantStack == hasStack
+            and (not wantStack or math.abs((fs._ldShadowOffset or math.huge) - offsetY) < 0.01) then
+            return true
+        end
     end
     local ok, applied = pcall(fs.SetFont, fs, font, size, outline)
     if not ok or applied == false then
@@ -242,8 +345,35 @@ function UI:ApplyFont(fs, font, size, outline, shadow)
         fs._ldFont = font; fs._ldFontSize = size
         fs._ldFontOutline = outline; fs._ldFontShadow = shadow
     end
-    if shadow then fs:SetShadowColor(0,0,0,1); fs:SetShadowOffset(1,-1)
-    else fs:SetShadowOffset(0,0) end
+    local layers = shadow and ensureShadowLayers(fs) or nil
+    if layers then
+        fs._ldShadowActive = true
+        fs._ldShadowOffset = offsetY
+        for index, layer in ipairs(layers) do
+            local spec = SHADOW_LAYERS[index]
+            layer:ClearAllPoints()
+            -- Anchoring both corners copies the real text's rect whatever it is
+            -- anchored to, so the shadow lays out identically and sits offset.
+            layer:SetPoint("TOPLEFT", fs, "TOPLEFT", offsetX, offsetY)
+            layer:SetPoint("BOTTOMRIGHT", fs, "BOTTOMRIGHT", offsetX, offsetY)
+            -- The shadow never inherits the text's outline: a black glyph plus
+            -- a black halo reads as a fattened duplicate of the text.
+            pcall(layer.SetFont, layer, font, size, spec.flags)
+            layer:SetTextColor(0, 0, 0, spec.alpha)
+            if fs.GetJustifyH then layer:SetJustifyH(fs:GetJustifyH()) end
+            if fs.GetJustifyV then layer:SetJustifyV(fs:GetJustifyV()) end
+            if fs.CanWordWrap and layer.SetWordWrap then layer:SetWordWrap(fs:CanWordWrap()) end
+            if fs.GetMaxLines and layer.SetMaxLines then layer:SetMaxLines(fs:GetMaxLines()) end
+        end
+        syncShadowText(fs)
+    else
+        fs._ldShadowActive = false
+        fs._ldShadowOffset = nil
+        for _, layer in ipairs(fs._ldShadowLayers or {}) do layer:Hide() end
+    end
+    -- The native shadow stays cleared: on a client that does paint it, it would
+    -- double up on the drawn stack.  One implementation, one visible result.
+    fs:SetShadowColor(0,0,0,0); fs:SetShadowOffset(0,0)
     return ok and applied ~= false
 end
 
@@ -282,8 +412,8 @@ function UI:ApplyAllFonts()
         self:ApplyFont(h.label, hFont, hSz, hOut, hShad)
         self:ApplyFont(h.info, hFont, hSz, hOut, hShad)
         if h.rawInfo then self:ApplyFont(h.rawInfo, hFont, hSz, hOut, hShad) end
-        self:SetFontStringColor(h.info, "headerFontColor", {0.55, 0.55, 0.55, 0.9})
-        if h.rawInfo then self:SetFontStringColor(h.rawInfo, "headerFontColor", {0.55, 0.55, 0.55, 0.9}) end
+        self:SetFontStringColor(h.info, "headerFontColor", {0.66, 0.66, 0.66, 0.95})
+        if h.rawInfo then self:SetFontStringColor(h.rawInfo, "headerFontColor", {0.66, 0.66, 0.66, 0.95}) end
     end
     applyHead(self.priHead); applyHead(self.secHead); applyHead(self.ovrPriHead); applyHead(self.ovrSecHead)
     local tFont, tSz, tOut, tShad = self:GetDisplayFontConfig("tab")
@@ -543,7 +673,7 @@ function UI:BuildBody()
     self.leftContainer = CreateFrame("Frame", nil, self.bodyFrame); self.leftContainer:SetClipsChildren(true)
     self.ovrContainer = CreateFrame("Frame", nil, self.bodyFrame, "BackdropTemplate"); self.ovrContainer:SetClipsChildren(true)
     self.ovrContainer:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8X8", edgeFile = nil, edgeSize = 0 })
-    local c = ns.db.window.ovrBgColor or {0.025, 0.035, 0.05, 0.62}; self.ovrContainer:SetBackdropColor(unpack(c)); self.ovrContainer:Hide()
+    local c = ns.db.window.ovrBgColor or {0.025, 0.035, 0.05, 0.82}; self.ovrContainer:SetBackdropColor(unpack(c)); self.ovrContainer:Hide()
 
     self.priHead = self:MakeSectHead(self.leftContainer)
     self.priList = self:MakeScrollArea(self.leftContainer)

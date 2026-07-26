@@ -348,6 +348,7 @@ ns.MODE_NAMES = {
     deaths      = "DEATHS",
     interrupts  = "INTERRUPTS",
     dispels     = "DISPELS",
+    avoidableDamageTaken = "AVOIDABLE_DAMAGE_TAKEN",
     enemyDamageTaken = "ENEMY_DAMAGE_TAKEN",
 }
 
@@ -358,6 +359,7 @@ ns.MODE_SHORT = {
     deaths          = "DEATHS_SHORT",
     interrupts      = "INTERRUPTS_SHORT",
     dispels         = "DISPELS_SHORT",
+    avoidableDamageTaken = "AVOIDABLE_DAMAGE_TAKEN_SHORT",
     enemyDamageTaken= "ENEMY_SHORT",
 }
 
@@ -365,10 +367,17 @@ ns.MODE_UNITS = {
     damage          = "DPS",
     healing         = "HPS",
     damageTaken     = "DTPS",
+    avoidableDamageTaken = "DTPS",
     enemyDamageTaken= "DPS",
 }
 
-ns.MODE_ORDER = { "damage", "healing", "damageTaken", "deaths", "enemyDamageTaken", "interrupts", "dispels" }
+-- Presentation order for the bottom bar, its More menu and the bottom-bar
+-- settings list.  Offence first, then the utility counters, then the three
+-- damage-received statistics from broadest to most specific.
+ns.MODE_ORDER = {
+    "damage", "healing", "interrupts", "dispels", "deaths",
+    "damageTaken", "avoidableDamageTaken", "enemyDamageTaken",
+}
 
 function ns:NextMode(current)
     for i, m in ipairs(ns.MODE_ORDER) do

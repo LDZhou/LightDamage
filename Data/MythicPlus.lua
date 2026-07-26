@@ -163,24 +163,69 @@ end
 -- ============================================================
 -- OnCompleted(CHALLENGE_MODE_COMPLETED)
 -- ============================================================
-function MP:OnCompleted(time, onTime)
+-- CHALLENGE_MODE_COMPLETED carries no payload.  The run's result must be read
+-- from C_ChallengeMode.GetCompletionInfo(); treating the (always nil) event
+-- arguments as time/onTime reported every completed key as "failed / 0:00".
+-- elapsed is milliseconds, matching MP._elapsedOnStop / _keystoneTime.
+local function readCompletionInfo()
+    if not (C_ChallengeMode and C_ChallengeMode.GetCompletionInfo) then return nil end
+    local ok, _, level, elapsed, onTime = pcall(C_ChallengeMode.GetCompletionInfo)
+    if not ok or type(onTime) ~= "boolean" then return nil end
+    return onTime, type(elapsed) == "number" and elapsed or nil,
+        type(level) == "number" and level > 0 and level or nil
+end
+
+-- Completion metadata is normally readable inside the event, but it can lag it
+-- by a frame.  Retry briefly, then commit an honest "unknown" (—) result rather
+-- than asserting a failure we never actually observed.
+local COMPLETION_RETRY_DELAYS = {0, 0.25, 0.5, 1, 2}
+
+function MP:OnCompleted()
     MP:StopTimer()
-    MP._elapsedOnStop = time
     MP._completedAndStillInside = true
 
-    local status  = onTime and L.STATUS_SUCCESS or L.STATUS_FAILED
-    local runName = string.format("+%d %s %s",
-        MP._level or 0, MP._mapName or L.MYTHIC_PLUS, status)
+    local committed = false
+    local function commit(onTime, elapsed, level)
+        if committed then return end
+        committed = true
 
-    MP:BuildMythicSegment(runName, onTime)
+        MP._elapsedOnStop = elapsed
+        if level then MP._level = level end
 
-    print(string.format(L.MSG_LIGHT_DAMAGE_MYTHIC_PLUS_COMPLETED_FORMAT_TIME_FORMAT,
-        runName, ns:FormatTime((time or 0) / 1000)))
+        local status
+        if onTime == true       then status = L.STATUS_SUCCESS
+        elseif onTime == false  then status = L.STATUS_FAILED
+        else                         status = L.STATUS_INCOMPLETE end
+        local runName = string.format("+%d %s %s",
+            MP._level or 0, MP._mapName or L.MYTHIC_PLUS, status)
 
-    leaveInstance()
+        MP:BuildMythicSegment(runName, onTime)
 
-    if ns.UI and ns.UI:IsVisible() then
-        C_Timer.After(0.5, function() ns.UI:Layout() end)
+        print(string.format(L.MSG_LIGHT_DAMAGE_MYTHIC_PLUS_COMPLETED_FORMAT_TIME_FORMAT,
+            runName, ns:FormatTime((elapsed or 0) / 1000)))
+
+        leaveInstance()
+
+        if ns.UI and ns.UI:IsVisible() then
+            C_Timer.After(0.5, function() ns.UI:Layout() end)
+        end
+    end
+
+    local onTime, elapsed, level = readCompletionInfo()
+    if onTime ~= nil then return commit(onTime, elapsed, level) end
+
+    for index, delay in ipairs(COMPLETION_RETRY_DELAYS) do
+        local isLast = index == #COMPLETION_RETRY_DELAYS
+        C_Timer.After(delay, function()
+            if committed then return end
+            local retryOnTime, retryElapsed, retryLevel = readCompletionInfo()
+            if retryOnTime ~= nil then
+                commit(retryOnTime, retryElapsed, retryLevel)
+            elseif isLast then
+                local seconds = MP:GetElapsed()
+                commit(nil, seconds and seconds * 1000 or nil, nil)
+            end
+        end)
     end
 end
 

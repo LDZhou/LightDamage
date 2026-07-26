@@ -304,7 +304,7 @@ function DV:ApplyTheme()
     local dbW = ns.db and ns.db.window or {}
     
     -- 1. 同步背景颜色
-    local bg = dbW.bgColor or {0.02, 0.02, 0.025, 0.58}
+    local bg = dbW.bgColor or {0.02, 0.02, 0.025, 0.80}
     self.frame:SetBackdropColor(unpack(bg))
     
     -- 2. 同步标题栏颜色 (ThemeColor)
@@ -652,12 +652,11 @@ function DV:RenderSpellList(name, class, mode, spells, dur, titleSuffix, apiMaxA
 
         local sn = sp.name or "?"
         local nc = sp.isPet and "|cff55bb55" or "|cffffffff"
-        
-        if sp.isAvoidable then
-            sc2 = {0.85, 0.70, 0.15}
-            sn = sn .. " |cffffcc00" .. L.AVOIDABLE_MARKER .. "|r"
-        end
-        
+
+        -- Avoidable damage is a statistic of its own (Blizzard publishes it as a
+        -- dedicated meter type), so it is shown under its own category instead of
+        -- being annotated onto the damage-taken breakdown.
+
         -- 【先】设定右侧值文字，让它把占位大小确定下来
         local isCount = (mode == "interrupts" or mode == "dispels")
         local valueIsSecret = sp.isSecretAmount or sp.isSecretRate
@@ -668,7 +667,10 @@ function DV:RenderSpellList(name, class, mode, spells, dur, titleSuffix, apiMaxA
             valStr = string.format(L.COLORED_COUNT_TIMES_FORMAT, sp.value)
         elseif sp.hasRate and ns.MODE_UNITS[mode] then
             -- ★ 顺序与主界面数据条一致：总量 (每秒)
-            valStr = string.format("%s (%s)", ns:FormatNumber(sp.value), ns:FormatNumber(sp.perSec))
+            -- The archived path carries the rate as `perSec`; the live-API path
+            -- (post-combat, before the run is archived) carries it as `rate`.
+            -- Accept both, or the per-second column reads 0 after combat.
+            valStr = string.format("%s (%s)", ns:FormatNumber(sp.value), ns:FormatNumber(sp.perSec or sp.rate or 0))
         else
             valStr = ns:FormatNumber(sp.value)
         end
@@ -866,12 +868,6 @@ function DV:ShowSpellBreakdownFromAPI(sourceGUID,sourceCreatureID,name,class,mod
                 if creatureName then spellName = creatureName .. ": " .. spellName end
             end
 
-            -- 可规避标记
-            local isAvoidable = false
-            local avoidableRaw
-            pcall(function() avoidableRaw=sp.isAvoidable end)
-            if not IsSecret(avoidableRaw) then isAvoidable=avoidableRaw==true end
-
             local publicSpellID = nil
             if not idSecret then publicSpellID = spellIDSafe end
             local rawSpellID = nil
@@ -894,7 +890,6 @@ function DV:ShowSpellBreakdownFromAPI(sourceGUID,sourceCreatureID,name,class,mod
                 hasRate     = hasRate,
                 percent     = 0,
                 isPet       = isPet,
-                isAvoidable = isAvoidable,
             }
             if isSec then entry.rawAmount=amt end
             table.insert(spells,entry)
@@ -980,10 +975,14 @@ function DV:GetSpellBreakdownExt(seg, guid, mode)
     end
 
     -- 承伤模块：彻底剔除无效的暴击/极值字段
-    if mode == "damageTaken" then
-        if pd.damageTakenSpells and next(pd.damageTakenSpells) then
+    -- 可规避伤害是暴雪独立发布的一类统计，结构与承伤一致，走同一条路径。
+    if mode == "damageTaken" or mode == "avoidableDamageTaken" then
+        local avoidable = mode == "avoidableDamageTaken"
+        local spellMap = avoidable and pd.avoidableDamageTakenSpells or pd.damageTakenSpells
+        local playerTotal = avoidable and pd.avoidableDamageTaken or pd.damageTaken
+        if spellMap and next(spellMap) then
             local result = {}
-            for spellKey, sd in pairs(pd.damageTakenSpells) do
+            for spellKey, sd in pairs(spellMap) do
                 local spellID = sd.spellID or sd.id or spellKey
                 if (sd.damage or 0) > 0 then
                     table.insert(result, {
@@ -992,19 +991,18 @@ function DV:GetSpellBreakdownExt(seg, guid, mode)
                         school      = sd.school,
                         value       = sd.damage,
                         hits        = sd.hits,
-                        isAvoidable = sd.isAvoidable,
                     })
                 end
             end
             table.sort(result, function(a, b) return a.value > b.value end)
-            local tot = pd.damageTaken or 0
+            local tot = playerTotal or 0
             for _, r2 in ipairs(result) do
                 r2.percent = tot > 0 and (r2.value / tot * 100) or 0
             end
             return result
         else
-            if (pd.damageTaken or 0) > 0 then
-                return {{ spellID=0, name=L.TOTAL_DAMAGE_TAKEN, school=nil, value=pd.damageTaken,
+            if (playerTotal or 0) > 0 then
+                return {{ spellID=0, name=L.TOTAL_DAMAGE_TAKEN, school=nil, value=playerTotal,
                     hits=0, percent=100 }}
             end
         end

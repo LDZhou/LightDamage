@@ -27,12 +27,18 @@ local function enum(name)
     return Enum and Enum.DamageMeterType and Enum.DamageMeterType[name]
 end
 
+-- `optional` marks a statistic the client may simply not publish.  The three
+-- core stats must stay pending until Blizzard finishes publishing them, but an
+-- optional one that never appears must not hold an entire archive candidate --
+-- and with it the instance-exit transaction -- hostage.
 local STAT_DEFS = {
     { enumName = "DamageDone",      field = "damage",     spellField = "spells" },
     { enumName = "HealingDone",     field = "healing",    spellField = "spells" },
     { enumName = "DamageTaken",     field = "damageTaken",spellField = "damageTakenSpells" },
     { enumName = "Interrupts",      field = "interrupts", spellField = "interruptSpells", count = true },
     { enumName = "Dispels",         field = "dispels",    spellField = "dispelSpells", count = true },
+    { enumName = "AvoidableDamageTaken", field = "avoidableDamageTaken",
+      spellField = "avoidableDamageTakenSpells", optional = true },
 }
 
 function G:IsAccessible(value)
@@ -56,6 +62,43 @@ function G:IsTableAccessible(value)
         if ok then return accessible == true end
     end
     return self:IsAccessible(value)
+end
+
+-- Hot-path accessibility checks for the per-frame render loop.  canaccessvalue /
+-- canaccesstable are Blizzard's sanctioned predicates for probing secret values:
+-- they return a boolean for ANY input (including secret) and do not error, so the
+-- bar fill can call them directly instead of paying a pcall per field.  Result is
+-- a plain boolean, safe to compare.  The predicate is resolved once and cached
+-- (false = none available).  The pcall-guarded IsAccessible / IsTableAccessible
+-- remain the default everywhere else (archive, save, click handlers).
+function G:IsAccessibleFast(value)
+    if type(value) == "nil" then return true end
+    local fn = self._accessFn
+    if fn == nil then
+        if type(canaccessvalue) == "function" then
+            fn = canaccessvalue
+        elseif type(issecretvalue) == "function" then
+            local sec = issecretvalue
+            fn = function(v) return sec(v) ~= true end
+        else
+            fn = false
+        end
+        self._accessFn = fn
+    end
+    if fn then return fn(value) == true end
+    return true
+end
+
+function G:IsTableAccessibleFast(value)
+    if type(value) == "nil" then return true end
+    if type(value) ~= "table" then return self:IsAccessibleFast(value) end
+    local fn = self._accessTableFn
+    if fn == nil then
+        fn = (type(canaccesstable) == "function" and canaccesstable) or false
+        self._accessTableFn = fn
+    end
+    if fn then return fn(value) == true end
+    return self:IsAccessibleFast(value)
 end
 
 function G:GetValueState(value)
@@ -141,6 +184,10 @@ function G:InvalidateRaw(reason)
     self._rawGeneration = self._rawGeneration + 1
     self._lastInvalidationReason = reason
     self._dirty = {}
+    -- A reset can reuse session IDs; never serve a pre-reset frame's list.
+    self._sessionsFrameStamp = nil
+    self._sessionsCached = nil
+    self._sessionsCachedState = nil
 end
 
 function G:GetRawGeneration()
@@ -151,11 +198,28 @@ function G:GetAvailableSessionsRaw()
     if not C_DamageMeter or not C_DamageMeter.GetAvailableCombatSessions then
         return nil, self.ERROR
     end
+    -- Cap this to one call per frame.  Blizzard allocates a fresh session list on
+    -- every call, and the high-frequency Damage Meter events each ask for it, so
+    -- during intense combat this was the dominant source of GC churn.  The list
+    -- cannot change within a single frame, so a GetTime()-keyed cache is exact,
+    -- not an approximation; it is cleared on any raw-generation change (reset).
+    local now = GetTime and GetTime()
+    if type(now) == "number" and self._sessionsFrameStamp == now then
+        return self._sessionsCached, self._sessionsCachedState
+    end
+    self._sessionsRealCalls = (self._sessionsRealCalls or 0) + 1
     local ok, sessions = pcall(C_DamageMeter.GetAvailableCombatSessions)
-    if not ok then return nil, self.ERROR end
-    if type(sessions) == "nil" then return nil, self.MISSING end
-    if not self:IsTableAccessible(sessions) then return sessions, self.SECRET end
-    return sessions, self.ACCESSIBLE
+    local result, state
+    if not ok then result, state = nil, self.ERROR
+    elseif type(sessions) == "nil" then result, state = nil, self.MISSING
+    elseif not self:IsTableAccessible(sessions) then result, state = sessions, self.SECRET
+    else result, state = sessions, self.ACCESSIBLE end
+    if type(now) == "number" then
+        self._sessionsFrameStamp = now
+        self._sessionsCached = result
+        self._sessionsCachedState = state
+    end
+    return result, state
 end
 
 -- GetAvailableCombatSessions keeps the live combat as its final entry while
@@ -267,13 +331,15 @@ local function newPlayer(guid, name, class)
         guid = guid, name = name or "?", class = class,
         specID = nil, specIconID = nil, ilvl = 0, score = 0,
         damage = 0, healing = 0, overhealing = 0, absorbed = 0,
-        damageTaken = 0, deaths = 0, interrupts = 0, dispels = 0,
+        damageTaken = 0, avoidableDamageTaken = 0,
+        deaths = 0, interrupts = 0, dispels = 0,
         spells = {}, damageTakenSpells = {}, interruptSpells = {}, dispelSpells = {},
+        avoidableDamageTakenSpells = {},
         pets = {}, activeTime = 0, lastActionTime = 0,
     }
 end
 
-local function addSpell(target, spellID, amount, field, count, avoidable, isPet, petName, perSecond)
+local function addSpell(target, spellID, amount, field, count, isPet, petName, perSecond)
     local storageKey = spellID
     if isPet then
         storageKey = "pet:" .. (petName or "") .. ":" .. tostring(spellID)
@@ -288,7 +354,6 @@ local function addSpell(target, spellID, amount, field, count, avoidable, isPet,
     else
         spell.damage = spell.damage + amount
     end
-    if avoidable then spell.isAvoidable = true end
     if type(perSecond) == "number" then
         spell.amountPerSecond = (spell.amountPerSecond or 0) + perSecond
     end
@@ -443,12 +508,6 @@ local function archiveSpells(candidate, selector, def, dmType, identity, player,
                     local ok; ok, status = acceptOptionalFailure(candidate, status, "spell", player, allowIncomplete)
                     if not ok then return nil, status end
                 else
-                    local avoidable; avoidable, status = boolField(sp, "isAvoidable", false)
-                    if status then
-                        local ok; ok, status = acceptOptionalFailure(candidate, status, "spell", player, allowIncomplete)
-                        if not ok then return nil, status end
-                        avoidable = false
-                    end
                     local spellIsPet, petName = false, nil
                     local details, detailsStatus = G:ReadTableField(sp, "combatSpellDetails")
                     if detailsStatus == G.ACCESSIBLE then
@@ -479,9 +538,18 @@ local function archiveSpells(candidate, selector, def, dmType, identity, player,
                         markIncomplete(candidate, "rate", player)
                         perSecond = nil
                     end
-                    if spellID > 0 and amount > 0 then
+                    -- Faithful to Blizzard: keep every official spell row so the
+                    -- breakdown reconciles with the source total and matches the
+                    -- official meter.  spellID may legitimately be 0 (a counted
+                    -- row with no spell); dropping it used to make the breakdown
+                    -- under-sum the total, most visibly for dispels/interrupts.
+                    -- Zero-amount rows add nothing and are still hidden at render,
+                    -- so only that guard remains.  addSpell keys by spellID, and
+                    -- numberField defaults spellID to 0, so a zero-id row is a
+                    -- valid, non-colliding bucket that preserves the total.
+                    if amount > 0 then
                         addSpell(target, spellID, amount, def.field, def.count,
-                            avoidable, spellIsPet, petName, perSecond)
+                            spellIsPet, petName, perSecond)
                     end
                 end
             end
@@ -498,13 +566,20 @@ local function archiveStat(candidate, selector, def, allowIncomplete)
         -- DamageMeterCombatSession is non-nil for a valid official selector,
         -- including legitimate zero totals.  A missing whole session therefore
         -- means publication is not complete yet and must never be frozen as 0.
+        -- An optional statistic is the exception: the client may never publish
+        -- it at all, so record it as unavailable and keep the candidate valid.
+        if def.optional then
+            return acceptOptionalFailure(candidate, sessionStatus or G.MISSING,
+                "spell", nil, allowIncomplete)
+        end
         return nil, sessionStatus or G.ERROR
     end
     local total, status = numberField(session, "totalAmount", 0)
     if status then return nil, status end
     if def.field == "damage" then candidate.totalDamage = total
     elseif def.field == "healing" then candidate.totalHealing = total
-    elseif def.field == "damageTaken" then candidate.totalDamageTaken = total end
+    elseif def.field == "damageTaken" then candidate.totalDamageTaken = total
+    elseif def.field == "avoidableDamageTaken" then candidate.totalAvoidableDamageTaken = total end
 
     local sources; sources, status = G:ReadTableField(session, "combatSources")
     if status ~= G.ACCESSIBLE then
@@ -567,56 +642,87 @@ local function archiveDeaths(candidate, selector, allowIncomplete)
         if totalDeaths == 0 then return true end
         return nil, status
     end
-    local sawPositiveSource = false
+    local sawSource = false
     for _, src in ipairs(sources) do
         if type(src) ~= "table" or not G:IsTableAccessible(src) then
             return nil, type(src) == "table" and G.SECRET or G.ERROR
         end
-        local count; count, status = numberField(src, "totalAmount", 0)
-        if status then return nil, status end
-        if count > 0 then
-            sawPositiveSource = true
-            local identity; identity, status = readSourceIdentity(candidate, src, allowIncomplete)
-            if not identity then return nil, status end
-            -- sourceCreatureID is an optional identity field on Blizzard's
-            -- DamageMeterCombatSource, including Deaths rows.  Its presence is
-            -- not an NPC/player discriminator and must never discard an
-            -- otherwise authoritative official death source.
-            local player = ensurePlayer(candidate, identity.key, identity.name,
-                identity.class, identity.specIconID)
-            player.deaths = player.deaths + count
-
-            local recapID; recapID, status = numberField(src, "deathRecapID", 0)
-            if status then
-                local ok; ok, status = acceptOptionalFailure(candidate, status, "death", nil, allowIncomplete)
-                if not ok then return nil, status end
-                recapID = 0
-            end
-            local record, recapStatus
-            if recapID > 0 and ns.DeathTracker and ns.DeathTracker.BuildDeathRecordForArchive then
-                record, recapStatus = ns.DeathTracker:BuildDeathRecordForArchive(recapID, src)
-            end
-            if not record then
-                local ok; ok, status = acceptOptionalFailure(candidate,
-                    recapStatus or G.MISSING, "death", nil, allowIncomplete)
-                if not ok then return nil, status end
-                record = incompleteDeathRecord(identity, recapID, recapStatus)
-            elseif recapStatus ~= G.ACCESSIBLE then
-                local ok; ok, status = acceptOptionalFailure(candidate, recapStatus,
-                    "death", record, allowIncomplete)
-                if not ok then return nil, status end
-            elseif record._incomplete then
-                markIncomplete(candidate, "death", record)
-            end
-            record.playerGUID = identity.key or record.playerGUID
-            record.playerName = identity.name or record.playerName
-            record.playerClass = identity.class or record.playerClass
-            record.isSelf = identity.isLocal and true or false
-            record._deathCount = count
-            table.insert(candidate.deathLog, record)
+        -- A published Deaths row IS the death.  Unlike a damage/healing row,
+        -- whose meaning is its amount, the official death list is keyed to the
+        -- source row itself -- which is why the live view (DeathTracker) and
+        -- Blizzard's own display build one entry per combatSources row and
+        -- never consult totalAmount to decide whether the row exists.  The
+        -- archive used to require totalAmount > 0, and numberField maps an
+        -- absent field to 0, so every death silently vanished from the frozen
+        -- snapshot while still rendering from the live session.  The loss only
+        -- became visible at the instance exit, when the coordinated reset
+        -- detaches _sessionID and the UI falls back to the stored deathLog.
+        -- A protected amount still means "not readable yet" and keeps the whole
+        -- candidate pending, exactly as before.
+        local count, countStatus = numberField(src, "totalAmount", nil)
+        if countStatus == G.SECRET then return nil, countStatus end
+        if countStatus then
+            local ok; ok, status = acceptOptionalFailure(candidate, countStatus, "death", nil, allowIncomplete)
+            if not ok then return nil, status end
+            count = nil
         end
+        sawSource = true
+        local identity; identity, status = readSourceIdentity(candidate, src, allowIncomplete)
+        if not identity then return nil, status end
+        -- sourceCreatureID is an optional identity field on Blizzard's
+        -- DamageMeterCombatSource, including Deaths rows.  Its presence is
+        -- not an NPC/player discriminator and must never discard an
+        -- otherwise authoritative official death source.
+        local player = ensurePlayer(candidate, identity.key, identity.name,
+            identity.class, identity.specIconID)
+        -- Only a number Blizzard actually stated is added to the player's
+        -- death tally; an unavailable count is left absent, never guessed.
+        if type(count) == "number" and count > 0 then
+            player.deaths = player.deaths + count
+        elseif type(count) ~= "number" then
+            markIncomplete(candidate, "death", player)
+        end
+
+        local recapID; recapID, status = numberField(src, "deathRecapID", 0)
+        if status then
+            local ok; ok, status = acceptOptionalFailure(candidate, status, "death", nil, allowIncomplete)
+            if not ok then return nil, status end
+            recapID = 0
+        end
+        local record, recapStatus
+        if recapID > 0 and ns.DeathTracker and ns.DeathTracker.BuildDeathRecordForArchive then
+            record, recapStatus = ns.DeathTracker:BuildDeathRecordForArchive(recapID, src)
+        end
+        if not record then
+            local ok; ok, status = acceptOptionalFailure(candidate,
+                recapStatus or G.MISSING, "death", nil, allowIncomplete)
+            if not ok then return nil, status end
+            record = incompleteDeathRecord(identity, recapID, recapStatus)
+        elseif recapStatus ~= G.ACCESSIBLE then
+            local ok; ok, status = acceptOptionalFailure(candidate, recapStatus,
+                "death", record, allowIncomplete)
+            if not ok then return nil, status end
+        elseif record._incomplete then
+            markIncomplete(candidate, "death", record)
+        end
+        record.playerGUID = identity.key or record.playerGUID
+        record.playerName = identity.name or record.playerName
+        record.playerClass = identity.class or record.playerClass
+        record.isSelf = identity.isLocal and true or false
+        record._deathCount = type(count) == "number" and count or nil
+        record._deathTimeSeconds = record._deathTimeSeconds
+            or numberField(src, "deathTimeSeconds", nil)
+        table.insert(candidate.deathLog, record)
     end
-    if totalDeaths > 0 and not sawPositiveSource then return nil, G.MISSING end
+    -- Blizzard counted deaths but published no source row: publication is not
+    -- finished, so the candidate stays pending rather than freezing a gap.
+    if totalDeaths > 0 and not sawSource then return nil, G.MISSING end
+    -- The official row count is authoritative when the session total is absent
+    -- or lower than the rows Blizzard actually published; never report fewer
+    -- deaths than the rows we just archived.
+    if #candidate.deathLog > (candidate.totalDeaths or 0) then
+        candidate.totalDeaths = #candidate.deathLog
+    end
     return true
 end
 
@@ -641,6 +747,8 @@ function G:ExtractEnemyDamageSources(sourceData)
             local amount, amountStatus = numberField(sp, "totalAmount", nil)
             local details; details, status = self:ReadTableField(sp, "combatSpellDetails")
             if amountStatus then incomplete = true end
+            local hasAmount = type(amount) == "number" and amount > 0
+            local named = false
             if status == self.ACCESSIBLE then
                 local unitName; unitName, status = stringField(details, "unitName", nil)
                 if status then incomplete = true end
@@ -649,7 +757,8 @@ function G:ExtractEnemyDamageSources(sourceData)
                     incomplete = true
                     unitClass = nil
                 end
-                if unitName and type(amount) == "number" and amount > 0 then
+                if unitName and hasAmount then
+                    named = true
                     local row = sourceMap[unitName]
                     if not row then
                         row = {name = unitName, class = unitClass, amount = 0}
@@ -659,6 +768,19 @@ function G:ExtractEnemyDamageSources(sourceData)
                 end
             else
                 incomplete = true
+            end
+            -- Faithful to Blizzard: a real contribution whose unit name is
+            -- unavailable (missing or protected) is aggregated into one unnamed
+            -- bucket rather than dropped, so the breakdown still sums to the
+            -- authoritative enemy total.  The amount is a plain number, so the
+            -- bucket is safe to archive.
+            if hasAmount and not named then
+                local row = sourceMap.__unnamed
+                if not row then
+                    row = {name = "?", class = nil, amount = 0}
+                    sourceMap.__unnamed = row
+                end
+                row.amount = row.amount + amount
             end
         end
     end
@@ -739,7 +861,8 @@ local function buildCandidate(selector, meta)
         type = meta.type or "history", name = name or ns.L.COMBAT,
         duration = duration, startTime = meta.startTime or GetTime(), endTime = meta.endTime or GetTime(),
         isActive = false, players = {}, totalDamage = 0, totalHealing = 0,
-        totalDamageTaken = 0, deathLog = {}, enemyDamageTakenList = {},
+        totalDamageTaken = 0, totalAvoidableDamageTaken = 0,
+        deathLog = {}, enemyDamageTakenList = {},
         _sessionID = selector.sessionID, _sessionIdx = meta.sessionIdx,
         _instanceTag = meta.instanceTag, _instanceDisplayName = meta.instanceDisplayName,
         _isBoss = meta.isBoss and true or false, encounterName = meta.encounterName,
