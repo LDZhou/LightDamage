@@ -13,7 +13,7 @@ function UI:ToggleCollapse(collapse, skipAnim)
     if collapse and self.CloseOtherTabMenu then self:CloseOtherTabMenu() end
     self._collapsed = collapse
     local db = ns.db.window; local cdb = ns.db.collapse
-    local workspace = ns.Layouts and ns.Layouts:GetWorkspace(ns.state.sceneKey or "outdoor")
+    local workspace = ns.Layouts and ns.Layouts:GetGeometryWorkspace(ns.state.sceneKey or "outdoor")
     local targetHeight = collapse and TITLE_H or (self._savedHeight or (workspace and workspace.windowHeight) or db.height)
     if collapse then
         self._savedHeight = self.frame:GetHeight(); self._savedAnchor = { self.frame:GetPoint() }

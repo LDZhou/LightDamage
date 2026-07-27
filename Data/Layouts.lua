@@ -423,6 +423,42 @@ function Layouts:GetWorkspace(scene)
     return ws
 end
 
+-- A workspace holds two independent things: which layout the scene renders
+-- (layoutId) and where/how big the window is.  "Share window position and size"
+-- redirects only the geometry half to one shared record, so every scene keeps
+-- its own layout while dragging or resizing in any scene moves them all.
+local GEOMETRY_FIELDS = {"windowWidth", "windowHeight", "point", "relPoint", "x", "y"}
+
+function Layouts:IsGeometryShared()
+    return ns.db and ns.db.shareWindowGeometry == true
+end
+
+function Layouts:GetGeometryWorkspace(scene)
+    if not self:IsGeometryShared() then return self:GetWorkspace(scene) end
+    local shared = ns.db.sharedWorkspace
+    if type(shared) ~= "table" then shared = {}; ns.db.sharedWorkspace = shared end
+    -- Seed from the scene that is on screen the first time the shared record is
+    -- used, so turning the option on never teleports or resizes the window.
+    if shared.windowWidth == nil then
+        local source = self:GetWorkspace(scene)
+        for _, field in ipairs(GEOMETRY_FIELDS) do shared[field] = source[field] end
+    end
+    shared.windowWidth = tonumber(shared.windowWidth) or 420
+    shared.windowHeight = tonumber(shared.windowHeight) or 300
+    return shared
+end
+
+-- Called when the option is switched on: adopt the visible scene's geometry as
+-- the shared one.  Switching off leaves every scene's own record untouched, so
+-- the previous per-scene arrangement comes straight back.
+function Layouts:AdoptSharedGeometry(scene)
+    local source = self:GetWorkspace(scene)
+    local shared = type(ns.db.sharedWorkspace) == "table" and ns.db.sharedWorkspace or {}
+    for _, field in ipairs(GEOMETRY_FIELDS) do shared[field] = source[field] end
+    ns.db.sharedWorkspace = shared
+    return shared
+end
+
 function Layouts:GetActiveLayout(scene, mode)
     mode=mode or (ns.db.display and ns.db.display.mode) or "overview"
     if mode ~= "overview" and VALID_STAT[mode] then

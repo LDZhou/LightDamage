@@ -32,6 +32,14 @@ function UI:GetRenderWorkspace()
     return ns.Layouts:GetWorkspace(activeScene())
 end
 
+
+-- Where the window is and how big it is.  Identical to the render workspace
+-- unless "share window position and size" is on, in which case every scene
+-- reads and writes the same record.
+function UI:GetGeometryWorkspace(scene)
+    return ns.Layouts:GetGeometryWorkspace(scene or activeScene())
+end
+
 function UI:BuildBody()
     self.bodyFrame=CreateFrame("Frame",nil,self.frame)
     self.bodyFrame:SetClipsChildren(true)
@@ -445,7 +453,7 @@ function UI:RefreshTitle()
 end
 
 function UI:PersistWorkspaceGeometry()
-    local ws=self:GetRenderWorkspace(); local point,_,relPoint,x,y=self.frame:GetPoint()
+    local ws=self:GetGeometryWorkspace(); local point,_,relPoint,x,y=self.frame:GetPoint()
     ws.point=point; ws.relPoint=relPoint; ws.x=x; ws.y=y; ws.windowWidth=self.frame:GetWidth(); ws.windowHeight=(self._collapsed and self._savedHeight) or self.frame:GetHeight()
     if self._collapsed then self._savedAnchor={point,UIParent,relPoint,x,y} end
     if self._previewContext and ns.Config and ns.Config.RefreshLayoutStudio then ns.Config:RefreshLayoutStudio() end
@@ -492,7 +500,7 @@ end
 
 function UI:ApplySceneWorkspace(scene)
     if not self.frame then return end
-    scene=scene or activeScene(); local ws=ns.Layouts:GetWorkspace(scene); local def=self:GetRenderLayout()
+    scene=scene or activeScene(); local ws=ns.Layouts:GetGeometryWorkspace(scene); local def=self:GetRenderLayout()
     local minW,minH=ns.Layouts:GetMinimumWindowSize(def); local w=math.max(minW,tonumber(ws.windowWidth) or 420); local h=math.max(minH,tonumber(ws.windowHeight) or 300)
     ws.windowWidth,ws.windowHeight=w,h
     local appliedH=h; if self._collapsed and not self._previewContext then self._savedHeight=h; self._savedAnchor={ws.point or "CENTER",UIParent,ws.relPoint or ws.point or "CENTER",ws.x or 320,ws.y or -170}; appliedH=self.TITLE_H end

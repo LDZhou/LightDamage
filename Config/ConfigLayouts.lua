@@ -99,9 +99,23 @@ function Config:BuildLayoutPage()
 
  s.scenes=CreateFrame("Frame",nil,inner); s.scenes:SetPoint("TOPLEFT",0,-42); s.scenes:SetSize(600,450)
  local intro=txt(s.scenes,10,L.SCENE_ASSIGNMENTS_DESC,"TOPLEFT",0,0); intro:SetWidth(590); intro:SetJustifyH("LEFT"); intro:SetTextColor(.6,.6,.65)
+ -- The cards below already print each scene's own position and size, so the
+ -- switch that collapses them into one shared record belongs right here: with
+ -- it on, every card shows the same geometry, which is its own confirmation.
+ self:Check(s.scenes,L.SHARE_WINDOW_GEOMETRY,-18,
+  function() return ns.db.shareWindowGeometry end,
+  function(v)
+   ns.db.shareWindowGeometry=v and true or false
+   -- Adopt whatever is on screen right now so toggling never moves the window.
+   if v and ns.Layouts.AdoptSharedGeometry then
+    ns.Layouts:AdoptSharedGeometry(ns.state.sceneKey or "outdoor")
+   end
+   if ns.UI and ns.UI.ApplySceneWorkspace then ns.UI:ApplySceneWorkspace(ns.state.sceneKey or "outdoor") end
+   self:RefreshLayoutStudio()
+  end,L.SHARE_WINDOW_GEOMETRY_DESC)
  for i,scene in ipairs(ns.Layouts.SCENES) do
   local sceneId=scene
-  local card=CreateFrame("Frame",nil,s.scenes,"BackdropTemplate"); card:SetSize(286,116); card:SetPoint("TOPLEFT",((i-1)%2)*304,-48-math.floor((i-1)/2)*128); card:SetBackdrop({bgFile="Interface\\Buttons\\WHITE8X8"}); card:SetBackdropColor(.045,.045,.06,1); self:CreateBorder(card,.18,.25,.35,1)
+  local card=CreateFrame("Frame",nil,s.scenes,"BackdropTemplate"); card:SetSize(286,116); card:SetPoint("TOPLEFT",((i-1)%2)*304,-56-math.floor((i-1)/2)*128); card:SetBackdrop({bgFile="Interface\\Buttons\\WHITE8X8"}); card:SetBackdropColor(.045,.045,.06,1); self:CreateBorder(card,.18,.25,.35,1)
   card.title=txt(card,12,L[SCENE_KEYS[sceneId]],"TOPLEFT",10,-10); card.title:SetTextColor(0,.8,1)
   card.layout=menuBtn(self,card,260,26,"",function() self:ShowSceneLayoutMenu(sceneId,card.layout) end); card.layout:SetPoint("TOPLEFT",10,-38)
   card.meta=txt(card,10,"","TOPLEFT",10,-74); card.meta:SetWidth(266); card.meta:SetHeight(30); card.meta:SetJustifyH("LEFT"); card.meta:SetWordWrap(false); card.meta:SetTextColor(.6,.6,.65); s.sceneCards[sceneId]=card
@@ -139,7 +153,9 @@ function Config:RefreshLayoutStudio()
  s.library:SetShown(s.tab=="library"); s.scenes:SetShown(s.tab=="scenes"); s.libraryTab.text:SetTextColor(s.tab=="library" and 0 or 1,s.tab=="library" and .85 or 1,1); s.sceneTab.text:SetTextColor(s.tab=="scenes" and 0 or 1,s.tab=="scenes" and .85 or 1,1)
  if s.tab=="scenes" then
   local layouts=ns.Layouts:ListLayouts()
-  for scene,card in pairs(s.sceneCards) do local ws=ns.Layouts:GetWorkspace(scene); local d=ns.Layouts:GetLayout(ws.layoutId); card.layout.text:SetText(ns.Layouts:GetLayoutName(d)); card.meta:SetText(string.format(L.SCENE_GEOMETRY_FORMAT,d.rows,d.cols,ws.windowWidth,ws.windowHeight,ws.point or "CENTER",ws.x or 0,ws.y or 0)) end
+  -- layoutId always comes from the scene itself; geometry follows the share
+  -- switch, so with it on every card prints the same position and size.
+  for scene,card in pairs(s.sceneCards) do local ws=ns.Layouts:GetWorkspace(scene); local geo=ns.Layouts:GetGeometryWorkspace(scene); local d=ns.Layouts:GetLayout(ws.layoutId); card.layout.text:SetText(ns.Layouts:GetLayoutName(d)); card.meta:SetText(string.format(L.SCENE_GEOMETRY_FORMAT,d.rows,d.cols,geo.windowWidth,geo.windowHeight,geo.point or "CENTER",geo.x or 0,geo.y or 0)) end
   return
  end
  local list=ns.Layouts:ListLayouts()
