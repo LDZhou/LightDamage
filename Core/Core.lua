@@ -407,10 +407,6 @@ function Core:OnInitialize()
             "GROUP_ROSTER_UPDATE", "CHALLENGE_MODE_START",
             "CHALLENGE_MODE_COMPLETED", "CHALLENGE_MODE_RESET",
             "PLAYER_DEAD", "PLAYER_LOGOUT",
-            -- The two 12.x edges at which protected combat data becomes
-            -- readable.  A battleground's fights are unarchivable until the
-            -- match restriction lifts, so these are what let History keep them.
-            "PVP_MATCH_COMPLETE", "ADDON_RESTRICTION_STATE_CHANGED",
         }
         for _, ev in ipairs(events) do self:RegisterEvent(ev) end
         if ns.CombatTracker then ns.CombatTracker:RegisterEvents() end
@@ -449,12 +445,6 @@ function Core:OnEvent(event, ...)
         ns:OnEncounterStart(...)
     elseif event == "ENCOUNTER_END" then
         ns:OnEncounterEnd(...)
-    elseif event == "PVP_MATCH_COMPLETE" or event == "ADDON_RESTRICTION_STATE_CHANGED" then
-        -- Nothing is read from the payload: these only mark the moment a
-        -- previously protected session may have become archivable.
-        if ns.CombatTracker and ns.CombatTracker.OnRestrictionEdge then
-            ns.CombatTracker:OnRestrictionEdge(event)
-        end
     elseif event == "PLAYER_ENTERING_WORLD" then
         ns:InvalidateGUIDCache()
         C_Timer.After(0.3, function()

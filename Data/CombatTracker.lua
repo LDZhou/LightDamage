@@ -47,17 +47,6 @@ local SESSION_PUBLICATION_GRACE = 12.0
 -- against whatever data exists right now.  Kept well beyond the publication
 -- grace so a healthy client always takes the normal, fully-archived path.
 local BOUNDARY_FORCE_DEADLINE = 20.0
--- ...unless the client itself states why the data is unreadable.  In a PvP
--- match every opposing row stays protected until Blizzard lifts the match
--- restriction, which can easily outlast the blind deadline -- and giving up
--- there resets the meter while the fights are still unarchivable, so leaving
--- the battleground left an empty History.  While an official restriction
--- explains the block the boundary keeps waiting, up to this absolute cap so a
--- restriction that never clears can still never strand the queue.
-local RESTRICTED_BOUNDARY_DEADLINE = 300.0
--- Restrictions that legitimately keep official combat data protected.  Read by
--- name so a client without one of them simply contributes nothing.
-local ARCHIVE_RESTRICTION_TYPES = {"PvPMatch", "Combat", "Encounter"}
 
 local function gatewayAccessible(value)
     return not G or G:IsAccessible(value)
@@ -1179,13 +1168,7 @@ function CT:ExecuteMeterReset(reason, action)
     if type(resetAPI) ~= "function" then return false, "api-missing" end
     if not action.resetSerial then
         if GetTime() < (self._resetSettleUntil or 0) then return false, "reset-settling" end
-        -- An overdue boundary has already given up on the unreadable rows; the
-        -- archive precondition would otherwise keep this reset queued forever
-        -- and hand the next instance the previous run's Total.
-        local forced = action.forcedBoundary == true or self:IsBoundaryOverdue(action)
-        if not action.discardRaw and not forced and not self:CanResetMeter() then
-            return false, "archive-pending"
-        end
+        if not action.discardRaw and not self:CanResetMeter() then return false, "archive-pending" end
         self._resetGeneration = self._resetGeneration + 1
         action.resetSerial = self._resetGeneration
         action.resetAttempts = 0
@@ -1261,16 +1244,9 @@ function CT:HandleDamageMeterReset()
         -- request: in that case the matching reset event is the boundary proof,
         -- and retrying ResetAllCombatSessions would erase the new fight.
         local action = self._actions[1]
-        local ours = action and action.resetSerial == internalSerial
-        local postResetCombat = ours and self:HasPostResetCombatEvidence(action)
-        -- IsBlizzardMeterEmpty proves emptiness by reading the statistics, so it
-        -- cannot return true while those values are protected -- which is the
-        -- normal state in an arena.  The event still carries our own reset
-        -- serial, so once the boundary is overdue that identity is the proof;
-        -- otherwise the reset would be retried forever and the boundary, its
-        -- callback and every later exit would stay queued behind it.
-        local overdue = ours and self:IsBoundaryOverdue(action)
-        if not self:IsBlizzardMeterEmpty() and not postResetCombat and not overdue then
+        local postResetCombat = action and action.resetSerial == internalSerial
+            and self:HasPostResetCombatEvidence(action)
+        if not self:IsBlizzardMeterEmpty() and not postResetCombat then
             self:StartWatchdog()
             return
         end
@@ -1291,74 +1267,11 @@ function CT:PerformQueuedUserReset(action)
     return self:CompleteResetActionOnce(action)
 end
 
--- A boundary is overdue once it has waited longer than any healthy client
--- needs.  Past that point every precondition below becomes advisory: the exit
--- runs against the data that exists now.  This is the only thing that saves a
--- boundary whose blocker can never clear -- an arena/battleground session whose
--- opposing rows stay protected for the entire match is never readable, so
--- waiting for it does not preserve data, it only strands the exit and leaks the
--- run into the next Total.
--- 12.x exposes why addon data is restricted instead of making us infer it from
--- protected values.  Asking the client is only meaningful while the archive is
--- actually blocked on protected data; a restriction that is active for some
--- unrelated reason must never extend a boundary that could already commit.
-function CT:IsArchiveRestrictedByClient()
-    if not G or self._pendingArchiveReason ~= G.SECRET then return false end
-    -- The player has already entered the next instance.  That run needs a clean
-    -- Total more than the previous one needs its protected rows, so stop
-    -- extending and let the blind deadline finish the old boundary.
-    if ns.state.isInInstance then return false end
-    local api = C_RestrictedActions and C_RestrictedActions.GetAddOnRestrictionState
-    local types = Enum and Enum.AddOnRestrictionType
-    if type(api) ~= "function" or type(types) ~= "table" then return false end
-    local inactive = Enum.AddOnRestrictionState and Enum.AddOnRestrictionState.Inactive or 0
-    for _, name in ipairs(ARCHIVE_RESTRICTION_TYPES) do
-        local restrictionType = types[name]
-        if restrictionType ~= nil then
-            local ok, state = pcall(api, restrictionType)
-            if ok and state ~= nil and state ~= inactive then return true, name end
-        end
-    end
-    return false
-end
-
-function CT:IsBoundaryOverdue(action)
-    if not action then return false end
-    -- An exit that already ran forced hands that status to the reset it queues:
-    -- the same unreadable rows would otherwise make the follow-up reset wait out
-    -- the deadline a second time before it could clear the meter.
-    if action.forcedBoundary == true then return true end
-    if action.kind ~= "merge-instance" and action.kind ~= "meter-reset" then return false end
-    local waited = GetTime() - (action.queuedAt or GetTime())
-    -- The absolute cap is unconditional: liveness never depends on the client
-    -- eventually telling us the restriction ended.
-    if waited >= RESTRICTED_BOUNDARY_DEADLINE then return true end
-    if waited < BOUNDARY_FORCE_DEADLINE then return false end
-    -- Past the blind deadline the boundary would normally give up.  Keep waiting
-    -- only while the client states a restriction that explains the unreadable
-    -- rows -- that is exactly the PvP case, and the data really does arrive.
-    return not self:IsArchiveRestrictedByClient()
-end
-
--- PVP_MATCH_COMPLETE and ADDON_RESTRICTION_STATE_CHANGED are the edges at which
--- previously protected combat data becomes readable.  They carry no payload we
--- archive; they only tell the event-driven worker that retrying is now worth it,
--- so a battleground's fights are archived the moment the match restriction ends
--- instead of on the next slow watchdog tick.
-function CT:OnRestrictionEdge(reason)
-    if G then G:MarkDirty(reason or "restriction-edge") end
-    self:StartWatchdog()
-end
-
 function CT:DrainActions(archiveReady)
     local action = self._actions[1]
     if not action then return true end
     if ns.state.inCombat then return false end
-    local overdue = self:IsBoundaryOverdue(action)
-    -- An unreadable session blocks the archive cursor forever.  Without this
-    -- exemption it also blocked the queue here, before the merge branch could
-    -- ever consult its own force deadline.
-    if archiveReady == false and not overdue then return false end
+    if archiveReady == false then return false end
 
     local done = false
     if action.kind == "user-reset" then
@@ -1373,9 +1286,8 @@ function CT:DrainActions(archiveReady)
     elseif action.kind == "meter-reset" then
         -- Before clearing Blizzard state, also archive any combat that started
         -- while this reset was waiting (notably outdoor combat after an exit).
-        if hasUnprocessedSessions() and not overdue then return false end
-        if not self:ReconcileCompletedContexts(action, nil, false, overdue) then return false end
-        action.forcedBoundary = action.forcedBoundary or overdue
+        if hasUnprocessedSessions() then return false end
+        if not self:ReconcileCompletedContexts(action) then return false end
         if action.reason == "challenge-start" then self:ReclassifyPreKeystoneSegments(action) end
         if not action.rawEpochBegan and self._entryResetPendingTag
             and self._coverageCombatBeforeReset then
@@ -1405,7 +1317,7 @@ function CT:DrainActions(archiveReady)
         -- works on the head of the queue, so a precondition that never clears
         -- holds every later boundary hostage too.  After the deadline the exit
         -- runs on the data that is actually available.
-        local forced = overdue
+        local forced = GetTime() - (action.queuedAt or 0) >= BOUNDARY_FORCE_DEADLINE
         if forced then
             self:ReconcileCompletedContexts(action, action.tag, false, true)
         else
@@ -1415,16 +1327,6 @@ function CT:DrainActions(archiveReady)
         if self.MergeAndCleanInstance then
             done = self:MergeAndCleanInstance(action.tag, action.level, action.mapName,
                 action.instanceName, action.scene, action.combatGeneration, forced) == true
-        end
-        if done and forced then
-            -- MergeAndCleanInstance queues the coordinated reset for this same
-            -- boundary; propagate the forced status so it is not blocked again
-            -- by the very rows the merge just gave up on.
-            for _, queued in ipairs(self._actions) do
-                if queued.kind == "meter-reset" and not queued.resetSerial then
-                    queued.forcedBoundary = true
-                end
-            end
         end
     elseif action.kind == "callback" then
         done = true
