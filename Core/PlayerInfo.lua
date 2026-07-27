@@ -13,11 +13,26 @@ ns.PlayerInfoCache = ns.PlayerInfoCache or {}
 local PlayerInfo = {}
 ns.PlayerInfo = PlayerInfo
 
+-- Plain integer counters for /ld diag.  This module's cost is linear in group
+-- size and driven by events that fire constantly in a large group, and none of
+-- that was observable before: PlayerInfoCache is not a proxy, because combat
+-- rows populate it too through ObserveDamageMeterSource.
+PlayerInfo.stats = {sweeps = 0, unitsScanned = 0, pvpSkips = 0, inspects = 0, inspectFails = 0}
+local stats = PlayerInfo.stats
+
 local SCORE_TTL = 300
 local INSPECT_TTL = 300
 local INSPECT_THROTTLE = 2.0
 local INSPECT_TIMEOUT = 6.0
 local RETRY_MAX = 120
+
+-- A raid roster is walked by unit token, so "raid" .. i allocated a fresh
+-- string per member per rebuild -- 40 of them in a battleground, on an event
+-- that fires whenever anyone joins, leaves, dies or resurrects.  The token set
+-- is fixed, so build it once.
+local RAID_UNITS, PARTY_UNITS = {}, {}
+for i = 1, 40 do RAID_UNITS[i] = "raid" .. i end
+for i = 1, 4 do PARTY_UNITS[i] = "party" .. i end
 
 local eventFrame = CreateFrame("Frame")
 local rosterGeneration = 0
@@ -58,6 +73,18 @@ local function RestrictionIsActive(restrictionType)
     local ok, state = pcall(C_RestrictedActions.GetAddOnRestrictionState, restrictionType)
     local inactive = Enum and Enum.AddOnRestrictionState and Enum.AddOnRestrictionState.Inactive or 0
     return ok and state ~= inactive
+end
+
+-- Battlegrounds and arenas put the player in a raid group of up to 40, on a
+-- roster that churns with every death and resurrection -- and none of the work
+-- this module does can succeed there: CanInspect is false for the opposing
+-- faction, and a Mythic+ rating is meaningless in a PvP match.  The combat rows
+-- already carry classFilename and specIconID, which is what the bars actually
+-- render, so the whole roster/inspect subsystem stands down.
+local function IsPvPInstance()
+    local inInstance, instanceType = IsInInstance()
+    if not inInstance then return false end
+    return instanceType == "pvp" or instanceType == "arena"
 end
 
 -- Inspect is the only part of player enrichment that must yield while the
@@ -128,6 +155,17 @@ local function ScheduleRosterRefresh(delay)
     end)
 end
 
+-- One player's failed read used to schedule a whole-roster rebuild.  With 20-40
+-- members each backing off independently, ScheduleRosterRefresh keeps only the
+-- earliest deadline, so the group as a whole re-scanned at the shortest backoff
+-- any single member happened to have -- a full scan every few seconds, forever.
+-- A per-player retry only ever needs the next sweep to look at that player
+-- again, and the sweep is bounded below so a large group cannot drive it.
+local SWEEP_MIN_DELAY = 5.0
+local function ScheduleRetrySweep(delay)
+    ScheduleRosterRefresh(math.max(SWEEP_MIN_DELAY, tonumber(delay) or SWEEP_MIN_DELAY))
+end
+
 local function EnqueueInspect(unit, guid, generation)
     if queuedGUIDs[guid] then return end
     queuedGUIDs[guid] = true
@@ -142,6 +180,7 @@ end
 local function RetryPending(clearOwnedRequest)
     local request = pendingInspect
     if not request then return end
+    stats.inspectFails = stats.inspectFails + 1
     local cache = ns.PlayerInfoCache[request.guid]
     if cache then
         cache.inspectFailures = (cache.inspectFailures or 0) + 1
@@ -151,7 +190,7 @@ local function RetryPending(clearOwnedRequest)
         pcall(ClearInspectPlayer)
     end
     ClearPendingState()
-    ScheduleRosterRefresh(cache and math.max(1, (cache.inspectRetryAt or 0) - GetTime()) or 5)
+    ScheduleRetrySweep(cache and ((cache.inspectRetryAt or 0) - GetTime()) or nil)
     SchedulePump(0)
 end
 
@@ -207,13 +246,14 @@ local function ReadScore(unit, cache, now)
     cache.scoreFailures = (cache.scoreFailures or 0) + 1
     local retryDelay = Backoff(cache.scoreFailures)
     cache.scoreRetryAt = now + retryDelay
-    ScheduleRosterRefresh(retryDelay)
+    ScheduleRetrySweep(retryDelay)
 end
 
 local function ProcessUnit(unit, isLocal, generation, now)
     if not UnitExists(unit) or not UnitIsPlayer(unit) or not UnitIsConnected(unit) then return end
     local guid = AccessibleGUID(unit)
     if not guid then return end -- never compare or index with a secret GUID
+    stats.unitsScanned = stats.unitsScanned + 1
     local cache = CacheForGUID(guid)
     local _, classFilename = UnitClass(unit)
     cache.class = classFilename or cache.class
@@ -242,6 +282,7 @@ local function ProcessUnit(unit, isLocal, generation, now)
 end
 
 RebuildRoster = function()
+    stats.sweeps = stats.sweeps + 1
     rosterGeneration = rosterGeneration + 1
     local generation = rosterGeneration
     local now = GetTime()
@@ -253,10 +294,16 @@ RebuildRoster = function()
     ReadLocalPlayer()
     ProcessUnit("player", true, generation, now)
 
+    -- Only the local player is enriched inside a PvP instance; walking the
+    -- other 39 would cost a full scan per roster event and can never succeed.
+    if IsPvPInstance() then stats.pvpSkips = stats.pvpSkips + 1; return end
+
     if IsInRaid() then
-        for i = 1, GetNumGroupMembers() do ProcessUnit("raid" .. i, false, generation, now) end
+        local count = math.min(GetNumGroupMembers() or 0, #RAID_UNITS)
+        for i = 1, count do ProcessUnit(RAID_UNITS[i], false, generation, now) end
     elseif IsInGroup() then
-        for i = 1, GetNumSubgroupMembers() do ProcessUnit("party" .. i, false, generation, now) end
+        local count = math.min(GetNumSubgroupMembers() or 0, #PARTY_UNITS)
+        for i = 1, count do ProcessUnit(PARTY_UNITS[i], false, generation, now) end
     end
 
     if not IsInspectPaused() then SchedulePump(0) end
@@ -292,6 +339,7 @@ PumpQueue = function()
                     if pendingInspect and pendingInspect.guid == request.guid then RetryPending(true) end
                 end)
                 issuingInspect = true
+                stats.inspects = stats.inspects + 1
                 local ok = pcall(NotifyInspect, request.unit)
                 issuingInspect = false
                 if not ok then RetryPending(false) end
@@ -299,7 +347,7 @@ PumpQueue = function()
             end
             cache.inspectFailures = (cache.inspectFailures or 0) + 1
             cache.inspectRetryAt = GetTime() + Backoff(cache.inspectFailures)
-            ScheduleRosterRefresh(cache.inspectRetryAt - GetTime())
+            ScheduleRetrySweep(cache.inspectRetryAt - GetTime())
         end
     end
 

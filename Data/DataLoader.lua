@@ -217,6 +217,11 @@ function CT:RebuildOverall(sessions, sessionCount)
     if not ns.Segments or not G then return false, "not-ready" end
     local old = ns.Segments.overall
     local meta = {type = "overall", name = old and old.name or ns.L.OVERALL}
+    -- This allocates a whole new snapshot: every player, every spell row, the
+    -- death log and the enemy list.  Its cost scales with group size, so how
+    -- often it runs is the single biggest driver of this addon's GC churn.
+    -- /ld diag reports the count so that is measurable rather than argued about.
+    CT._overallRebuilds = (CT._overallRebuilds or 0) + 1
     local candidate, status = G:BuildOverallCandidate(meta)
     if not candidate then return false, status end
     local replacement = ns.Segments:NewSegment("overall", candidate.name)

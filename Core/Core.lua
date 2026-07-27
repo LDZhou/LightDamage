@@ -186,6 +186,10 @@ ns.defaults = {
     },
     layoutSchema = 3,
     layoutDefs = {},
+    -- When true every scene reads and writes sharedWorkspace for position and
+    -- size; each scene still keeps its own layoutId in sceneWorkspaces.
+    shareWindowGeometry = false,
+    sharedWorkspace = {windowWidth=420,windowHeight=300,point="CENTER",relPoint="CENTER",x=320,y=-170},
     sceneWorkspaces = {
         mplus={layoutId="preset2",windowWidth=420,windowHeight=300,point="CENTER",relPoint="CENTER",x=320,y=-170},
         raid={layoutId="preset2",windowWidth=420,windowHeight=300,point="CENTER",relPoint="CENTER",x=320,y=-170},
@@ -213,6 +217,7 @@ local PROFILE_CONFIG_KEYS = {
     smartRefresh=true, useBlizzMeter=true, detailWindow=true,
     detailDisplay=true, collapse=true, fade=true, profileSchema=true,
     layoutSchema=true, layoutDefs=true, sceneWorkspaces=true,
+    shareWindowGeometry=true, sharedWorkspace=true,
     fullRunSettings=true, cleanTrashSettings=true,
 }
 
@@ -498,6 +503,13 @@ function Core:OnEvent(event, ...)
     elseif event == "PLAYER_DEAD" then
         if ns.DeathTracker then ns.DeathTracker:OnPlayerDead() end
     elseif event == "PLAYER_LOGOUT" then
+        -- The local Overall snapshot is not maintained during play: every range
+        -- reads Blizzard's live session instead.  Capture it once here, because
+        -- SavedVariables is the only consumer that outlives this session.
+        if ns.CombatTracker and ns.CombatTracker.RebuildOverall
+            and ns.Segments and not ns.Segments:GetFullRunOverride() then
+            pcall(ns.CombatTracker.RebuildOverall, ns.CombatTracker)
+        end
         local saved = ns:SaveSessionHistory()
         if saved ~= false and ns.db then ns.db.savedHistorySchema = 2 end
     end
@@ -1002,6 +1014,18 @@ function ns:HandleSlashCommand(msg)
             if type(t) == "table" then for _ in pairs(t) do n = n + 1 end end
             return n
         end
+        -- Every counter here is cumulative, so a single reading says almost
+        -- nothing.  Remember the previous /ld diag and annotate each value with
+        -- what changed since then; two commands are then a complete measurement.
+        local previous = ns._diagPrevious or {}
+        local current, elapsed = {}, nil
+        if previous.at then elapsed = math.max(0, GetTime() - previous.at) end
+        local function delta(key, value)
+            current[key] = value
+            local before = previous[key]
+            if type(before) ~= "number" or type(value) ~= "number" then return "" end
+            return string.format(" (+%.0f)", value - before)
+        end
         local CT, segs = ns.CombatTracker, ns.Segments
         local count = 0
         local G = ns.DamageMeterGateway
@@ -1028,25 +1052,53 @@ function ns:HandleSlashCommand(msg)
                 tostring(ns.MythicPlus and ns.MythicPlus._pendingMythicSeg ~= nil)))
         end
         print(string.format("  playerCache=%d", countKeys(ns.PlayerInfoCache)))
+        -- Roster enrichment is linear in group size and fires on events that are
+        -- constant in a 40-player battleground.  unitsScanned is the real cost
+        -- driver; pvpSkips proves the PvP stand-down is engaged.
+        local ps = (ns.PlayerInfo and ns.PlayerInfo.stats) or {}
+        print(string.format("  roster sweeps=%d%s  unitsScanned=%d%s  pvpSkips=%d%s",
+            ps.sweeps or 0, delta("sweeps", ps.sweeps or 0),
+            ps.unitsScanned or 0, delta("unitsScanned", ps.unitsScanned or 0),
+            ps.pvpSkips or 0, delta("pvpSkips", ps.pvpSkips or 0)))
+        print(string.format("  inspects issued=%d%s  failed=%d%s",
+            ps.inspects or 0, delta("inspects", ps.inspects or 0),
+            ps.inspectFails or 0, delta("inspectFails", ps.inspectFails or 0)))
+        print(string.format("  overallRebuilds=%d%s", CT and CT._overallRebuilds or 0,
+            delta("overallRebuilds", CT and CT._overallRebuilds or 0)))
         local ev = CT and CT._evCounts or {}
-        print(string.format("  events cur=%d combat=%d flushes=%d regen=%d  |  GetAvailableSessions realcalls=%s",
-            ev.DAMAGE_METER_CURRENT_SESSION_UPDATED or 0, ev.DAMAGE_METER_COMBAT_SESSION_UPDATED or 0,
-            CT and CT._combatFlushCount or 0,
+        print(string.format("  events cur=%d combat=%d%s flushes=%d%s regen=%d  |  GetAvailableSessions realcalls=%s",
+            ev.DAMAGE_METER_CURRENT_SESSION_UPDATED or 0,
+            ev.DAMAGE_METER_COMBAT_SESSION_UPDATED or 0,
+            delta("combatEvents", ev.DAMAGE_METER_COMBAT_SESSION_UPDATED or 0),
+            CT and CT._combatFlushCount or 0, delta("flushes", CT and CT._combatFlushCount or 0),
             (ev.PLAYER_REGEN_DISABLED or 0) + (ev.PLAYER_REGEN_ENABLED or 0),
             tostring(G and G._sessionsRealCalls or 0)))
-        print(string.format("  timing flushMs=%.0f (n=%d)  refreshMs=%.0f (n=%d)",
+        print(string.format("  timing flushMs=%.0f (n=%d)  refreshMs=%.0f%s (n=%d%s)",
             CT and CT._flushMs or 0, CT and CT._combatFlushCount or 0,
-            ns._refreshMs or 0, ns._refreshCount or 0))
+            ns._refreshMs or 0, delta("refreshMs", ns._refreshMs or 0),
+            ns._refreshCount or 0, delta("refreshes", ns._refreshCount or 0)))
+        -- The per-refresh cost between the last two samples is the number that
+        -- actually answers "is this scene more expensive", so derive it here.
+        local refreshDelta = (ns._refreshCount or 0) - (previous.refreshes or 0)
+        local msDelta = (ns._refreshMs or 0) - (previous.refreshMs or 0)
+        if previous.at and refreshDelta > 0 then
+            print(string.format("  |cff33ccffsince last diag|r  %.0fs  %.2f ms/refresh  %.1f refresh/s",
+                elapsed or 0, msDelta / refreshDelta,
+                (elapsed and elapsed > 0) and (refreshDelta / elapsed) or 0))
+        end
         if UpdateAddOnMemoryUsage and GetAddOnMemoryUsage then
             UpdateAddOnMemoryUsage()
             print(string.format("  memory=%.0f KB", GetAddOnMemoryUsage("LightDamage") or 0))
         end
         if GetCVar and GetCVar("scriptProfile") == "1" and UpdateAddOnCPUUsage and GetAddOnCPUUsage then
             UpdateAddOnCPUUsage()
-            print(string.format("  cpu(cumulative)=%.1f ms", GetAddOnCPUUsage("LightDamage") or 0))
+            local cpu = GetAddOnCPUUsage("LightDamage") or 0
+            print(string.format("  cpu(cumulative)=%.1f ms%s", cpu, delta("cpu", cpu)))
         else
             print("  cpu: run '/console scriptProfile 1' then /reload to enable CPU numbers")
         end
+        current.at = GetTime()
+        ns._diagPrevious = current
     elseif msg == "debug" then
         ns:PrintDebugInfo()
     elseif msg == "api" then

@@ -1356,7 +1356,6 @@ function CT:WatchdogTick()
     local beforeCursor = self._lastProcessedCount or 0
     local beforeActions = #self._actions
     local beforePending = self._pendingArchiveIndex
-    local beforeResetGeneration = self._confirmedResetGeneration or 0
     local firstAction = self._actions[1]
     local needsArchive = self:HasPendingActions() and not (firstAction and firstAction.discardRaw)
     local archiveReady = true
@@ -1365,11 +1364,14 @@ function CT:WatchdogTick()
     local changed = reboundCurrent or beforeCursor ~= (self._lastProcessedCount or 0)
         or beforeActions ~= #self._actions
         or beforePending ~= self._pendingArchiveIndex
-    local resetOccurred = beforeResetGeneration ~= (self._confirmedResetGeneration or 0)
-    if not resetOccurred and (hadDirty or changed) and ns.Segments
-        and not ns.Segments:GetFullRunOverride() and not ns.state.inCombat then
-        self:RebuildOverall()
-    end
+    -- No RebuildOverall here.  Inside an instance this addon is a view over
+    -- Blizzard's own data: History rows are virtual sessions and every range,
+    -- Total included, reads the live C_DamageMeter session.  Nothing rendered
+    -- here reads the local Overall snapshot, and rebuilding it walks every
+    -- player and every spell -- measured at tens of milliseconds and megabytes
+    -- per call, which is what froze a battleground after dying, when the window
+    -- had stopped refreshing but the meter kept publishing.  The snapshot is
+    -- captured once at logout, the only moment its saved copy is read back.
     if (hadDirty or changed) and ns.UI and ns.UI:IsVisible() then ns.UI:Refresh() end
     return progressed and not self:HasPendingActions()
 end
