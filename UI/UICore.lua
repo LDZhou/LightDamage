@@ -469,7 +469,6 @@ function UI:Build()
     if ns.db.window.visible == false then f:Hide()
     else f:Show(); self:Layout() end
 
-    self:CheckAutoCollapse(true)
     self._lastFontHash = nil
     self._sessionCache = {}
 

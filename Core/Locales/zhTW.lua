@@ -202,7 +202,7 @@ ns:RegisterLocale("zhTW", {
     KEPT_BOSSES_FORMAT = "，保留 %d 個 Boss",
     KILLER = "擊殺者",
     LEFT = "左側",
-    MAX_HISTORY_SEGMENTS = "歷史紀錄顯示上限",
+    MAX_HISTORY_SEGMENTS = "歷史紀錄上限",
     HISTORY_DISPLAY_LIMIT = "歷史紀錄顯示上限",
     ME = "我",
     MELEE = "近戰",

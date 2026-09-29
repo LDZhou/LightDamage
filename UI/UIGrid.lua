@@ -10,7 +10,10 @@ local baseEnsureCreated=UI.EnsureCreated
 function UI:EnsureCreated()
     local existed=self.frame~=nil
     baseEnsureCreated(self)
-    if not existed and self.frame then self:ApplySceneWorkspace(ns.state.sceneKey or "outdoor") end
+    if not existed and self.frame then
+        self:ApplySceneWorkspace(ns.state.sceneKey or "outdoor")
+        self:CheckAutoCollapse(true)
+    end
 end
 
 local function activeScene()
@@ -454,7 +457,11 @@ end
 
 function UI:PersistWorkspaceGeometry()
     local ws=self:GetGeometryWorkspace(); local point,_,relPoint,x,y=self.frame:GetPoint()
-    ws.point=point; ws.relPoint=relPoint; ws.x=x; ws.y=y; ws.windowWidth=self.frame:GetWidth(); ws.windowHeight=(self._collapsed and self._savedHeight) or self.frame:GetHeight()
+    local width=self.frame:GetWidth(); local height=(self._collapsed and self._savedHeight) or self.frame:GetHeight()
+    local function finite(value) return type(value)=="number" and value==value and value~=math.huge and value~=-math.huge end
+    if type(point)~="string" or type(relPoint)~="string" or not finite(x) or not finite(y)
+        or not finite(width) or not finite(height) or width<=0 or height<=0 then return end
+    ws.point=point; ws.relPoint=relPoint; ws.x=x; ws.y=y; ws.windowWidth=width; ws.windowHeight=height
     if self._collapsed then self._savedAnchor={point,UIParent,relPoint,x,y} end
     if self._previewContext and ns.Config and ns.Config.RefreshLayoutStudio then ns.Config:RefreshLayoutStudio() end
 end

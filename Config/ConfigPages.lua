@@ -472,6 +472,10 @@ function Config:BuildLegacyPerfPage()
         function(v)
             ns.db.tracking.historyDisplayLimit = v
             ns.db.tracking.maxSegments = v -- legacy readers/migration compatibility
+            if ns.CombatTracker and ns.CombatTracker.SmartTrimHistory
+                and ns.CombatTracker:SmartTrimHistory(true) > 0 and ns.SaveSessionHistory then
+                ns:SaveSessionHistory()
+            end
             ns.Segments:SetViewSegment(ns.Segments.viewIndex)
         end)
     inner:SetHeight(math.abs(y) + 20)

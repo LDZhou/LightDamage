@@ -2,7 +2,8 @@
     Light Damage - HistoryStore.lua
 
     Persistent history is lossless with respect to the in-memory local
-    archive.  maxSegments is a presentation limit only.  Secret values are
+    archive.  History is trimmed in batches after exceeding the display limit
+    by five records.  Secret values are
     never copied into SavedVariables; if a supposedly committed segment is
     found to contain one, the whole save is rejected and the previous save is
     retained.
@@ -102,8 +103,14 @@ end
 
 function H:Save()
     if not ns.db or not ns.Segments then return false, "not-ready" end
+    local history = ns.Segments.history or {}
+    local trimCount, trimOverride = 0, false
+    if ns.CombatTracker and ns.CombatTracker.SmartTrimHistory then
+        trimCount, trimOverride = ns.CombatTracker:SmartTrimHistory(true)
+    end
     local savedHistory = {}
-    for _, seg in ipairs(ns.Segments.history or {}) do
+    for i = 1, #history - trimCount do
+        local seg = history[i]
         local compact, ok = self:GetCompact(seg)
         if not ok then
             self.lastError = "secret-or-unsupported-history-value"
@@ -114,6 +121,9 @@ function H:Save()
 
     local savedOverall = nil
     local overall = ns.Segments.overall
+    if trimOverride and overall and overall._localID == ns.db.fullRunOverrideLocalID then
+        overall = nil
+    end
     if overall then
         local compact, ok = self:GetCompact(overall)
         if not ok then
@@ -125,6 +135,10 @@ function H:Save()
             savedOverall = compact
         end
     end
+
+    -- Nothing live is removed until the replacement snapshot has passed all
+    -- secret-value checks.  A failed save leaves the previous archive intact.
+    if trimCount > 0 then ns.CombatTracker:SmartTrimHistory() end
 
     -- Commit SavedVariables only after every segment has been validated.
     ns.db.savedHistory = savedHistory

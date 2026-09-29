@@ -267,6 +267,13 @@ function ns:LoadSessionHistory()
         end
         table.insert(ns.Segments.history, seg)
     end
+    if ns.CombatTracker and ns.CombatTracker.SmartTrimHistory
+        and ns.CombatTracker:SmartTrimHistory() > 0 then
+        -- Release old saved references without aliasing the live history array:
+        -- a later failed snapshot must not mutate the previous saved list.
+        local savedHistory = ns.db.savedHistory
+        for i = #savedHistory, #ns.Segments.history + 1, -1 do savedHistory[i] = nil end
+    end
     -- ★ 不再设置 viewIndex = 1 (新架构由 PLAYER_ENTERING_WORLD 后的 0.5s 回调统一定位)
 
     -- 恢复 overall

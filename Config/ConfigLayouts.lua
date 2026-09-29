@@ -466,6 +466,10 @@ y=self:Slider(inner,L.MAX_HISTORY_SEGMENTS,y,5,100,1,
     function(v)
         ns.db.tracking.historyDisplayLimit = v
         ns.db.tracking.maxSegments = v
+        if ns.CombatTracker and ns.CombatTracker.SmartTrimHistory
+            and ns.CombatTracker:SmartTrimHistory(true) > 0 and ns.SaveSessionHistory then
+            ns:SaveSessionHistory()
+        end
         if ns.Segments then
             ns.Segments:SetViewSegment(ns.Segments.viewIndex)
         end

@@ -202,7 +202,7 @@ ns:RegisterLocale("enUS", {
     KEPT_BOSSES_FORMAT = ", kept %d Bosses",
     KILLER = "Killer",
     LEFT = "Left",
-    MAX_HISTORY_SEGMENTS = "History Display Limit",
+    MAX_HISTORY_SEGMENTS = "History Limit",
     HISTORY_DISPLAY_LIMIT = "History Display Limit",
     ME = "Me",
     MELEE = "Melee",

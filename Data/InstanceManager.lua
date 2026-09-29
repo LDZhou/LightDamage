@@ -23,9 +23,59 @@ local function shouldHideTrash(scene)
         and ns.db.cleanTrashSettings and ns.db.cleanTrashSettings[scene] == true
 end
 
--- maxSegments is display-only.  Kept as a compatibility no-op for callers.
-function ns.CombatTracker:SmartTrimHistory()
-    return ns.Segments and #(ns.Segments.history or {}) or 0
+function ns.CombatTracker:SmartTrimHistory(dryRun)
+    local segs = ns.Segments
+    local history = segs and segs.history
+    if not history then return 0 end
+    local limit = ns.GetHistoryDisplayLimit and ns:GetHistoryDisplayLimit() or 20
+    if #history < limit + 5 then return 0 end
+
+    -- A raid full run may still need every boss attempt, including attempts
+    -- currently outside the displayed history.  Defer this batch until exit.
+    local activeTag = self._currentInstanceTag
+    local exitingTag = self._exitingInstanceTag
+    -- During login the lifecycle owner has not restored its instance tag yet.
+    -- Later, use its live state: the saved copy can still describe an exited run.
+    local lifecycle = not self._worldSnapshot and LightDamageDB and LightDamageDB.lightDamageLifecycle
+    if type(lifecycle) == "table" then
+        if not activeTag and type(lifecycle.active) == "table" then activeTag = lifecycle.active.tag end
+        if not exitingTag and type(lifecycle.pendingExit) == "table" then exitingTag = lifecycle.pendingExit.tag end
+    end
+    for i = limit + 1, #history do
+        local tag = history[i]._instanceTag
+        if tag and (tag == activeTag or tag == exitingTag) then return 0 end
+    end
+
+    local removed = #history - limit
+    local overrideID = ns.db and ns.db.fullRunOverrideLocalID
+    local removedOverride = false
+    if overrideID then
+        for i = limit + 1, #history do
+            if history[i]._localID == overrideID then removedOverride = true; break end
+        end
+    end
+    if dryRun then return removed, removedOverride end
+
+    local removedSelected = false
+    local selectedID = segs.viewIndex and segs.viewIndex.kind == "archived" and segs.viewIndex.localID
+    for i = #history, limit + 1, -1 do
+        local old = table.remove(history)
+        if old._localID == selectedID then removedSelected = true end
+        if ns.HistoryStore then ns.HistoryStore:Invalidate(old) end
+    end
+    if removedOverride then
+        segs:ClearFullRunOverride()
+        if ns.db.savedOverall and ns.db.savedOverall._localID == overrideID then
+            ns.db.savedOverall = nil
+        end
+    end
+    if segs.GCHiddenLocalIDs then segs:GCHiddenLocalIDs() end
+    if ns.Analysis then ns.Analysis:InvalidateCache() end
+    if removedSelected then segs:ViewLatestHistory() end
+    if ns.HistoryList and ns.HistoryList.IsOpen and ns.HistoryList:IsOpen() then
+        ns.HistoryList:Rebuild()
+    end
+    return removed, removedOverride
 end
 
 local function matchingSegments(tag)

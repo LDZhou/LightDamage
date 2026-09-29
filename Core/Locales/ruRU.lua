@@ -202,7 +202,7 @@ ns:RegisterLocale("ruRU", {
     KEPT_BOSSES_FORMAT = ", оставлено боссов: %d",
     KILLER = "Убийца",
     LEFT = "Слева",
-    MAX_HISTORY_SEGMENTS = "Лимит отображения истории",
+    MAX_HISTORY_SEGMENTS = "Лимит истории",
     HISTORY_DISPLAY_LIMIT = "Лимит отображения истории",
     ME = "Я",
     MELEE = "Ближний бой",
