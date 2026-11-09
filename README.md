@@ -10,6 +10,10 @@ This branch is built only for **WoW Forever** (interface 16001, Blizzard game ty
 
 Every Blizzard API, event and enum the addon references is checked against Forever's generated API documentation (`tools/forever_api_check.js`).
 
+## Install
+
+Unzip into `World of Warcraft\_forever_\Interface\AddOns`, so the folder reads `LightDamage`. The addon ships `LightDamage_Camelot.toc`, the TOC that WoW Forever loads; retail and Classic clients ignore it. Each game keeps its own `Interface\AddOns` and saved settings, so this build and the retail Light Damage never touch each other. On CurseForge it is the file marked for WoW Forever (game version 1.60.1).
+
 ## Features
 
 - **Overview and single-stat views:** The Overview combines multiple statistics in one window. Each statistic is also available as a focused single-panel view.

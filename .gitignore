@@ -2,7 +2,7 @@
 # that are not part of the shipped addon.  Everything ignored here still exists
 # on disk and keeps working in-game; it is simply not published.
 #
-# What IS shipped (never ignore): LightDamage.toc, Core/, Data/, UI/, Config/,
+# What IS shipped (never ignore): LightDamage_Camelot.toc, Core/, Data/, UI/, Config/,
 # Libs/, Textures/, README.md.
 
 # ---------------------------------------------------------------------------
