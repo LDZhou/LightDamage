@@ -11,11 +11,25 @@ local Config = ns.Config
 -- ============================================================
 -- Data 页
 -- ============================================================
+-- The short labels' legend ("DMG = Damage, ..."), built from the labels the
+-- bar really shows, so the two can never disagree.  A label the language
+-- cannot shorten is left out.
+function Config:BottomBarAbbreviationLegend()
+    local UI = ns.UI
+    if not (UI and UI.GetBottomTabLabel) then return "" end
+    local modes = { "overview" }
+    for _, m in ipairs(ns.MODE_ORDER) do modes[#modes + 1] = m end
+    local parts = {}
+    for _, m in ipairs(modes) do
+        local short, full = UI:GetBottomTabLabel(m, true), UI:GetBottomTabLabel(m, false)
+        if short and full and short ~= full then parts[#parts + 1] = short .. " = " .. full end
+    end
+    return table.concat(parts, L.LIST_SEPARATOR or ", ")
+end
+
 function Config:BuildBottomBarSettings(page)
     local y = 0
     y = self:H(page, L.BOTTOM_BAR_SETTINGS, y)
-    y = self:Desc(page, y, L.BOTTOM_BAR_SETTINGS_DESC)
-    y = self:Desc(page, y, L.BOTTOM_BAR_OVERVIEW_ALWAYS)
     local function BottomModes()
         ns.db.display.bottomBarModes=type(ns.db.display.bottomBarModes)=="table" and ns.db.display.bottomBarModes or {}
         return ns.db.display.bottomBarModes
@@ -26,25 +40,27 @@ function Config:BuildBottomBarSettings(page)
             ns.UI:LayoutTabs(); ns.UI:Refresh()
         end
     end
-    y = self:Dropdown(page, L.BOTTOM_BAR_LABEL_STYLE, y, {
-            {l=L.TAB_LABEL_STYLE_FULL, v="full"},
-            {l=L.TAB_LABEL_STYLE_SHORT, v="short"},
-        },
-        function() return ns.db.display.tabLabelStyle=="short" and "short" or "full" end,
+    -- Short labels: one switch, its legend right under it.  (A dropdown
+    -- above the statistics list, with the legend below the list, read as
+    -- if ticking a statistic were what abbreviated it.)
+    y = self:Check(page, L.BOTTOM_BAR_ABBREVIATE, y,
+        function() return ns.db.display.tabLabelStyle == "short" end,
         function(v)
-            ns.db.display.tabLabelStyle=v
-            ns.db.display.useShortTabs=(v=="short")
+            ns.db.display.tabLabelStyle = v and "short" or "full"
+            ns.db.display.useShortTabs = v and true or false
             RefreshBottomBar()
         end)
+    y = self:Desc(page, y, self:BottomBarAbbreviationLegend())
     y = y - 8
+    -- Which statistics sit on the bar.
+    y = self:Desc(page, y, L.BOTTOM_BAR_SETTINGS_DESC)
+    y = self:Desc(page, y, L.BOTTOM_BAR_OVERVIEW_ALWAYS)
     for _,mode in ipairs(ns.MODE_ORDER) do
         local m=mode
         y = self:Check(page, L[ns.MODE_NAMES[m] or m], y,
             function() return BottomModes()[m] == true end,
             function(v) BottomModes()[m]=v and true or false; RefreshBottomBar() end)
     end
-    y = y - 8
-    y = self:Desc(page, y, L.CONFIG_WHEN_ENABLED_DAMAGE_DAMAGE_HEAL_HEAL_TAKEN_TKN_DEATHS_DTH_INTERR)
     return y
 end
 
