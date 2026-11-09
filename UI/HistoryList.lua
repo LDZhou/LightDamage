@@ -5,11 +5,9 @@
     ★ 改造说明 (虚拟段架构):
     - SetupItem 用 entry.key / entry.localID / entry.sessionID 判断高亮
     - delBtn 不再 table.remove,改为 Segments:HideSession(entry) 黑名单
-    - clearBtn 一键清野外:批量黑名单 + (野外时) ResetAllCombatSessions + 清 sessionID 黑名单
 ]]
 
 local addonName, ns = ...
-local L = ns.L
 
 local HL = {}
 ns.HistoryList = HL
@@ -88,68 +86,6 @@ function HL:Build()
     local sep = f:CreateTexture(nil, "ARTWORK")
     sep:SetHeight(1); sep:SetColorTexture(unpack(T.sep))
     local pinned = CreateFrame("Frame", nil, f)
-
-    -- 一键清空野外按钮
-    local clrBtn = CreateFrame("Button", nil, f)
-    clrBtn:SetHeight(18)
-    local cbBg = clrBtn:CreateTexture(nil, "BACKGROUND")
-    cbBg:SetAllPoints(); cbBg:SetColorTexture(0.20, 0.05, 0.05, 0.8)
-    local cbHl = clrBtn:CreateTexture(nil, "HIGHLIGHT")
-    cbHl:SetAllPoints(); cbHl:SetColorTexture(0.40, 0.10, 0.10, 0.9)
-    local cbTxt = clrBtn:CreateFontString(nil, "OVERLAY")
-    cbTxt:SetFont(STANDARD_TEXT_FONT, 10, "OUTLINE")
-    cbTxt:SetPoint("CENTER")
-    cbTxt:SetText(L.CLEAR_OUTDOOR_COMBAT)
-    cbTxt:SetTextColor(1, 0.4, 0.4)
-
-    clrBtn:SetScript("OnClick", function()
-        if ns.UI and ns.UI._previewContext then self:Hide(); return end
-        if not ns.Segments then self:Hide(); return end
-        local segs = ns.Segments
-        self:Hide()
-
-        -- 1. 清掉所有标记为野外的归档段
-        ns.db.hiddenLocalIDs = ns.db.hiddenLocalIDs or {}
-        local cleared = 0
-        for _, seg in ipairs(segs.history) do
-            if seg._wasOutdoor
-               and not seg._isBoss
-               and not seg._isMerged
-               and seg._localID
-            then
-                ns.db.hiddenLocalIDs[seg._localID] = true
-                cleared = cleared + 1
-            end
-        end
-
-        -- 2. 当前在野外:暴雪 API 的 sessions 全是野外产生的,直接 reset 干掉所有虚拟段
-        --    当前在副本:不动 meter,副本里跑的 sessions 都要保留
-        if not ns.state.isInInstance then
-            if ns.CombatTracker then
-                ns.CombatTracker:ResetMeterForNewRun()
-            end
-            segs.overall = segs:NewSegment("overall", L.OVERALL)
-        end
-
-        -- 3. 视图修正：清完后总是跳到合并列表第一条
-        local merged = segs:GetMergedSegmentList()
-        if merged[1] then
-            if merged[1]._isVirtual then
-                segs:ViewVirtual(merged[1]._sessionID)
-            elseif merged[1]._localID then
-                segs:ViewArchived(merged[1]._localID)
-            end
-        else
-            segs:ViewCurrent()
-        end
-
-        if ns.SaveSessionHistory then ns:SaveSessionHistory() end
-        if ns.Analysis then ns.Analysis:InvalidateCache() end
-        if ns.UI then ns.UI:Refresh() end
-
-        print(L.MSG_LIGHT_DAMAGE_CLEARED_OUTDOOR_HISTORY)
-    end)
-    self.clearBtn = clrBtn
 
     self.frame = f; self.scrollFrame = sf; self.scrollChild = child
     self.scrollBar = sb; self.sep = sep; self.pinnedContainer = pinned
@@ -279,11 +215,8 @@ function HL:Rebuild()
     end
     self.pinnedContainer:SetHeight(pinnedHeight)
 
-    self.clearBtn:ClearAllPoints()
-    self.clearBtn:SetPoint("TOPLEFT", self.pinnedContainer, "BOTTOMLEFT", 1, -2)
-    self.clearBtn:SetPoint("TOPRIGHT", self.pinnedContainer, "BOTTOMRIGHT", -1, -2)
-
-    local totalFrameHeight = histHeight + pinnedHeight + 18 + (#histData > 0 and #pinnedData > 0 and 5 or 2) + 2
+    -- The list ends one pixel below the pinned rows (the separator adds four).
+    local totalFrameHeight = histHeight + pinnedHeight + (#histData > 0 and #pinnedData > 0 and 5 or 1) + 1
     self.frame:SetHeight(totalFrameHeight)
 
     if #histData > MAX_SHOW then
@@ -336,7 +269,7 @@ function HL:MakeItem(parent)
     delBtn:SetSize(16, 16)
     delBtn:SetPoint("RIGHT", -4, 0)
     local delTxt = delBtn:CreateFontString(nil, "OVERLAY")
-    delTxt:SetFont(STANDARD_TEXT_FONT, 10, "OUTLINE")
+    delTxt:SetFont(ns:LocaleFont(), 10, "OUTLINE")
     delTxt:SetPoint("CENTER")
     delTxt:SetText("X")
     delTxt:SetTextColor(0.6, 0.2, 0.2)
@@ -344,7 +277,7 @@ function HL:MakeItem(parent)
     delBtn:SetScript("OnLeave", function() delTxt:SetTextColor(0.6, 0.2, 0.2) end)
     item.delBtn = delBtn
 
-    local txt = f:CreateFontString(nil, "OVERLAY"); txt:SetFont(STANDARD_TEXT_FONT, 10, "OUTLINE")
+    local txt = f:CreateFontString(nil, "OVERLAY"); txt:SetFont(ns:LocaleFont(), 10, "OUTLINE")
     txt:SetPoint("LEFT", 8, 0)
     txt:SetPoint("RIGHT", delBtn, "LEFT", -4, 0)
     txt:SetJustifyH("LEFT"); txt:SetWordWrap(false)

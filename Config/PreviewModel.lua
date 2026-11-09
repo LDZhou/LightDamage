@@ -5,12 +5,13 @@ local PreviewModel={}
 PreviewModel.__index=PreviewModel
 ns.PreviewModel=PreviewModel
 
+-- WoW Forever characters are "First Last", so the preview shows the Name Format.
 local NORMAL={
- {"Arcsmith","MAGE",14200000,320000,2800000,0,8,3}, {"Ironhide","WARRIOR",12800000,180000,3200000,1,5,1},
- {"Thornwood","DRUID",11500000,9800000,1200000,0,2,4}, {"Voidweaver","WARLOCK",10900000,420000,1900000,0,3,1},
- {"Swiftbolt","HUNTER",9800000,280000,2100000,2,3,0}, {"Dawnstrike","PALADIN",8600000,8200000,1800000,0,6,5},
- {"Frostmantle","DEATHKNIGHT",7900000,150000,4100000,1,2,0}, {"Embercrest","ROGUE",7200000,200000,1600000,0,9,0},
- {"Silvermist","PRIEST",5100000,12400000,900000,4,1,8}, {"Stonehowl","SHAMAN",5800000,6800000,1500000,0,4,2},
+ {"Arcsmith Duskhollow","MAGE",14200000,320000,2800000,0,8,3}, {"Ironhide Stonefist","WARRIOR",12800000,180000,3200000,1,5,1},
+ {"Thornwood Mossbrook","DRUID",11500000,9800000,1200000,0,2,4}, {"Voidweaver Ashgrave","WARLOCK",10900000,420000,1900000,0,3,1},
+ {"Swiftbolt Reedmere","HUNTER",9800000,280000,2100000,2,3,0}, {"Dawnstrike Goldvale","PALADIN",8600000,8200000,1800000,0,6,5},
+ {"Frostmantle Grimward","DEATHKNIGHT",7900000,150000,4100000,1,2,0}, {"Embercrest Nightrun","ROGUE",7200000,200000,1600000,0,9,0},
+ {"Silvermist Brightwell","PRIEST",5100000,12400000,900000,4,1,8}, {"Stonehowl Tidecaller","SHAMAN",5800000,6800000,1500000,0,4,2},
 }
 
 local LONG_NAMES={

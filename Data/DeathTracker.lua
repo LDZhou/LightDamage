@@ -89,16 +89,17 @@ local function GetDeathSpecIconID(guid, src)
     end
 
     if not IsSecretValue(guid) and type(guid) == "string" and guid == ns.state.playerGUID then
-        local specIdx = GetSpecialization()
-        if specIdx then
-            local _, _, _, icon = GetSpecializationInfo(specIdx)
-            if icon and icon > 0 then return icon end
+        -- Forever has no global spec API (only C_SpecializationInfo); the
+        -- Utils helper resolves either and never throws.
+        if ns.GetPlayerSpec then
+            local _, icon = ns:GetPlayerSpec()
+            if icon then return icon end
         end
     end
 
     if not IsSecretValue(guid) and type(guid) == "string" then
         local cache = ns.PlayerInfoCache and ns.PlayerInfoCache[guid]
-        if cache and cache.specID then
+        if cache and cache.specID and type(GetSpecializationInfoByID) == "function" then
             local _, _, _, icon = GetSpecializationInfoByID(cache.specID)
             if icon and icon > 0 then return icon end
         end
@@ -119,6 +120,29 @@ end
 function DT:RecordIncomingDamage() end
 function DT:RecordIncomingHeal() end
 function DT:OnUnitDied() end
+
+-- Naming ported from Blizzard_DeathRecap (DeathRecapEntryMixin:GetEventInfo).
+-- A melee swing or an environmental hit carries no spell name, so the raw
+-- event token ("SWING_DAMAGE") used to be shown instead.  Blizzard names a
+-- swing ACTION_SWING and gives it the auto-attack spell (its icon and
+-- tooltip), and environmental damage ACTION_ENVIRONMENTAL_DAMAGE_<TYPE>.
+local function NameRecapEvent(eventType, spellID, spellName, environmentalType)
+    if eventType == "SWING_DAMAGE" then
+        local consts = type(Constants) == "table" and Constants.DeathRecapConsts or nil
+        local swingID = type(consts) == "table" and consts.SWING_DAMAGE_SPELL_ID or nil
+        return swingID or spellID, ACTION_SWING or spellName
+    elseif eventType == "ENVIRONMENTAL_DAMAGE" and type(environmentalType) == "string" then
+        return spellID, _G["ACTION_ENVIRONMENTAL_DAMAGE_" .. string.upper(environmentalType)] or spellName
+    end
+    return spellID, spellName
+end
+
+-- Death records saved before swings were named still hold the raw token;
+-- show the same name a new record gets.  Saved data is left untouched.
+function ns:DeathEventLabel(text)
+    if text == "SWING_DAMAGE" then return ACTION_SWING or text end
+    return text
+end
 
 function DT:ParseRecapEvents(recapEvents, maxHP)
     local result = {}
@@ -143,6 +167,8 @@ function DT:ParseRecapEvents(recapEvents, maxHP)
         -- Without it, omitting the row is safer than inventing a sign/type.
         if evType then
             local isHeal = (evType == "SPELL_HEAL" or evType == "SPELL_PERIODIC_HEAL")
+            spellID, spellName = NameRecapEvent(evType, spellID, spellName,
+                evType == "ENVIRONMENTAL_DAMAGE" and OptionalString(ReadField(ev, "environmentalType")) or nil)
             local amount = OptionalNum(ReadField(ev, "amount"))
             local overkill = OptionalNum(ReadField(ev, "overkill"))
             if type(overkill) == "number" and overkill < 0 then overkill = 0 end
@@ -189,25 +215,22 @@ local function GetRecapMaxHealth(recapID)
     return nil
 end
 
-function DT:BuildDeathRecordFromRecapID(recapID, src)
-    if IsSecretValue(recapID) or type(recapID) ~= "number" or recapID <= 0 then return nil end
-
-    local guid = type(src) == "table" and ReadField(src, "sourceGUID") or nil
-    local rawIsSelf = type(src) == "table" and ReadField(src, "isLocalPlayer") or nil
-    local isSelf = not IsSecretValue(rawIsSelf) and rawIsSelf == true
-
-    -- sourceGUID 可能是 secret，不能比较 guid == ns.state.playerGUID。
-    if isSelf then
-        guid = ns.state.playerGUID or UnitGUID("player")
-    elseif IsSecretValue(guid) then
-        guid = nil
+-- A published death recap never changes, but a Deaths cell rebuilt every one
+-- of them on every render tick: two C_DeathRecap calls, event parsing and
+-- totals per death.  Only the recap-derived part is cached (per-session fields
+-- such as the death count differ between Current and Total and are rebuilt by
+-- the caller).  Scoped to the meter's raw generation, so a reset that can
+-- reuse recap IDs starts clean.  An empty recap is usually one Blizzard has
+-- not published yet and is retried on the next refresh rather than cached.
+function DT:GetRecapSummary(recapID)
+    local generation = G and G:GetRawGeneration() or 0
+    local cache = self._apiDeathCache
+    if type(cache) ~= "table" or cache._generation ~= generation then
+        cache = {_generation = generation}
+        self._apiDeathCache = cache
     end
-
-    local class = OptionalString(type(src) == "table" and ReadField(src, "classFilename") or nil)
-
-    -- 关键：src.name 是 ConditionalSecret，secret 时原样保存给 UI，不要替换成“未知”。
-    local rawName = type(src) == "table" and ReadField(src, "name") or nil
-    local playerName = DisplayNameValue(rawName, isSelf and (UnitName("player") or L.ME) or L.UNKNOWN)
+    local entry = cache[recapID]
+    if entry then return entry end
 
     local maxHP = GetRecapMaxHealth(recapID)
     local recapEvents = GetRecapEvents(recapID)
@@ -236,31 +259,61 @@ function DT:BuildDeathRecordFromRecapID(recapID, src)
         timeSpan = events[#events].time - events[1].time
     end
 
-    local ts = (#events > 0 and type(events[#events].time) == "number")
-        and math.floor(events[#events].time) or nil
+    entry = {
+        maxHP = maxHP, events = events,
+        killingAbility = killingAbility, killerName = killerName,
+        totalDmg = totalDmg, totalHeal = totalHeal, timeSpan = timeSpan,
+        ts = (#events > 0 and type(events[#events].time) == "number")
+            and math.floor(events[#events].time) or nil,
+    }
+    if #events > 0 then cache[recapID] = entry end
+    return entry
+end
+
+function DT:BuildDeathRecordFromRecapID(recapID, src)
+    if IsSecretValue(recapID) or type(recapID) ~= "number" or recapID <= 0 then return nil end
+
+    local guid = type(src) == "table" and ReadField(src, "sourceGUID") or nil
+    local rawIsSelf = type(src) == "table" and ReadField(src, "isLocalPlayer") or nil
+    local isSelf = not IsSecretValue(rawIsSelf) and rawIsSelf == true
+
+    -- sourceGUID 可能是 secret，不能比较 guid == ns.state.playerGUID。
+    if isSelf then
+        guid = ns.state.playerGUID or UnitGUID("player")
+    elseif IsSecretValue(guid) then
+        guid = nil
+    end
+
+    local class = OptionalString(type(src) == "table" and ReadField(src, "classFilename") or nil)
+
+    -- 关键：src.name 是 ConditionalSecret，secret 时原样保存给 UI，不要替换成“未知”。
+    local rawName = type(src) == "table" and ReadField(src, "name") or nil
+    local playerName = DisplayNameValue(rawName, isSelf and (UnitName("player") or L.ME) or L.UNKNOWN)
+
+    local recap = self:GetRecapSummary(recapID)
 
     return {
-        timestamp            = ts,
+        timestamp            = recap.ts,
         gameTime             = nil,
         playerName           = playerName,
         playerGUID           = guid,
         playerClass          = class,
         isSelf               = isSelf,
-        killingAbility       = killingAbility,
-        killerName           = killerName,
-        events               = events,
+        killingAbility       = recap.killingAbility,
+        killerName           = recap.killerName,
+        events               = recap.events,
         lastHP               = nil,
-        maxHP                = maxHP,
-        totalDamageTaken     = totalDmg,
-        totalHealingReceived = totalHeal,
-        timeSpan             = timeSpan,
+        maxHP                = recap.maxHP,
+        totalDamageTaken     = recap.totalDmg,
+        totalHealingReceived = recap.totalHeal,
+        timeSpan             = recap.timeSpan,
         _fromRecap           = true,
         _recapID             = recapID,
         _specIconID          = GetDeathSpecIconID(guid, src),
         _deathCount          = GetDeathCount(src),
         _deathTimeSeconds    = OptionalNum(type(src) == "table" and ReadField(src, "deathTimeSeconds") or nil),
         _apiGenerated        = true,
-        _incomplete          = (#events == 0),
+        _incomplete          = (#recap.events == 0),
     }
 end
 
@@ -350,19 +403,25 @@ function DT:BuildDeathRecordForArchive(recapID, src)
             fallback._incompleteReason = pending
             return fallback, pending
         else
-            local function eventField(key, expectedType, default)
+            -- notApplicable: an absent field is expected for this row and is not
+            -- a gap in the recap (a malformed or protected one still is).
+            local function eventField(key, expectedType, default, notApplicable)
                 local value, state = ReadField(ev, key)
                 if state == pending then return nil, pending end
+                if state == missing and notApplicable then return default end
                 if state ~= accessible then note(state); return default end
                 if type(value) ~= expectedType then note(failed); return default end
                 return value, accessible
             end
 
-            local spellID, state = eventField("spellId", "number", nil)
+            local eventType, state = eventField("event", "string", nil)
             if state == pending then fallback._incompleteReason = pending; return fallback, pending end
-            local spellName; spellName, state = eventField("spellName", "string", nil)
+            -- A melee swing or an environmental hit has no spell (Blizzard's
+            -- own death recap never reads one for them).
+            local noSpell = eventType == "SWING_DAMAGE" or eventType == "ENVIRONMENTAL_DAMAGE"
+            local spellID; spellID, state = eventField("spellId", "number", nil, noSpell)
             if state == pending then fallback._incompleteReason = pending; return fallback, pending end
-            local eventType; eventType, state = eventField("event", "string", nil)
+            local spellName; spellName, state = eventField("spellName", "string", nil, noSpell)
             if state == pending then fallback._incompleteReason = pending; return fallback, pending end
             local amount; amount, state = eventField("amount", "number", nil)
             if state == pending then fallback._incompleteReason = pending; return fallback, pending end
@@ -379,6 +438,10 @@ function DT:BuildDeathRecordForArchive(recapID, src)
 
             if eventType then
                 local isHeal = eventType == "SPELL_HEAL" or eventType == "SPELL_PERIODIC_HEAL"
+                -- environmentalType exists only on environmental rows; reading
+                -- it there alone keeps every other row from looking incomplete.
+                spellID, spellName = NameRecapEvent(eventType, spellID, spellName,
+                    eventType == "ENVIRONMENTAL_DAMAGE" and OptionalString(ReadField(ev, "environmentalType")) or nil)
                 if type(overkill) == "number" and overkill < 0 then overkill = 0 end
                 local signedAmount = type(amount) == "number"
                     and (isHeal and -math.abs(amount) or math.abs(amount)) or nil
@@ -439,6 +502,16 @@ end
 
 local function InsertOrdered(list, record)
     if record then table.insert(list, record) end
+end
+
+-- Self first, then the most recent death.  Hoisted so sorting a Deaths cell
+-- on every refresh does not allocate a new closure.
+local function CompareDeathRecords(a, b)
+    if a.isSelf ~= b.isSelf then return a.isSelf end
+    local at = a._deathTimeSeconds or 0
+    local bt = b._deathTimeSeconds or 0
+    if at ~= bt then return at > bt end
+    return (a.timestamp or 0) > (b.timestamp or 0)
 end
 
 function DT:GetDeathLogFromAPI(sessionType, sessionID, fallbackSegment)
@@ -507,13 +580,7 @@ function DT:GetDeathLogFromAPI(sessionType, sessionID, fallbackSegment)
         return fallbackSegment.deathLog
     end
 
-    table.sort(result, function(a, b)
-        if a.isSelf ~= b.isSelf then return a.isSelf end
-        local at = a._deathTimeSeconds or 0
-        local bt = b._deathTimeSeconds or 0
-        if at ~= bt then return at > bt end
-        return (a.timestamp or 0) > (b.timestamp or 0)
-    end)
+    table.sort(result, CompareDeathRecords)
 
     return result
 end

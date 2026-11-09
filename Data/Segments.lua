@@ -70,10 +70,8 @@ function Segments:NewPlayerData(guid, name, class)
 
     -- ★ 核心修复:如果是玩家自己,直接获取当前实时专精
     if guid == ns.state.playerGUID then
-        local specIdx = GetSpecialization()
-        if specIdx then
-            specID = GetSpecializationInfo(specIdx)
-        end
+        local current = ns.GetPlayerSpec and ns:GetPlayerSpec()
+        if current then specID = current end
     end
 
     return {
@@ -83,7 +81,6 @@ function Segments:NewPlayerData(guid, name, class)
         specID = specID,
         specIconID = nil,
         ilvl   = cache.ilvl or 0,
-        score  = cache.score or 0,
 
         damage      = 0, healing     = 0, overhealing = 0, absorbed    = 0, damageTaken = 0,
         avoidableDamageTaken = 0,
@@ -315,7 +312,7 @@ end
 -- 离开副本生成全程段落后，段落选择切到全程，“当前”和“总计”都显示它。
 -- 覆盖 ID 存在角色存档中，因此重载后仍延续，直到新战斗、重置或删除。
 function Segments:NormalizeFullRunName(seg)
-    if not seg or not seg._isMerged or seg._builtByMythicPlus then return false end
+    if not seg or not seg._isMerged then return false end
     local instanceName=seg.mapName or seg._instanceDisplayName
     if type(instanceName)~="string" or instanceName=="" then return false end
     local format=L.OVERALL_SEGMENT_NAME_FORMAT or "%s [Full Run]"
@@ -452,13 +449,6 @@ function Segments:BuildVirtualSegments()
     if not gateway or sessionsState ~= gateway.ACCESSIBLE
         or type(sessions) ~= "table" or #sessions == 0 then return {} end
 
-    -- Completion metadata and History rendering can race by one frame.  Refresh
-    -- the dedicated M+ overall classification before exposing raw rows so the
-    -- official run-wide source never appears as a duplicate user-facing fight.
-    if ns.CombatTracker and ns.CombatTracker.ClassifyLatestSyntheticMythicOverall then
-        ns.CombatTracker:ClassifyLatestSyntheticMythicOverall()
-    end
-
     -- 收集 history 中所有已归档段的 sessionID(归档段的原始来源)
     local archivedSIDs = {}
     local rawGeneration = gateway:GetRawGeneration()
@@ -487,9 +477,6 @@ function Segments:BuildVirtualSegments()
         local dur = durationPublic and rawDuration or 0
 
         local skip = false
-        local officialMythic = ns.CombatTracker
-            and ns.CombatTracker.IsSyntheticSessionID
-            and ns.CombatTracker:IsSyntheticSessionID(sid)
         if not sid then skip = true end
         -- Group combat state can remain true briefly after this session has
         -- completed.  Only hide the final row as live when its metadata does
@@ -497,23 +484,17 @@ function Segments:BuildVirtualSegments()
         local officiallyCompleted = ns.CombatTracker
             and ns.CombatTracker.IsCompletedSessionID
             and ns.CombatTracker:IsCompletedSessionID(sid)
-        local finalSessionStillLive = not officialMythic
-            and ns.state.inCombat and i == #sessions
+        local finalSessionStillLive = ns.state.inCombat and i == #sessions
             and not officiallyCompleted
             and not (durationState == gateway.ACCESSIBLE
                 and type(rawDuration) == "number" and rawDuration > 0)
         if finalSessionStillLive then skip = true end
         if archivedSIDs[sid] then skip = true end          -- 已经归档过
-        -- The exit transaction already copied Blizzard's dedicated M+ run-wide
-        -- session into LightDamage's own full-run segment.  Its source row is
-        -- retired here so the same run cannot appear twice in History.
-        if ns.CombatTracker and ns.CombatTracker.IsOfficialFullRunConsumed
-            and ns.CombatTracker:IsOfficialFullRunConsumed(sid) then skip = true end
         if ns.CombatTracker and ns.CombatTracker.IsSessionIndexArchivedForPendingBoundary
             and ns.CombatTracker:IsSessionIndexArchivedForPendingBoundary(i) then skip = true end
         if isSessionIDHidden(sid) then skip = true end     -- 用户黑名单
         -- Rendering History must never *classify* a raw session.  Classification
-        -- belongs to the instance/M+ lifecycle transaction and is scoped to the
+        -- belongs to the instance lifecycle transaction and is scoped to the
         -- current raw epoch.  Calling the heuristic here used to let stale reset
         -- state hide an otherwise ordinary Blizzard session.
         if not skip then
@@ -769,9 +750,6 @@ function Segments:GetViewLabel()
 
     if seg.type == "overall" then
         return L.COLORED_OVERALL
-    elseif seg.type == "mythicplus" then
-        if ns.MythicPlus then return ns.MythicPlus:FormatSegLabel(seg) end
-        return seg.name or L.MYTHIC_PLUS
     elseif seg.type == "boss" then
         return seg.name or seg.encounterName or L.COMBAT
     else
@@ -876,12 +854,7 @@ function Segments:GetHistoryList()
 
     for i = limit, 1, -1 do
         local seg = merged[i]
-        local label
-        if seg.type == "mythicplus" then
-            label = ns.MythicPlus and ns.MythicPlus:FormatSegLabel(seg) or seg.name
-        else
-            label = seg.name or L.COMBAT
-        end
+        local label = seg.name or L.COMBAT
         local dur = seg.duration or 0
         if dur > 0 then
             label = label .. " |cffaaaaaa" .. ns:FormatTime(dur) .. "|r"
@@ -1014,17 +987,4 @@ function Segments:HideLocalID(localID)
     ns.db.hiddenLocalIDs = ns.db.hiddenLocalIDs or {}
     ns.db.hiddenLocalIDs[localID] = true
     if ns.db.fullRunOverrideLocalID == localID then self:ClearFullRunOverride() end
-end
-
-function Segments:HideWhere(predicate)
-    if type(predicate) ~= "function" then return 0 end
-    local count = 0
-    for _, seg in ipairs(self.history or {}) do
-        if seg._localID and predicate(seg) then
-            self:HideLocalID(seg._localID)
-            count = count + 1
-        end
-    end
-    if ns.Analysis then ns.Analysis:InvalidateCache() end
-    return count
 end

@@ -4,10 +4,10 @@ local L=ns.L
 local Config=ns.Config
 
 local STAT_KEYS={damage="DAMAGE",healing="HEALING",damageTaken="DAMAGE_TAKEN",avoidableDamageTaken="AVOIDABLE_DAMAGE_TAKEN",deaths="DEATHS",enemyDamageTaken="ENEMY_DAMAGE_TAKEN",interrupts="INTERRUPTS",dispels="DISPELS"}
-local SCENE_KEYS={mplus="SCENE_MPLUS",raid="SCENE_RAID",dungeon="SCENE_DUNGEON",arena="SCENE_ARENA",battleground="SCENE_BATTLEGROUND",outdoor="SCENE_OUTDOOR"}
+local SCENE_KEYS={raid="SCENE_RAID",dungeon="SCENE_DUNGEON",battleground="SCENE_BATTLEGROUND",outdoor="SCENE_OUTDOOR"}
 
 local function txt(parent,size,text,point,x,y)
- local f=parent:CreateFontString(nil,"OVERLAY"); f:SetFont(STANDARD_TEXT_FONT,size or 10,""); f:SetPoint(point or "TOPLEFT",x or 0,y or 0); f:SetText(text or ""); return f
+ local f=parent:CreateFontString(nil,"OVERLAY"); f:SetFont(ns:LocaleFont(),size or 10,""); f:SetPoint(point or "TOPLEFT",x or 0,y or 0); f:SetText(text or ""); return f
 end
 
 local function btn(self,parent,w,h,label,fn)
@@ -47,7 +47,7 @@ function Config:BuildLayoutPage()
  s.newBtn=btn(self,s.left,160,24,L.NEW_LAYOUT,function() local d=ns.Layouts:CreateCustom(); s.selectedId=d.id; s.selection=nil; s.ratioSelection=nil; self:StudioSaved(); self:RefreshLayoutStudio() end); s.newBtn:SetPoint("BOTTOMLEFT",8,8)
 
  s.editor=CreateFrame("Frame",nil,s.library); s.editor:SetPoint("TOPLEFT",s.left,"TOPRIGHT",12,0); s.editor:SetSize(410,438)
- s.name=CreateFrame("EditBox",nil,s.editor); s.name:SetSize(210,24); s.name:SetPoint("TOPLEFT",0,0); s.name:SetAutoFocus(false); s.name:SetFont(STANDARD_TEXT_FONT,12,"OUTLINE"); self:FillBg(s.name,.07,.07,.09,1); self:CreateBorder(s.name,.25,.35,.45,1); s.name:SetTextInsets(6,6,0,0)
+ s.name=CreateFrame("EditBox",nil,s.editor); s.name:SetSize(210,24); s.name:SetPoint("TOPLEFT",0,0); s.name:SetAutoFocus(false); s.name:SetFont(ns:LocaleFont(),12,"OUTLINE"); self:FillBg(s.name,.07,.07,.09,1); self:CreateBorder(s.name,.25,.35,.45,1); s.name:SetTextInsets(6,6,0,0)
  s.name:SetScript("OnEscapePressed",function(e) e:SetText(ns.Layouts:GetLayoutName(ns.Layouts:GetLayout(s.selectedId))); e:ClearFocus() end)
  local function validName(def,name)
   if not def or def.isPreset then return false end
@@ -223,9 +223,9 @@ function Config:DrawStudioBoard()
   local singleLine=ch<32 or cw<56; local compact=cw<88
   b.label:ClearAllPoints(); b.rangeText:ClearAllPoints()
   if singleLine then
-   b.label:SetFont(STANDARD_TEXT_FONT,9,""); b.label:SetPoint("LEFT",b,"LEFT",3,0); b.label:SetPoint("RIGHT",b,"RIGHT",-3,0); b.label:SetHeight(math.max(10,ch)); b.label:SetText(shortStat.."/"..rangeShort); b.rangeText:Hide()
+   b.label:SetFont(ns:LocaleFont(),9,""); b.label:SetPoint("LEFT",b,"LEFT",3,0); b.label:SetPoint("RIGHT",b,"RIGHT",-3,0); b.label:SetHeight(math.max(10,ch)); b.label:SetText(shortStat.."/"..rangeShort); b.rangeText:Hide()
   else
-   b.label:SetFont(STANDARD_TEXT_FONT,10,""); b.label:SetPoint("LEFT",b,"LEFT",4,7); b.label:SetPoint("RIGHT",b,"RIGHT",-4,7); b.label:SetHeight(14); b.label:SetText(compact and shortStat or fullStat)
+   b.label:SetFont(ns:LocaleFont(),10,""); b.label:SetPoint("LEFT",b,"LEFT",4,7); b.label:SetPoint("RIGHT",b,"RIGHT",-4,7); b.label:SetHeight(14); b.label:SetText(compact and shortStat or fullStat)
    b.rangeText:SetPoint("LEFT",b,"LEFT",4,-8); b.rangeText:SetPoint("RIGHT",b,"RIGHT",-4,-8); b.rangeText:SetHeight(12); b.rangeText:SetText(rangeFull); b.rangeText:SetTextColor(cell.range=="total" and 1 or .3,cell.range=="total" and .78 or .82,cell.range=="total" and .25 or 1,1); b.rangeText:Show()
   end
   b:Show()
@@ -438,7 +438,11 @@ function Config:BuildDataPage()
  y=self:Check(inner,L.CONFIG_SHOW_CONTRIBUTION_PERCENT_OUT_OF_COMBAT,y,function() return ns.db.display.showPercent end,function(v) ns.db.display.showPercent=v; self:RefreshUI() end)
  y=self:Check(inner,L.CONFIG_SHOW_RANK_NUM,y,function() return ns.db.display.showRank end,function(v) ns.db.display.showRank=v; self:RefreshUI() end)
  y=self:Check(inner,L.CONFIG_SPEC_ICON_ON_LEFT,y,function() return ns.db.display.showSpecIcon end,function(v) ns.db.display.showSpecIcon=v; self:RefreshUI() end)
- y=self:Check(inner,L.CONFIG_SHOW_PLAYER_REALM,y,function() return ns.db.display.showRealm end,function(v) ns.db.display.showRealm=v; self:RefreshUI() end)
+ -- WoW Forever names are "First Last"; the format shapes players' names only.
+ local nameFormats={{l=L.NAME_FORMAT_FULL,v="full"},{l=L.NAME_FORMAT_FIRST,v="first"},{l=L.NAME_FORMAT_LAST,v="last"},{l=L.NAME_FORMAT_ABBR,v="abbr"}}
+ for _,n in ipairs({4,6,8,10}) do nameFormats[#nameFormats+1]={l=string.format(L.NAME_FORMAT_CHARS,n),v=n} end
+ y=self:Dropdown(inner,L.CONFIG_NAME_FORMAT,y,nameFormats,function() return ns:GetNameFormat() end,function(v) ns.db.display.nameFormat=v; self:RefreshUI() end)
+ y=self:Desc(inner,y,L.CONFIG_NAME_FORMAT_HINT)
  y=self:Check(inner,L.CONFIG_ALWAYS_SHOW_SELF_IN_RANKING,y,function() return ns.db.display.alwaysShowSelf end,function(v) ns.db.display.alwaysShowSelf=v; self:RefreshUI() end)
  y=y-10
  local bottomBarSection=CreateFrame("Frame",nil,inner); bottomBarSection:SetWidth(inner:GetWidth())
@@ -448,14 +452,14 @@ function Config:BuildDataPage()
  y=y-bottomBarSection:GetHeight()-10
  y=self:H(inner,L.FULL_RUN_SETTINGS,y); y=self:Desc(inner,y,L.FULL_RUN_DESC)
  y=self:Check(inner,L.GENERATE_OVERALL_SEGMENT_AFTER_LEAVING_INSTANCE,y,function() return ns.db.mythicPlus.enabled end,function(v) ns.db.mythicPlus.enabled=v end)
- local fullRunScenes={"mplus","raid","dungeon","arena","battleground"}
+ local fullRunScenes={"raid","dungeon","battleground"}
  local fullRunSub=CreateFrame("Frame",nil,inner); fullRunSub:SetWidth(inner:GetWidth()-16); fullRunSub:SetPoint("TOPLEFT",inner,"TOPLEFT",16,y); local sy=0
  for _,scene in ipairs(fullRunScenes) do local sceneId=scene; sy=self:Check(fullRunSub,L[SCENE_KEYS[sceneId]],sy,function() return ns.db.fullRunSettings[sceneId] end,function(v) ns.db.fullRunSettings[sceneId]=v end) end
  fullRunSub:SetHeight(math.abs(sy)); y=y-math.abs(sy)
  y=y-8; y=self:H(inner,L.CLEAN_TRASH_SETTINGS,y)
  y=self:Check(inner,L.CONFIG_AUTO_DELETE_TRASH_SEGMENTS_AFTER_LEAVING_INSTANCE,y,function() return ns.db.mythicPlus.autoCleanTrash end,function(v) ns.db.mythicPlus.autoCleanTrash=v end)
  local cleanSub=CreateFrame("Frame",nil,inner); cleanSub:SetWidth(inner:GetWidth()-16); cleanSub:SetPoint("TOPLEFT",inner,"TOPLEFT",16,y); sy=0
- local trashScenes={"mplus","raid","dungeon"}
+ local trashScenes={"raid","dungeon"}
  for _,scene in ipairs(trashScenes) do local sceneId=scene; sy=self:Check(cleanSub,L[SCENE_KEYS[sceneId]],sy,function() return ns.db.cleanTrashSettings[sceneId] end,function(v) ns.db.cleanTrashSettings[sceneId]=v end) end
  cleanSub:SetHeight(math.abs(sy)); y=y-math.abs(sy)
  y=y-8; y=self:H(inner,L.DATA_TRACKING,y)

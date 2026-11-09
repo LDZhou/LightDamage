@@ -329,7 +329,7 @@ end
 local function newPlayer(guid, name, class)
     return {
         guid = guid, name = name or "?", class = class,
-        specID = nil, specIconID = nil, ilvl = 0, score = 0,
+        specID = nil, specIconID = nil, ilvl = 0,
         damage = 0, healing = 0, overhealing = 0, absorbed = 0,
         damageTaken = 0, avoidableDamageTaken = 0,
         deaths = 0, interrupts = 0, dispels = 0,
@@ -378,10 +378,8 @@ local function ensurePlayer(candidate, guid, name, class, specIconID)
     if type(cached) == "table" then
         local specID = type(cached.specID) == "number" and cached.specID or nil
         local ilvl = type(cached.ilvl) == "number" and cached.ilvl or 0
-        local score = type(cached.score) == "number" and cached.score or 0
         if specID and specID > 0 then player.specID = specID end
         if ilvl > 0 then player.ilvl = ilvl end
-        if score > 0 then player.score = score end
     end
     return player
 end
@@ -615,6 +613,20 @@ local function archiveStat(candidate, selector, def, allowIncomplete)
     return true
 end
 
+-- A Lua error in archive work is a bug, not a wait: retrying it only repeats it
+-- (in game one bad call threw 2400 times).  Show each distinct error once per
+-- login through WoW's error handler so it is still seen, never silently eaten.
+G._reportedErrors = {}
+function G:ReportErrorOnce(err)
+    local text = tostring(err)
+    local key = text:match("^[^\n]*") or text
+    if self._reportedErrors[key] then return false end
+    self._reportedErrors[key] = true
+    local handler = geterrorhandler and geterrorhandler()
+    if handler then pcall(handler, text) end
+    return true
+end
+
 local function incompleteDeathRecord(identity, recapID, reason)
     return {
         timestamp = nil, gameTime = nil, playerName = identity.name,
@@ -691,7 +703,16 @@ local function archiveDeaths(candidate, selector, allowIncomplete)
         end
         local record, recapStatus
         if recapID > 0 and ns.DeathTracker and ns.DeathTracker.BuildDeathRecordForArchive then
-            record, recapStatus = ns.DeathTracker:BuildDeathRecordForArchive(recapID, src)
+            -- The recap is optional enrichment: an error while building it
+            -- costs this death its details, never the whole session.
+            local built, builtRecord, builtStatus = pcall(ns.DeathTracker.BuildDeathRecordForArchive,
+                ns.DeathTracker, recapID, src)
+            if built then
+                record, recapStatus = builtRecord, builtStatus
+            else
+                G:ReportErrorOnce(builtRecord)
+                recapStatus = G.ERROR
+            end
         end
         if not record then
             local ok; ok, status = acceptOptionalFailure(candidate,

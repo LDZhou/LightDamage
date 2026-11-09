@@ -4,6 +4,7 @@
     <Script file="Locales\zhTW.lua"/>
     <Script file="Locales\enUS.lua"/>
     <Script file="Locales\ruRU.lua"/>
+    <Script file="Locales\koKR.lua"/>
     <Script file="Core.lua"/>
     <Script file="Utils.lua"/>
     <Script file="Profiles.lua"/>

@@ -1,9 +1,9 @@
-## Interface: 120007, 120100
+## Interface: 16001
 ## Title: Light Damage
-## Notes: Combat Statistics
-## Notes-zhCN: 战斗统计插件
+## Notes: Combat Statistics (WoW Forever edition)
+## Notes-zhCN: 战斗统计插件（WoW Forever 专用版）
 ## Author: Yishi
-## Version: 2.0.2
+## Version: 2.0.3-forever
 ## SavedVariables: LightDamageGlobal
 ## SavedVariablesPerCharacter: LightDamageDB
 ## Category: Combat

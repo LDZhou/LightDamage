@@ -115,7 +115,6 @@ local function mergePlayer(target, source)
     target.specID = source.specID or target.specID
     target.specIconID = source.specIconID or target.specIconID
     target.ilvl = math.max(target.ilvl or 0, source.ilvl or 0)
-    target.score = math.max(target.score or 0, source.score or 0)
     for _, field in ipairs({"damage", "healing", "overhealing", "absorbed", "damageTaken",
         "avoidableDamageTaken", "deaths", "interrupts", "dispels", "activeTime"}) do
         target[field] = (target[field] or 0) + (source[field] or 0)

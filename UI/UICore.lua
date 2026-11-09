@@ -15,13 +15,13 @@ ns.UI = UI
 local BAR_H   = 18
 local BAR_GAP = 1
 local TITLE_H = 22
-local SUMM_H  = 16
+
 local SECTH_H = 18
 local TAB_H   = 20
 local MAX_BARS = 40
 
 UI.BAR_H = BAR_H; UI.BAR_GAP = BAR_GAP; UI.TITLE_H = TITLE_H
-UI.SUMM_H = SUMM_H; UI.SECTH_H = SECTH_H; UI.TAB_H = TAB_H; UI.MAX_BARS = MAX_BARS
+UI.SECTH_H = SECTH_H; UI.TAB_H = TAB_H; UI.MAX_BARS = MAX_BARS
 
 local T = {
     dmgC   = {1.0, 0.82, 0.0},
@@ -59,7 +59,7 @@ end
 
 function UI:FS(p, sz, fl)
     local f = p:CreateFontString(nil,"OVERLAY")
-    f:SetFont(STANDARD_TEXT_FONT, sz, fl or "")
+    f:SetFont(ns:LocaleFont(), sz, fl or "")
     f:SetTextColor(1, 1, 1, 0.93); return f
 end
 
@@ -101,47 +101,6 @@ function UI:IconBtn(p, texNormal, texHover, btnW, fn, tooltipText)
         if fn then fn(...) end
     end)
     return b
-end
-
-function UI:IsOverallColumnActive()
-    if not ns.db or not ns.db.split then return false end
-    if not ns.db.split.showOverall then return false end
-    local cat = ns.state.instanceCategory or "outdoor"
-    if cat == "mplus" and ns.db.split.overallShowMPlus then return true end
-    if cat == "raid" and ns.db.split.overallShowRaid then return true end
-    if cat == "dungeon" and ns.db.split.overallShowDungeon then return true end
-    if cat == "outdoor" and ns.db.split.overallShowOutdoor then return true end
-    return false
-end
-
-function UI:IsSplitActiveInCurrentScene()
-    if not ns.db or not ns.db.split then return false end
-    if not ns.db.split.enabled then return false end
-    local cat = ns.state.instanceCategory or "outdoor"
-    if cat == "mplus" and ns.db.split.splitShowMPlus then return true end
-    if cat == "raid" and ns.db.split.splitShowRaid then return true end
-    if cat == "dungeon" and ns.db.split.splitShowDungeon then return true end
-    if cat == "outdoor" and ns.db.split.splitShowOutdoor then return true end
-    return false
-end
-
-function UI:ApplyTheme()
-    local dbw = ns.db.window
-    local tc = dbw.themeColor or {0, 0, 0, 1}
-    local bc = dbw.bgColor    or {0.02, 0.02, 0.025, 0.80}
-    if self.frame    then self.frame:SetBackdropColor(unpack(bc)) end
-    if self.titleBg  then self.titleBg:SetColorTexture(unpack(tc)) end
-    if self.tabBg    then self.tabBg:SetColorTexture(unpack(tc)) end
-    if self.summBg   then self.summBg:SetColorTexture(tc[1]*0.8, tc[2]*0.8, tc[3]*0.8, tc[4]) end
-    local sc = {tc[1]*0.9, tc[2]*0.9, tc[3]*0.9, tc[4]}
-    if self.priHead    then self.priHead.bg:SetColorTexture(unpack(sc)) end
-    if self.secHead    then self.secHead.bg:SetColorTexture(unpack(sc)) end
-    if self.ovrPriHead then self.ovrPriHead.bg:SetColorTexture(unpack(sc)) end
-    if self.ovrSecHead then self.ovrSecHead.bg:SetColorTexture(unpack(sc)) end
-    if self.ovrContainer then
-    local c = dbw.ovrBgColor or {0.025, 0.035, 0.05, 0.82}
-        self.ovrContainer:SetBackdropColor(unpack(c))
-    end
 end
 
 function UI:GetBarConfig()
@@ -212,6 +171,11 @@ end
 function UI:SetModeHeaderText(label, text, mode)
     if not label then return end
     local r, g, b = self:GetModeTitleColor(mode)
+    -- Headers are refreshed on every render tick; rebuild the coloured string
+    -- and touch the FontString only when its text or colour changed.
+    if label._ldHdrText == text and label._ldHdrR == r and label._ldHdrG == g
+        and label._ldHdrB == b then return end
+    label._ldHdrText = text; label._ldHdrR = r; label._ldHdrG = g; label._ldHdrB = b
     label:SetText(self:ColorizeText(text, r, g, b))
 end
 
@@ -304,7 +268,7 @@ end
 
 function UI:ApplyFont(fs, font, size, outline, shadow)
     if not fs then return false end
-    font = font or STANDARD_TEXT_FONT
+    font = ns:LocaleFont(font or STANDARD_TEXT_FONT)
     size = tonumber(size) or 10
     outline = ns.NormalizeFontOutline and ns:NormalizeFontOutline(outline) or outline
     shadow = shadow and true or false
@@ -335,7 +299,7 @@ function UI:ApplyFont(fs, font, size, outline, shadow)
     if not ok or applied == false then
         -- Keep the configured path untouched, make the text readable, and do
         -- not cache the failed request so a later media registration retries.
-        pcall(fs.SetFont, fs, STANDARD_TEXT_FONT, size, outline)
+        pcall(fs.SetFont, fs, ns:LocaleFont(), size, outline)
         fs._ldFontValid = nil
         fs._ldFont = nil; fs._ldFontSize = nil
         fs._ldFontOutline = nil; fs._ldFontShadow = nil
@@ -401,10 +365,10 @@ end
 
 function UI:ApplyAllFonts()
     if not self.frame then return end
+    if self.InvalidateBarStyles then self:InvalidateBarStyles() end
     local font, fSz, fOut, fShad = self:GetDisplayFontConfig("title")
     if self.titleText then self:ApplyFont(self.titleText, font, fSz, fOut, fShad) end
     if self.titleTime then self:ApplyFont(self.titleTime, font, fSz, fOut, fShad) end
-    if self.summText then self:ApplyFont(self.summText, font, math.max(8, fSz - 1), fOut, fShad) end
     self:SetFontStringColor(self.titleText, "titleFontColor", {1, 1, 1, 0.93})
     local function applyHead(h)
         if not h then return end
@@ -461,7 +425,7 @@ function UI:Build()
     f:SetClipsChildren(true)
     self.frame = f
 
-    self:BuildTitle(); self:BuildMPlusSummary(); self:BuildBody()
+    self:BuildTitle(); self:BuildBody()
     self:BuildTabs(); self:BuildResize(); self:SetupDrag()
     self:ApplyTheme()
     f:HookScript("OnSizeChanged", function() self:OnResize() end)
@@ -562,15 +526,6 @@ function UI:BuildTitle()
     self.titleText:SetPoint("RIGHT", rstBtn, "LEFT", -4, 0)
 end
 
-function UI:BuildMPlusSummary()
-    local b = CreateFrame("Frame", nil, self.frame)
-    b:SetHeight(SUMM_H); b:SetPoint("TOPLEFT", self.titleBar,"BOTTOMLEFT", 0,0); b:SetPoint("TOPRIGHT", self.titleBar,"BOTTOMRIGHT", 0,0)
-    self.summBg = self:FillBg(b, {0.06, 0.06, 0.10, 1})
-    self.summText = self:FS(b, 9, "OUTLINE"); self.summText:SetPoint("LEFT",6,0); self.summText:SetPoint("RIGHT",-6,0)
-    self.summText:SetJustifyH("LEFT"); self.summText:SetTextColor(0.3, 0.8, 1.0, 0.90)
-    b:Hide(); self.summaryBar = b
-end
-
 function UI:MakeScrollArea(parent)
     local sf = CreateFrame("ScrollFrame", nil, parent)
     sf:EnableMouse(true); sf:EnableMouseWheel(true)
@@ -613,6 +568,17 @@ function UI:MakeScrollArea(parent)
             driver._elapsed = driver._elapsed + elapsed
             if driver._elapsed < .06 then return end
             driver._elapsed = 0
+            -- One window hit-test replaces a per-list test while the cursor is
+            -- elsewhere; only a list still flagged as hovered needs clearing.
+            if self.frame and not self.frame:IsMouseOver() then
+                for _, item in ipairs(self._hoverScrollAreas or {}) do
+                    if item._mouseInside and not item._scrollbarDragging then
+                        item._mouseInside = false
+                        item:RefreshScrollBarVisibility()
+                    end
+                end
+                return
+            end
             for _, item in ipairs(self._hoverScrollAreas or {}) do
                 local inside=false
                 if item._hasOverflow then
@@ -665,83 +631,6 @@ function UI:MakeSectHead(parent)
     return h
 end
 
-function UI:BuildBody()
-    self.bodyFrame = CreateFrame("Frame", nil, self.frame); self.bodyFrame:SetClipsChildren(true)
-    self.ovrSepLine = self.bodyFrame:CreateTexture(nil, "ARTWORK"); self.ovrSepLine:SetWidth(1); self.ovrSepLine:SetColorTexture(0, 0, 0, 0.8); self.ovrSepLine:Hide()
-
-    self.leftContainer = CreateFrame("Frame", nil, self.bodyFrame); self.leftContainer:SetClipsChildren(true)
-    self.ovrContainer = CreateFrame("Frame", nil, self.bodyFrame, "BackdropTemplate"); self.ovrContainer:SetClipsChildren(true)
-    self.ovrContainer:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8X8", edgeFile = nil, edgeSize = 0 })
-    local c = ns.db.window.ovrBgColor or {0.025, 0.035, 0.05, 0.82}; self.ovrContainer:SetBackdropColor(unpack(c)); self.ovrContainer:Hide()
-
-    self.priHead = self:MakeSectHead(self.leftContainer)
-    self.priList = self:MakeScrollArea(self.leftContainer)
-    self.priBars = {}; for i = 1, MAX_BARS do self.priBars[i] = self:MakeBar(self.priList.child, "primary", i) end
-
-    self.secHead = self:MakeSectHead(self.leftContainer)
-    self.secList = self:MakeScrollArea(self.leftContainer)
-    self.secBars = {}; for i = 1, MAX_BARS do self.secBars[i] = self:MakeBar(self.secList.child, "secondary", i) end
-
-    self.ovrPriHead = self:MakeSectHead(self.ovrContainer)
-    self.ovrPriList = self:MakeScrollArea(self.ovrContainer)
-    self.ovrPriBars = {}; for i = 1, MAX_BARS do self.ovrPriBars[i] = self:MakeBar(self.ovrPriList.child, "ovrPri", i) end
-
-    self.ovrSecHead = self:MakeSectHead(self.ovrContainer)
-    self.ovrSecList = self:MakeScrollArea(self.ovrContainer)
-    self.ovrSecBars = {}; for i = 1, MAX_BARS do self.ovrSecBars[i] = self:MakeBar(self.ovrSecList.child, "ovrSec", i) end
-
-    self._pinnedSelf = {
-        pri    = self:MakePinnedSelfBar(self.leftContainer, self.priList.sf,    "primary"),
-        sec    = self:MakePinnedSelfBar(self.leftContainer, self.secList.sf,    "secondary"),
-        ovrPri = self:MakePinnedSelfBar(self.ovrContainer,  self.ovrPriList.sf, "ovrPri"),
-        ovrSec = self:MakePinnedSelfBar(self.ovrContainer,  self.ovrSecList.sf, "ovrSec"),
-    }
-
-    -- ★ hookScroll 透传 sessionID
-    local function hookScroll(listObj, listKey)
-        local origOnWheel = listObj.sf:GetScript("OnMouseWheel")
-        listObj.sf:SetScript("OnMouseWheel", function(frame, delta)
-            if origOnWheel then origOnWheel(frame, delta) end
-            if self._pinnedSelfCache and self._pinnedSelfCache[listKey] then
-                local args = self._pinnedSelfCache[listKey]
-                if args.type == "bars" then self:CheckPinnedSelfForBars(listKey, listObj, args.data, args.dur, args.mode, args.count)
-                elseif args.type == "api" then self:CheckPinnedSelfForAPI(listKey, listObj, args.sources, args.mode, args.maxAmt, args.sType, args.sessionID) end
-            end
-        end)
-    end
-    hookScroll(self.priList, "pri"); hookScroll(self.secList, "sec")
-    hookScroll(self.ovrPriList, "ovrPri"); hookScroll(self.ovrSecList, "ovrSec")
-end
-
-function UI:BuildResize()
-    local g = CreateFrame("Frame", nil, self.frame); self.resizeHandle = g
-    g:SetSize(16,16); g:SetPoint("BOTTOMRIGHT", 0, 0)
-    g:SetFrameLevel(self.frame:GetFrameLevel() + 15); g:EnableMouse(true)
-    local t = g:CreateTexture(nil,"OVERLAY"); t:SetAllPoints(); t:SetTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up")
-    g:SetScript("OnMouseDown", function() if ns.db.window.locked then return end; self.frame:StartSizing("BOTTOMRIGHT"); self._resizing = true end)
-    g:SetScript("OnMouseUp", function()
-        if not self._resizing then return end; self._resizing = false; self.frame:StopMovingOrSizing()
-        if self._collapsed then return end
-        local w, h = self:ClampSize(self.frame:GetWidth(), self.frame:GetHeight())
-        self.frame:SetSize(w, h)
-        ns.db.window.width = w; ns.db.window.height = h
-        if ns.db.window.rememberSceneSize then
-            local cat = ns.state.instanceCategory or "outdoor"
-            if not ns.db.window.sceneSizes then ns.db.window.sceneSizes = {} end
-            ns.db.window.sceneSizes[cat] = { width = w, height = h }
-        end
-        self:Layout()
-    end)
-end
-
-function UI:SetupDrag()
-    self.titleBar:EnableMouse(true); self.titleBar:RegisterForDrag("LeftButton")
-    self.titleBar:SetScript("OnDragStart", function() if not ns.db.window.locked then self.frame:StartMoving() end end)
-    self.titleBar:SetScript("OnDragStop", function() self.frame:StopMovingOrSizing(); local db = ns.db.window; db.point,_,db.relPoint,db.x,db.y = self.frame:GetPoint() end)
-end
-
-function UI:OnResize() self:LayoutTabs(); self:Layout() end
-
 function UI:OnCombatStateChanged(inCombat)
     self:RefreshTitle(); self:Refresh()
     if inCombat then self:CheckAutoCollapse(); self:CheckAutoFade(true)
@@ -762,11 +651,6 @@ function UI:Toggle()
 end
 function UI:IsVisible() return self.frame and self.frame:IsShown() end
 function UI:UpdateLock() self:UpdateLockState() end
-function UI:UpdateLockState()
-    if not self.resizeHandle then return end
-    if ns.db.window.locked then self.resizeHandle:Hide() else self.resizeHandle:Show() end
-end
-
 function UI:UpdateScrollState(listObj, dataCount)
     local bh, gap = self:GetBarConfig()
     local viewH,viewW=listObj.sf:GetHeight(),listObj.sf:GetWidth()

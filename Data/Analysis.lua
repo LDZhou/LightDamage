@@ -67,7 +67,6 @@ function Analysis:GetSorted(segment, mode)
                 specID      = pd.specID,
                 specIconID  = pd.specIconID, 
                 ilvl        = pd.ilvl,
-                score       = pd.score,
                 value       = value,
                 perSec      = perSec,   -- ★ 新增
                 deaths      = pd.deaths,

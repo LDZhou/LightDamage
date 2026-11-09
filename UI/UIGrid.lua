@@ -61,6 +61,9 @@ function UI:CreateGridCell(index)
     self._pinnedSelf=self._pinnedSelf or {}
     cell.pinned=self:MakePinnedSelfBar(f,cell.list.sf,cell.poolKey)
     self._pinnedSelf[cell.poolKey]=cell.pinned
+    -- Off-screen rows skip per-tick content (UIBars); a scroll owes one
+    -- immediate repaint so rows it exposes never show a stale occupant.
+    cell.list.sf:HookScript("OnVerticalScroll",function() self:QueueScrollRepaint() end)
     local original=cell.list.sf:GetScript("OnMouseWheel")
     cell.list.sf:SetScript("OnMouseWheel",function(frame,delta)
         if original then original(frame,delta) end
@@ -72,6 +75,21 @@ function UI:CreateGridCell(index)
     end)
     self.gridCells[index]=cell
     return cell
+end
+
+-- Coalesce any number of scroll steps in one frame into a single repaint,
+-- through one reused callback (no closure per wheel tick).
+function UI:QueueScrollRepaint()
+    if self._scrollRepaintPending then return end
+    self._scrollRepaintPending=true
+    if not self._scrollRepaintFn then
+        self._scrollRepaintFn=function()
+            UI._scrollRepaintPending=false
+            UI._barsDirty=true
+            if UI.frame and UI.frame:IsShown() then UI:Refresh() end
+        end
+    end
+    C_Timer.After(0,self._scrollRepaintFn)
 end
 
 function UI:EnsureGridCell(index)
@@ -319,7 +337,6 @@ end
 function UI:Layout()
     if not self.frame or not self.frame:IsShown() then return end
     self:LayoutTabs()
-    if self.summaryBar then self.summaryBar:Hide() end
     self.bodyFrame:ClearAllPoints(); self.bodyFrame:SetPoint("TOPLEFT",self.titleBar,"BOTTOMLEFT",0,0); self.bodyFrame:SetPoint("BOTTOMRIGHT",self.tabBar,"TOPRIGHT",0,0)
     self:DoLayout()
     self:UpdateLockState()
@@ -362,6 +379,7 @@ function UI:DoLayout()
     end
     if not self._resizing then
         self:ApplyTheme(); self._lastFontHash=nil; self:ApplyAllFontsIfNeeded()
+        if self.InvalidateBarStyles then self:InvalidateBarStyles() end
     end
     self:Refresh()
 end
@@ -405,8 +423,23 @@ function UI:ResolveCellSource(cell)
     return source.segment,source.duration,source.sessionType,source.sessionID,source
 end
 
+local RefreshBody
+
+-- History, title and every cell can each ask Segments for the merged History
+-- list during one refresh; without this bracket each request rebuilt the full
+-- virtual-session list from Blizzard's API.  The pcall guarantees the bracket
+-- always closes, so a render error can never leave the cache stuck open.
 function UI:Refresh()
     if not self.frame or not self.frame:IsShown() then return end
+    local segs=not self._previewContext and ns.Segments or nil
+    if not (segs and segs.BeginMergeCache) then return RefreshBody(self) end
+    segs:BeginMergeCache()
+    local ok,err=pcall(RefreshBody,self)
+    segs:EndMergeCache()
+    if not ok then (geterrorhandler and geterrorhandler() or error)(err) end
+end
+
+RefreshBody=function(self)
     self:BeginDataRefresh()
     local displayMode=(self._previewContext and self._previewContext.displayMode) or ns.db.display.mode
     if self._lastTabDisplayMode~=displayMode then self:LayoutTabs() end
@@ -436,11 +469,17 @@ function UI:Refresh()
     self._lastBarRender = now
     for _,cell in ipairs(self._activeGridCells or {}) do
         local seg,dur,sessionType,sessionID,source=self:ResolveCellSource(cell)
-        self:FillModeBars(cell.bars,cell.list,cell.head,cell.stat,seg,dur,sessionType,sessionID,source)
         if cell.range=="total" then
-            local label=L[ns.MODE_NAMES[cell.stat] or cell.stat]
-            self:SetModeHeaderText(cell.head.label,string.format(L.OVERALL_MODE_HEADER_FORMAT,L.OVERALL,label),cell.stat)
+            if cell._totalTitleFor~=cell.stat then
+                local label=L[ns.MODE_NAMES[cell.stat] or cell.stat]
+                cell._totalTitle=string.format(L.OVERALL_MODE_HEADER_FORMAT,L.OVERALL,label)
+                cell._totalTitleFor=cell.stat
+            end
+            cell.head._titleOverride=cell._totalTitle
+        else
+            cell.head._titleOverride=nil
         end
+        self:FillModeBars(cell.bars,cell.list,cell.head,cell.stat,seg,dur,sessionType,sessionID,source)
         for _,bar in ipairs(cell.bars) do if bar.frame:IsShown() then bar._detailSegment=seg; bar._detailRange=cell.range; bar._detailDisplaySource=source end end
         if cell.pinned then cell.pinned._detailSegment=seg; cell.pinned._detailRange=cell.range; cell.pinned._detailDisplaySource=source end
     end

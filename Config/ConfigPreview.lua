@@ -3,15 +3,16 @@ local addonName,ns=...
 local L=ns.L
 local Config=ns.Config
 
+-- WoW Forever scenes (no Mythic+, no arenas).
 local SCENES={
- {id="mplus",key="SCENE_MPLUS"},{id="raid",key="SCENE_RAID"},{id="dungeon",key="SCENE_DUNGEON"},
- {id="arena",key="SCENE_ARENA"},{id="battleground",key="SCENE_BATTLEGROUND"},{id="outdoor",key="SCENE_OUTDOOR"},
+ {id="raid",key="SCENE_RAID"},{id="dungeon",key="SCENE_DUNGEON"},
+ {id="battleground",key="SCENE_BATTLEGROUND"},{id="outdoor",key="SCENE_OUTDOOR"},
 }
 local DATASETS={{id="normal",key="PREVIEW_NORMAL"},{id="empty",key="PREVIEW_EMPTY"},{id="single",key="PREVIEW_SINGLE"},{id="long",key="PREVIEW_LONG"}}
 
 local function button(self,parent,w,text,click)
  local b=CreateFrame("Button",nil,parent); b:SetSize(w,24); self:FillBg(b,.08,.12,.18,1); self:CreateBorder(b,.2,.45,.7,1)
- local t=b:CreateFontString(nil,"OVERLAY"); t:SetFont(STANDARD_TEXT_FONT,10,"OUTLINE"); t:SetPoint("LEFT",3,0); t:SetPoint("RIGHT",-3,0); t:SetJustifyH("CENTER"); t:SetWordWrap(false); t:SetText(text); b._text=t
+ local t=b:CreateFontString(nil,"OVERLAY"); t:SetFont(ns:LocaleFont(),10,"OUTLINE"); t:SetPoint("LEFT",3,0); t:SetPoint("RIGHT",-3,0); t:SetJustifyH("CENTER"); t:SetWordWrap(false); t:SetText(text); b._text=t
  b:SetScript("OnClick",click); return b
 end
 
@@ -21,10 +22,10 @@ function Config:BuildSceneSwitcher()
  mask:SetAllPoints(); mask:SetFrameStrata("FULLSCREEN"); mask:SetFrameLevel(500); mask:SetBackdrop({bgFile="Interface\\Buttons\\WHITE8X8"}); mask:SetBackdropColor(0,0,0,.55); mask:EnableMouse(true); mask:EnableKeyboard(true); mask:SetPropagateKeyboardInput(true); mask:Hide()
  mask:SetScript("OnKeyDown",function(frame,key) if key=="ESCAPE" then frame:SetPropagateKeyboardInput(false); self:ClosePreview(); C_Timer.After(0,function() frame:SetPropagateKeyboardInput(true) end) end end); self._previewOverlay=mask
  local bar=CreateFrame("Frame",nil,mask,"BackdropTemplate"); bar:SetSize(730,60); bar:SetPoint("TOP",UIParent,"TOP",0,-24); bar:SetFrameStrata("FULLSCREEN_DIALOG"); bar:SetFrameLevel(900); bar:SetScale(ns.db and ns.db.window and ns.db.window.configScale or 1); bar:SetBackdrop({bgFile="Interface\\Buttons\\WHITE8X8"}); bar:SetBackdropColor(.04,.04,.06,.98); self:CreateBorder(bar,.2,.5,.8,1); self._pvSwitcher=bar
- local title=bar:CreateFontString(nil,"OVERLAY"); title:SetFont(STANDARD_TEXT_FONT,11,"OUTLINE"); title:SetPoint("LEFT",10,0); title:SetWidth(112); title:SetJustifyH("LEFT"); self._pvTitle=title
+ local title=bar:CreateFontString(nil,"OVERLAY"); title:SetFont(ns:LocaleFont(),11,"OUTLINE"); title:SetPoint("LEFT",10,0); title:SetWidth(112); title:SetJustifyH("LEFT"); self._pvTitle=title
  self._pvSceneBtns={}; local x=124
  for _,s in ipairs(SCENES) do local sceneId=s.id; local b=button(self,bar,66,L[s.key],function() self:ApplyPreviewScene(sceneId) end); b:SetPoint("LEFT",bar,"LEFT",x,0); b._scene=sceneId; b._sceneKey=s.key; self._pvSceneBtns[#self._pvSceneBtns+1]=b; x=x+69 end
- local sceneNote=bar:CreateFontString(nil,"OVERLAY"); sceneNote:SetFont(STANDARD_TEXT_FONT,9); sceneNote:SetPoint("BOTTOMLEFT",bar,"BOTTOMLEFT",124,5); sceneNote:SetWidth(414); sceneNote:SetJustifyH("CENTER"); sceneNote:SetWordWrap(false); sceneNote:SetText(L.PREVIEW_SCENE_GEOMETRY_DESC); sceneNote:SetTextColor(.58,.65,.72); self._pvSceneNote=sceneNote
+ local sceneNote=bar:CreateFontString(nil,"OVERLAY"); sceneNote:SetFont(ns:LocaleFont(),9); sceneNote:SetPoint("BOTTOMLEFT",bar,"BOTTOMLEFT",124,5); sceneNote:SetWidth(#SCENES*69-3); sceneNote:SetJustifyH("CENTER"); sceneNote:SetWordWrap(false); sceneNote:SetText(L.PREVIEW_SCENE_GEOMETRY_DESC); sceneNote:SetTextColor(.58,.65,.72); self._pvSceneNote=sceneNote
  self._pvDataBtn=button(self,bar,84,L.PREVIEW_NORMAL,function() self:CyclePreviewDataset() end); self._pvDataBtn:SetPoint("RIGHT",bar,"RIGHT",-76,0)
  local exit=button(self,bar,62,L.EXIT_PREVIEW,function() self:ClosePreview() end); exit:SetPoint("RIGHT",bar,"RIGHT",-8,0)
 end

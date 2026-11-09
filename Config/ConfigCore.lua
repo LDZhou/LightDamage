@@ -19,6 +19,7 @@ local categories = {
     {id="data",   labelKey="CATEGORY_DATA",   icon="-"},
     {id="look",   labelKey="CATEGORY_APPEARANCE",   icon="-"},
     {id="perf",   labelKey="CATEGORY_BEHAVIOR",   icon="-"},
+    {id="tools",  labelKey="CATEGORY_TOOLS",  icon="-"},
     {id="profiles", labelKey="CATEGORY_CONFIG", icon="-"},
 }
 
@@ -170,11 +171,11 @@ function Config:Build()
     self._configTitle = title
 
     local tt = title:CreateFontString(nil, "OVERLAY")
-    tt:SetFont(STANDARD_TEXT_FONT, 12, "OUTLINE"); tt:SetPoint("LEFT", 12, 0)
+    tt:SetFont(ns:LocaleFont(), 12, "OUTLINE"); tt:SetPoint("LEFT", 12, 0)
     self.titleText = tt; self:RefreshTitle()
 
     local cb = CreateFrame("Button", nil, title); cb:SetSize(24, 24); cb:SetPoint("RIGHT", -4, 0)
-    local ct = cb:CreateFontString(nil, "OVERLAY"); ct:SetFont(STANDARD_TEXT_FONT, 14, "OUTLINE"); ct:SetPoint("CENTER"); ct:SetText("X"); ct:SetTextColor(0.5, 0.5, 0.5)
+    local ct = cb:CreateFontString(nil, "OVERLAY"); ct:SetFont(ns:LocaleFont(), 14, "OUTLINE"); ct:SetPoint("CENTER"); ct:SetText("X"); ct:SetTextColor(0.5, 0.5, 0.5)
     cb:SetScript("OnClick", function() p:Hide() end)
     cb:SetScript("OnEnter", function() ct:SetTextColor(1, 0.2, 0.2) end)
     cb:SetScript("OnLeave", function() ct:SetTextColor(0.5, 0.5, 0.5) end)
@@ -191,9 +192,9 @@ function Config:Build()
     for i, cat in ipairs(categories) do
         local btn = CreateFrame("Button", nil, sidebar); btn:SetSize(SIDEBAR_W, CAT_H); btn:SetPoint("TOPLEFT", sidebar, "TOPLEFT", 0, -((i-1)*CAT_H))
         btn.activeBg = btn:CreateTexture(nil, "BORDER"); btn.activeBg:SetAllPoints(); btn.activeBg:SetColorTexture(0, 0.65, 1, 0.15); btn.activeBg:Hide()
-        local icon = btn:CreateFontString(nil, "OVERLAY"); icon:SetFont(STANDARD_TEXT_FONT, 13, "OUTLINE"); icon:SetPoint("LEFT", 14, 0); icon:SetText(cat.icon); icon:SetTextColor(0.5, 0.5, 0.5)
-        local label = btn:CreateFontString(nil, "OVERLAY"); label:SetFont(STANDARD_TEXT_FONT, 11, ""); label:SetPoint("LEFT", icon, "RIGHT", 8, 0); label:SetPoint("RIGHT",btn,"RIGHT",-6,0); label:SetJustifyH("LEFT"); label:SetWordWrap(false); if label.SetMaxLines then label:SetMaxLines(1) end; label:SetText(L[cat.labelKey]); label:SetTextColor(0.6, 0.6, 0.6)
-        local widthGetter=label.GetUnboundedStringWidth or label.GetStringWidth; local ok,labelW=pcall(widthGetter,label); if ok and type(labelW)=="number" and labelW>label:GetWidth() then label:SetFont(STANDARD_TEXT_FONT,10,"") end
+        local icon = btn:CreateFontString(nil, "OVERLAY"); icon:SetFont(ns:LocaleFont(), 13, "OUTLINE"); icon:SetPoint("LEFT", 14, 0); icon:SetText(cat.icon); icon:SetTextColor(0.5, 0.5, 0.5)
+        local label = btn:CreateFontString(nil, "OVERLAY"); label:SetFont(ns:LocaleFont(), 11, ""); label:SetPoint("LEFT", icon, "RIGHT", 8, 0); label:SetPoint("RIGHT",btn,"RIGHT",-6,0); label:SetJustifyH("LEFT"); label:SetWordWrap(false); if label.SetMaxLines then label:SetMaxLines(1) end; label:SetText(L[cat.labelKey]); label:SetTextColor(0.6, 0.6, 0.6)
+        local widthGetter=label.GetUnboundedStringWidth or label.GetStringWidth; local ok,labelW=pcall(widthGetter,label); if ok and type(labelW)=="number" and labelW>label:GetWidth() then label:SetFont(ns:LocaleFont(),10,"") end
         btn.icon = icon; btn.label = label
         btn:SetScript("OnClick", function() self:ShowPage(cat.id) end)
         btn:SetScript("OnEnter", function(self2) if self.activeCat ~= cat.id then label:SetTextColor(1,1,1); icon:SetTextColor(0.8,0.8,0.8) end; if label.IsTruncated and label:IsTruncated() then GameTooltip:SetOwner(self2,"ANCHOR_RIGHT"); GameTooltip:SetText(L[cat.labelKey]); GameTooltip:Show() end end)
@@ -216,7 +217,7 @@ function Config:Build()
         page:Hide(); self.pages[cat.id] = { scroll = page, inner = inner, sb = sb }
     end
 
-    self:BuildLayoutPage(); self:BuildDataPage(); self:BuildLookPage(); self:BuildPerfPage(); self:BuildProfilesPage()
+    self:BuildLayoutPage(); self:BuildDataPage(); self:BuildLookPage(); self:BuildPerfPage(); self:BuildToolsPage(); self:BuildProfilesPage()
     self:ShowPage("layout")
     self:BuildPreviewBtn(); self:BuildConfigScaleControl(); self:BuildSceneSwitcher()
     p:HookScript("OnHide", function()
@@ -233,7 +234,7 @@ function Config:BuildPreviewBtn()
     local titleFrame = self._configTitle; if not titleFrame then return end
     local btn = CreateFrame("Button", nil, titleFrame); btn:SetSize(82, 22); btn:SetPoint("RIGHT", titleFrame, "RIGHT", -32, 0)
     self:FillBg(btn, 0.05, 0.20, 0.35, 1); self:CreateBorder(btn, 0.1, 0.45, 0.75, 1)
-    local bt = btn:CreateFontString(nil, "OVERLAY"); bt:SetFont(STANDARD_TEXT_FONT, 10, "OUTLINE"); bt:SetPoint("CENTER"); bt:SetText(L.PREVIEW); bt:SetTextColor(0.4, 0.85, 1)
+    local bt = btn:CreateFontString(nil, "OVERLAY"); bt:SetFont(ns:LocaleFont(), 10, "OUTLINE"); bt:SetPoint("CENTER"); bt:SetText(L.PREVIEW); bt:SetTextColor(0.4, 0.85, 1)
     btn:SetScript("OnClick", function() self:TogglePreview() end)
     btn:SetScript("OnEnter", function() bt:SetTextColor(1, 1, 1) end)
     btn:SetScript("OnLeave", function() bt:SetTextColor(0.4, 0.85, 1) end)
@@ -257,7 +258,7 @@ function Config:BuildConfigScaleControl()
     local group=CreateFrame("Frame",nil,titleFrame); group:SetSize(108,22); group:SetPoint("RIGHT",preview,"LEFT",-8,0); group:EnableMouseWheel(true)
     local function compactButton(width,label,onClick,tooltip)
         local b=CreateFrame("Button",nil,group); b:SetSize(width,22); self:FillBg(b,.06,.09,.13,1); self:CreateBorder(b,.2,.32,.44,1)
-        local t=b:CreateFontString(nil,"OVERLAY"); t:SetFont(STANDARD_TEXT_FONT,10,"OUTLINE"); t:SetPoint("CENTER"); t:SetText(label); t:SetTextColor(.75,.82,.9)
+        local t=b:CreateFontString(nil,"OVERLAY"); t:SetFont(ns:LocaleFont(),10,"OUTLINE"); t:SetPoint("CENTER"); t:SetText(label); t:SetTextColor(.75,.82,.9)
         b:SetScript("OnClick",onClick)
         b:SetScript("OnEnter",function(frame) t:SetTextColor(.3,.85,1); GameTooltip:SetOwner(frame,"ANCHOR_BOTTOM"); GameTooltip:AddLine(tooltip or L.CONFIG_PANEL_SCALE,1,1,1); GameTooltip:Show() end)
         b:SetScript("OnLeave",function() t:SetTextColor(.75,.82,.9); GameTooltip:Hide() end)
@@ -296,7 +297,7 @@ function Config:RefreshUI()
     if self.colorSwatches then for _, updateFn in ipairs(self.colorSwatches) do updateFn() end end
     if ns.UI and ns.UI.frame and ns.UI.frame:IsShown() then ns.UI:Layout() end
     if self.RefreshLayoutStudio then self:RefreshLayoutStudio() end
-    if self._previewFrame and self._previewFrame:IsShown() then self:RefreshPreviewTheme(); self:UpdatePreviewScene(self._previewSceneId or "mplus") end
+    if self._previewFrame and self._previewFrame:IsShown() then self:RefreshPreviewTheme(); self:UpdatePreviewScene(self._previewSceneId or "raid") end
 end
 
 function Config:RefreshSettingsVisuals()
@@ -312,11 +313,11 @@ end
 -- 控件工厂
 -- ============================================================
 function Config:H(p, text, y)
-    local h = p:CreateFontString(nil, "OVERLAY"); h:SetFont(STANDARD_TEXT_FONT, 12, "OUTLINE"); h:SetPoint("TOPLEFT", 0, y); h:SetTextColor(0, 0.8, 1); h:SetText(text); return y - 24
+    local h = p:CreateFontString(nil, "OVERLAY"); h:SetFont(ns:LocaleFont(), 12, "OUTLINE"); h:SetPoint("TOPLEFT", 0, y); h:SetTextColor(0, 0.8, 1); h:SetText(text); return y - 24
 end
 
 function Config:Desc(p, y, text)
-    local d = p:CreateFontString(nil, "OVERLAY"); d:SetFont(STANDARD_TEXT_FONT, 10, ""); d:SetPoint("TOPLEFT", 4, y); d:SetWidth(PANEL_W - SIDEBAR_W - 40); d:SetJustifyH("LEFT"); d:SetTextColor(0.5, 0.5, 0.5); d:SetText(text)
+    local d = p:CreateFontString(nil, "OVERLAY"); d:SetFont(ns:LocaleFont(), 10, ""); d:SetPoint("TOPLEFT", 4, y); d:SetWidth(PANEL_W - SIDEBAR_W - 40); d:SetJustifyH("LEFT"); d:SetTextColor(0.5, 0.5, 0.5); d:SetText(text)
     local h = d:GetStringHeight(); if h == 0 then h = ((select(2, text:gsub("\n","\n")) + 1) * 13 + 6) end; return y - h - 12
 end
 
@@ -327,20 +328,21 @@ function Config:Check(p, label, y, getter, setter, tooltipText)
     local function RefreshValue() fill:SetShown(getter() and true or false) end
     if not self._suppressSettingRefreshers then table.insert(self.settingRefreshers or {}, RefreshValue) end
     local hl = btn:CreateTexture(nil, "HIGHLIGHT"); hl:SetAllPoints(); hl:SetColorTexture(1, 1, 1, 0.1)
-    local t = btn:CreateFontString(nil, "OVERLAY"); t:SetFont(STANDARD_TEXT_FONT, 11, ""); t:SetPoint("LEFT", btn, "RIGHT", 8, 0); t:SetTextColor(0.8, 0.8, 0.8); t:SetText(label)
+    local t = btn:CreateFontString(nil, "OVERLAY"); t:SetFont(ns:LocaleFont(), 11, ""); t:SetPoint("LEFT", btn, "RIGHT", 8, 0); t:SetTextColor(0.8, 0.8, 0.8); t:SetText(label)
     btn:SetScript("OnClick", function() local nxt = not getter(); fill:SetShown(nxt); setter(nxt) end)
     if tooltipText then
         local qm = CreateFrame("Frame", nil, p); qm:SetSize(14, 14); qm:SetPoint("LEFT", t, "RIGHT", 4, 0); qm:EnableMouse(true)
-        local qt = qm:CreateFontString(nil, "OVERLAY"); qt:SetFont(STANDARD_TEXT_FONT, 11, "OUTLINE"); qt:SetPoint("CENTER"); qt:SetText("?"); qt:SetTextColor(0, 0.75, 1)
+        local qt = qm:CreateFontString(nil, "OVERLAY"); qt:SetFont(ns:LocaleFont(), 11, "OUTLINE"); qt:SetPoint("CENTER"); qt:SetText("?"); qt:SetTextColor(0, 0.75, 1)
         qm:SetScript("OnEnter", function(self2) qt:SetTextColor(0.2, 0.85, 1); GameTooltip:SetOwner(self2, "ANCHOR_TOPRIGHT"); GameTooltip:SetText(tooltipText, 1, 1, 1, 1, true); GameTooltip:Show() end)
         qm:SetScript("OnLeave", function() qt:SetTextColor(0, 0.75, 1); GameTooltip:Hide() end)
     end
-    return y - 24
+    -- The label comes back too, for a caller that redraws it later.
+    return y - 24, t
 end
 
 function Config:Slider(p, label, y, mn, mx, step, getter, setter, isPercent)
-    local lt = p:CreateFontString(nil, "OVERLAY"); lt:SetFont(STANDARD_TEXT_FONT, 10, ""); lt:SetPoint("TOPLEFT", 6, y); lt:SetTextColor(0.7, 0.7, 0.7); lt:SetText(label)
-    local vt = p:CreateFontString(nil, "OVERLAY"); vt:SetFont(STANDARD_TEXT_FONT, 10, "OUTLINE"); vt:SetPoint("TOPRIGHT", p, "TOPRIGHT", -20, y); vt:SetTextColor(0, 0.75, 1)
+    local lt = p:CreateFontString(nil, "OVERLAY"); lt:SetFont(ns:LocaleFont(), 10, ""); lt:SetPoint("TOPLEFT", 6, y); lt:SetTextColor(0.7, 0.7, 0.7); lt:SetText(label)
+    local vt = p:CreateFontString(nil, "OVERLAY"); vt:SetFont(ns:LocaleFont(), 10, "OUTLINE"); vt:SetPoint("TOPRIGHT", p, "TOPRIGHT", -20, y); vt:SetTextColor(0, 0.75, 1)
     y = y - 16
     local s = CreateFrame("Slider", nil, p); s:SetSize(280, 12); s:SetPoint("TOPLEFT", 6, y); s:SetOrientation("HORIZONTAL")
     local track = s:CreateTexture(nil, "BACKGROUND"); track:SetHeight(2); track:SetPoint("LEFT"); track:SetPoint("RIGHT"); track:SetColorTexture(0.2, 0.2, 0.25, 1)
@@ -357,15 +359,17 @@ end
 
 function Config:Dropdown(p, label, y, opts, getter, setter)
     local MAX_VISIBLE = 10; local ITEM_H = 20
-    local lt = p:CreateFontString(nil, "OVERLAY"); lt:SetFont(STANDARD_TEXT_FONT, 10, ""); lt:SetPoint("TOPLEFT", 6, y); lt:SetTextColor(0.7, 0.7, 0.7); lt:SetText(label)
+    local lt = p:CreateFontString(nil, "OVERLAY"); lt:SetFont(ns:LocaleFont(), 10, ""); lt:SetPoint("TOPLEFT", 6, y); lt:SetTextColor(0.7, 0.7, 0.7); lt:SetText(label)
     y = y - 16
     local btn = CreateFrame("Button", nil, p); btn:SetSize(220, 20); btn:SetPoint("TOPLEFT", 6, y); self:FillBg(btn, 0.1, 0.1, 0.15, 1); self:CreateBorder(btn, 0.3, 0.3, 0.4, 1)
-    local bt = btn:CreateFontString(nil, "OVERLAY"); bt:SetFont(STANDARD_TEXT_FONT, 11, ""); bt:SetPoint("LEFT", 6, 0); bt:SetTextColor(0.9, 0.9, 0.9)
-    local arrow = btn:CreateFontString(nil, "OVERLAY"); arrow:SetFont(STANDARD_TEXT_FONT, 10, "OUTLINE"); arrow:SetPoint("RIGHT", -7, 0); arrow:SetText("v"); arrow:SetTextColor(0.7, 0.7, 0.7)
+    local bt = btn:CreateFontString(nil, "OVERLAY"); bt:SetFont(ns:LocaleFont(), 11, ""); bt:SetPoint("LEFT", 6, 0); bt:SetTextColor(0.9, 0.9, 0.9)
+    local arrow = btn:CreateFontString(nil, "OVERLAY"); arrow:SetFont(ns:LocaleFont(), 10, "OUTLINE"); arrow:SetPoint("RIGHT", -7, 0); arrow:SetText("v"); arrow:SetTextColor(0.7, 0.7, 0.7)
     local hlBtn = btn:CreateTexture(nil, "HIGHLIGHT"); hlBtn:SetAllPoints(); hlBtn:SetColorTexture(1, 1, 1, 0.05)
     local function refreshText()
         local cur = getter()
-        for _, o in ipairs(opts) do if o.v == cur then bt:SetText(o.l); btn._missingValue=nil; return end end
+        -- o.font: an option drawn in its own font (a language's name in its own script).
+        for _, o in ipairs(opts) do if o.v == cur then bt:SetFont(o.font or ns:LocaleFont(), 11, ""); bt:SetText(o.l); btn._missingValue=nil; return end end
+        bt:SetFont(ns:LocaleFont(), 11, "")
         btn._missingValue=cur
         local fmt=L.CONFIG_OPTION_UNAVAILABLE_FORMAT or "Unavailable: %s"
         bt:SetText(string.format(fmt,tostring(cur or "?")))
@@ -416,13 +420,13 @@ function Config:Dropdown(p, label, y, opts, getter, setter)
         local item = CreateFrame("Button", nil, child); item:SetHeight(ITEM_H); item:SetFrameLevel(menuBaseLevel + 13)
         item:SetPoint("TOPLEFT", child, "TOPLEFT", 0, -((i-1) * ITEM_H)); item:SetPoint("TOPRIGHT", child, "TOPRIGHT", 0, -((i-1) * ITEM_H))
         local hl = item:CreateTexture(nil, "HIGHLIGHT"); hl:SetAllPoints(); hl:SetColorTexture(0, 0.75, 1, 0.2)
-        local itx = item:CreateFontString(nil, "OVERLAY"); itx:SetFont(STANDARD_TEXT_FONT, 11, ""); itx:SetPoint("LEFT", 6, 0); itx:SetPoint("RIGHT",-4,0); itx:SetWordWrap(false); itx:SetTextColor(0.8, 0.8, 0.8)
+        local itx = item:CreateFontString(nil, "OVERLAY"); itx:SetFont(ns:LocaleFont(), 11, ""); itx:SetPoint("LEFT", 6, 0); itx:SetPoint("RIGHT",-4,0); itx:SetWordWrap(false); itx:SetTextColor(0.8, 0.8, 0.8)
         if needScroll then item:EnableMouseWheel(true); item:SetScript("OnMouseWheel", function(_, delta) local cur = sb:GetValue(); local _, mx = sb:GetMinMaxValues(); sb:SetValue(math.max(0, math.min(mx, cur - delta * ITEM_H * 2))) end) end
         local row={btn=item,txt=itx}; btn.items[i]=row; return row
     end
     local function BindItem(i,o)
-        local row=EnsureItem(i); row.txt:SetText(o.l)
-        row.btn:SetScript("OnClick", function() setter(o.v); bt:SetText(o.l); btn._missingValue=nil; CloseDropdown() end)
+        local row=EnsureItem(i); row.txt:SetFont(o.font or ns:LocaleFont(), 11, ""); row.txt:SetText(o.l)
+        row.btn:SetScript("OnClick", function() setter(o.v); bt:SetFont(o.font or ns:LocaleFont(), 11, ""); bt:SetText(o.l); btn._missingValue=nil; CloseDropdown() end)
         row.btn:Show()
     end
     for i, o in ipairs(opts) do
@@ -448,7 +452,7 @@ function Config:Dropdown(p, label, y, opts, getter, setter)
 end
 
 function Config:ColorSwatch(p, label, y, getter, setter)
-    local lt = p:CreateFontString(nil, "OVERLAY"); lt:SetFont(STANDARD_TEXT_FONT, 10, ""); lt:SetPoint("TOPLEFT", 6, y); lt:SetTextColor(0.7, 0.7, 0.7); lt:SetText(label)
+    local lt = p:CreateFontString(nil, "OVERLAY"); lt:SetFont(ns:LocaleFont(), 10, ""); lt:SetPoint("TOPLEFT", 6, y); lt:SetTextColor(0.7, 0.7, 0.7); lt:SetText(label)
     local btn = CreateFrame("Button", nil, p); btn:SetSize(48, 16); btn:SetPoint("TOPLEFT", 6, y - 18)
     self:AddCheckerboard(btn, 48, 16)
     local swatch = btn:CreateTexture(nil, "ARTWORK"); swatch:SetAllPoints(); swatch:SetTexture("Interface\\Buttons\\WHITE8X8")
@@ -461,7 +465,7 @@ function Config:ColorSwatch(p, label, y, getter, setter)
 end
 
 function Config:ColorSwatchNoAlpha(p, label, y, getter, setter)
-    local lt = p:CreateFontString(nil, "OVERLAY"); lt:SetFont(STANDARD_TEXT_FONT, 10, ""); lt:SetPoint("TOPLEFT", 6, y); lt:SetTextColor(0.7, 0.7, 0.7); lt:SetText(label)
+    local lt = p:CreateFontString(nil, "OVERLAY"); lt:SetFont(ns:LocaleFont(), 10, ""); lt:SetPoint("TOPLEFT", 6, y); lt:SetTextColor(0.7, 0.7, 0.7); lt:SetText(label)
     local btn = CreateFrame("Button", nil, p); btn:SetSize(48, 16); btn:SetPoint("TOPLEFT", 6, y - 18)
     self:AddCheckerboard(btn, 48, 16)
     local swatch = btn:CreateTexture(nil, "ARTWORK"); swatch:SetAllPoints(); swatch:SetTexture("Interface\\Buttons\\WHITE8X8")

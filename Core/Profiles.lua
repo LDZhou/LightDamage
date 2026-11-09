@@ -53,6 +53,8 @@ function ns:SwitchProfile(name)
             ns.UI:Layout()
         end
     end
+    if ns.TargetArrow then ns.TargetArrow:Apply() end
+    if ns.NameplateBuffs then ns.NameplateBuffs:Apply() end
     if ns.Config then
         if ns.Config.panel then
             ns.Config:RefreshUI()
@@ -127,15 +129,10 @@ function ns:SaveSessionHistory()
             totalDamageTaken = seg.totalDamageTaken,
             encounterName    = seg.encounterName,
             success          = seg.success,
-            mythicLevel      = seg.mythicLevel,
             mapName          = seg.mapName,
             _isMerged        = seg._isMerged,
             _isBoss          = seg._isBoss,
             _instanceTag     = seg._instanceTag,
-            _preKeystone     = seg._preKeystone,
-            _mythicLevel     = seg._mythicLevel,
-            _mapName         = seg._mapName,
-            _builtByMythicPlus = seg._builtByMythicPlus,
             _sessionID       = seg._sessionID,
             _sessionIdx      = seg._sessionIdx,
             _localID         = seg._localID,    -- ★ 持久化 localID
@@ -153,7 +150,6 @@ function ns:SaveSessionHistory()
                 specID          = pd.specID,
                 specIconID      = pd.specIconID,
                 ilvl            = pd.ilvl   or 0,
-                score           = pd.score  or 0,
                 damage          = pd.damage,
                 healing         = pd.healing,
                 damageTaken     = pd.damageTaken,
@@ -205,7 +201,6 @@ function ns:SaveSessionHistory()
                 specID          = pd.specID or (cache and cache.specID),
                 specIconID      = pd.specIconID or (cache and cache.specIconID),
                 ilvl            = ((pd.ilvl or 0) > 0 and pd.ilvl) or (cache and cache.ilvl) or 0,
-                score           = ((pd.score or 0) > 0 and pd.score) or (cache and cache.score) or 0,
                 damage          = pd.damage,
                 healing         = pd.healing,
                 damageTaken     = pd.damageTaken,
@@ -291,7 +286,6 @@ function ns:LoadSessionHistory()
         for guid, pd in pairs(saved.players or {}) do
             pd.specID = pd.specID or nil
             pd.ilvl   = pd.ilvl or 0
-            pd.score  = pd.score or 0
             ns.Segments.overall.players[guid] = pd
         end
 

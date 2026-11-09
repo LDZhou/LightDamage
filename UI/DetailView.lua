@@ -23,13 +23,15 @@ local BG_HEADER  = {0.04, 0.04, 0.08, 0.96}
 local BG_SECTION = {0.05, 0.08, 0.13, 0.92}
 local BG_FATAL   = {0.22, 0.03, 0.03, 0.96}
 
+-- Never hands the raw value back: a protected float printed as is reads
+-- "1234.5678901234".
 local function GetOpaqueAbbreviatedNumber(value)
     local formatter=ns.AbbrevProtectedNumber
     if formatter then
         local ok,text=pcall(formatter,value)
         if ok then return text end
     end
-    return value
+    return "?"
 end
 
 -- 获取动态外观参数
@@ -103,7 +105,7 @@ function DV:EnsureCreated()
     local back = CreateFrame("Button", nil, tb)
     back:SetSize(24, 24); back:SetPoint("LEFT", 2, 0)
     local bt = back:CreateFontString(nil, "OVERLAY")
-    bt:SetFont(ns.FONT_MAIN, 14, "OUTLINE")
+    bt:SetFont(ns:LocaleFont(ns.FONT_MAIN), 14, "OUTLINE")
     bt:SetPoint("CENTER"); bt:SetText("<"); bt:SetTextColor(0.6, 0.6, 0.6)
     self.backText = bt  -- ★ 新增
 
@@ -112,20 +114,20 @@ function DV:EnsureCreated()
     back:SetScript("OnLeave", function() bt:SetTextColor(0.6, 0.6, 0.6) end)
 
     self.titleText = tb:CreateFontString(nil, "OVERLAY")
-    self.titleText:SetFont(ns.FONT_MAIN, 10, "OUTLINE")
+    self.titleText:SetFont(ns:LocaleFont(ns.FONT_MAIN), 10, "OUTLINE")
     self.titleText:SetPoint("LEFT", back, "RIGHT", 4, 0)
     self.titleText:SetPoint("RIGHT", -28, 0)
     self.titleText:SetJustifyH("LEFT"); self.titleText:SetWordWrap(false)
     self.titleText:SetTextColor(1, 1, 1)
     self.rawTitleText = tb:CreateFontString(nil, "OVERLAY")
-    self.rawTitleText:SetFont(ns.FONT_MAIN,10,"OUTLINE")
+    self.rawTitleText:SetFont(ns:LocaleFont(ns.FONT_MAIN),10,"OUTLINE")
     self.rawTitleText:SetPoint("LEFT",back,"RIGHT",4,0); self.rawTitleText:SetPoint("RIGHT",-28,0)
     self.rawTitleText:SetJustifyH("LEFT"); self.rawTitleText:SetWordWrap(false); self.rawTitleText:SetTextColor(1,1,1); self.rawTitleText:Hide()
 
     -- ★ 修复：✕ 在 ARHei.TTF 里没有字形会渲染成方块，改用 X
     local cb = CreateFrame("Button", nil, tb); cb:SetSize(20, 24); cb:SetPoint("RIGHT", -2, 0)
     local ct = cb:CreateFontString(nil, "OVERLAY")
-    ct:SetFont(ns.FONT_MAIN, 12, "OUTLINE")
+    ct:SetFont(ns:LocaleFont(ns.FONT_MAIN), 12, "OUTLINE")
     ct:SetPoint("CENTER"); ct:SetText("X"); ct:SetTextColor(0.5, 0.5, 0.5)
     self.closeText = ct -- ★ 新增
 
@@ -670,7 +672,7 @@ function DV:RenderSpellList(name, class, mode, spells, dur, titleSuffix, apiMaxA
             -- The archived path carries the rate as `perSec`; the live-API path
             -- (post-combat, before the run is archived) carries it as `rate`.
             -- Accept both, or the per-second column reads 0 after combat.
-            valStr = string.format("%s (%s)", ns:FormatNumber(sp.value), ns:FormatNumber(sp.perSec or sp.rate or 0))
+            valStr = string.format("%s (%s)", ns:FormatNumber(sp.value), ns.AbbrevRate(sp.perSec or sp.rate or 0))
         else
             valStr = ns:FormatNumber(sp.value)
         end
@@ -685,7 +687,7 @@ function DV:RenderSpellList(name, class, mode, spells, dur, titleSuffix, apiMaxA
             elseif sp.hasRate and ns.MODE_UNITS[mode] then
                 local rateText
                 if sp.isSecretRate then rateText=GetOpaqueAbbreviatedNumber(sp.rawRate)
-                else rateText=ns.AbbrevNumber(sp.rate) end
+                else rateText=ns.AbbrevRate(sp.rate) end
                 r.rawValue:SetFormattedText("%s (%s)",totalText,rateText)
             else
                 r.rawValue:SetText(totalText)
@@ -745,7 +747,7 @@ function DV:RenderSpellList(name, class, mode, spells, dur, titleSuffix, apiMaxA
                 tip:AddDoubleLine(L.PER_SECONDS, GetOpaqueAbbreviatedNumber(sp_c.rawRate), 0.7,0.7,0.7,1,0.85,0)
             elseif not sp_c.isSecretRate and ns.MODE_UNITS[mode] then
                 local visibleRate=sp_c.hasRate and (sp_c.rate or sp_c.perSec) or nil
-                if visibleRate then tip:AddDoubleLine(L.PER_SECONDS,string.format("%.1f",visibleRate),0.7,0.7,0.7,1,0.85,0) end
+                if visibleRate then tip:AddDoubleLine(L.PER_SECONDS,ns.AbbrevRate(visibleRate),0.7,0.7,0.7,1,0.85,0) end
             end
 
             if (sp_c.overhealing or 0) > 0 then
@@ -1103,7 +1105,7 @@ function DV:ShowDeathDetail(death)
         hr.fill:SetStatusBarColor(self:GetDetailBarColor({0.70, 0.04, 0.04, 0.55}, 0.55))
         setNameWithIcon(hr,
             GetSpellIcon((evReversed[1] and not evReversed[1].isHeal) and evReversed[1].spellID or nil),
-            L.COLORED_FATAL_PREFIX .. death.killingAbility
+            L.COLORED_FATAL_PREFIX .. (ns.DeathEventLabel and ns:DeathEventLabel(death.killingAbility) or death.killingAbility)
         )
         local killerShown = type(death.killerName) == "string" and death.killerName ~= ""
             and ns:DisplayName(death.killerName) or nil
@@ -1145,7 +1147,8 @@ function DV:ShowDeathDetail(death)
         else r.fill:SetValue(0); r.fill:Hide() end
 
         local eventName = (type(ev.spellName) == "string" and ev.spellName ~= "" and ev.spellName)
-            or (type(ev.eventType) == "string" and ev.eventType ~= "" and ev.eventType) or ""
+            or (type(ev.eventType) == "string" and ev.eventType ~= ""
+                and (ns.DeathEventLabel and ns:DeathEventLabel(ev.eventType) or ev.eventType)) or ""
 
         if ev.isHeal then
             r.fill:SetStatusBarColor(self:GetDetailBarColor({0.10, 0.50, 0.10}, alpha))
@@ -1192,7 +1195,8 @@ function DV:ShowDeathDetail(death)
             if ev_c.spellID and ev_c.spellID > 0 then
                 pcall(function() tip:SetSpellByID(ev_c.spellID) end)
             else
-                local publicEventName = ev_c.spellName or ev_c.eventType
+                local publicEventName = ev_c.spellName
+                    or (ns.DeathEventLabel and ns:DeathEventLabel(ev_c.eventType) or ev_c.eventType)
                 if publicEventName then tip:AddLine(publicEventName) end
             end
             tip:AddLine(" ")

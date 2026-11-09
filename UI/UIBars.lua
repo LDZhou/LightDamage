@@ -18,6 +18,14 @@ local NEUTRAL_CLASS_COLOR = {0.5, 0.5, 0.5}
 -- Hostile red: vivid enough to read as an enemy at a glance, with a slight
 -- deep-red bias so it remains distinct from alerts and healing/pastel bars.
 local ENEMY_BAR_COLOR = {0.92, 0.22, 0.18}
+local SKULL_ICON = "Interface\\TargetingFrame\\UI-TargetingFrame-Skull"
+-- Name memo for your own row while a Name Format is set: its text comes from
+-- your unit name, never from the row's (possibly protected) API name.
+local SELF_NAME_MEMO = {}
+
+-- Rank labels never allocate a fresh "i." string on a render tick.
+local RANK_TEXT = {}
+for i = 1, MAX_BARS do RANK_TEXT[i] = i .. "." end
 
 -- Rendering only: use the pcall-free fast accessibility path (see gateway).
 local function _isSecretValue(value)
@@ -37,20 +45,22 @@ local function _clearOpaqueText(fs)
     if fs.ClearText then fs:ClearText() else fs:SetText("") end
 end
 
+-- Never hands the raw value back: a protected float printed as is reads
+-- "1234.5678901234".
 local function _getOpaqueAbbreviatedNumber(value)
     local formatter=ns.AbbrevProtectedNumber
     if formatter then
         local ok,text=pcall(formatter,value)
         if ok then return text end
     end
-    return value
+    return "?"
 end
 
 local function _safeSetBarValue(fs, total, ps, showPS, isCount, suffix)
     if isCount then
         fs:SetFormattedText("%s" .. suffix, ns.AbbrevNumber(total))
     elseif showPS then
-        fs:SetFormattedText("%s (%s)", ns.AbbrevNumber(total), ns.AbbrevNumber(ps))
+        fs:SetFormattedText("%s (%s)", ns.AbbrevNumber(total), ns.AbbrevRate(ps))
     else
         fs:SetText(ns.AbbrevNumber(total))
     end
@@ -74,6 +84,16 @@ function UI:ReleaseBarData(bar)
     bar._detailRange=nil; bar._detailDisplaySource=nil
     -- Force a full render the next time this recycled bar is filled.
     bar._fillKey=nil; bar._fillShown=nil; bar._lastTotal=nil; bar._lastMax=nil
+    bar._styleKey=nil
+end
+
+-- Every display setting that FillBarsFromAPI applies to a row's *structure*
+-- (fonts, texture, rank text, value colour) is folded into one style key.  A
+-- row re-applies that structure only when the key changes or it moves to a
+-- different slot/list/statistic.  Layout, theme and font passes bump the
+-- generation so anything they touched is re-applied on the next fill.
+function UI:InvalidateBarStyles()
+    self._barStyleGen = (self._barStyleGen or 0) + 1
 end
 
 function UI:PositionBarRow(bar, listObj, index, height, gap)
@@ -285,7 +305,7 @@ function UI:SetAPIBarValue(bar,total,perSecond,showPerSecond,isCount,suffix)
     if totalSecret then totalDisplay=_getOpaqueAbbreviatedNumber(total)
     else
         local ok,text=pcall(ns.AbbrevNumber,total)
-        totalDisplay=ok and text or total
+        totalDisplay=ok and text or "?"
     end
     bar.rawTotalValue:SetText(totalDisplay)
 
@@ -294,8 +314,8 @@ function UI:SetAPIBarValue(bar,total,perSecond,showPerSecond,isCount,suffix)
         local rateDisplay
         if rateSecret then rateDisplay=_getOpaqueAbbreviatedNumber(perSecond)
         else
-            local ok,text=pcall(ns.AbbrevNumber,perSecond)
-            rateDisplay=ok and text or perSecond
+            local ok,text=pcall(ns.AbbrevRate,perSecond)
+            rateDisplay=ok and text or "?"
         end
         bar.rawValue:SetFormattedText("%s (%s)",totalDisplay,rateDisplay)
     elseif isCount then
@@ -305,8 +325,10 @@ function UI:SetAPIBarValue(bar,total,perSecond,showPerSecond,isCount,suffix)
     return totalSecret,rateSecret
 end
 
-function UI:SetBarDisplayName(bar,rawName)
-    local display=ns:DisplayName(rawName)
+-- isPlayer/isSelf select the Name Format (see ns:RowDisplayName); without
+-- them the name is only stripped of its realm.
+function UI:SetBarDisplayName(bar,rawName,isPlayer,isSelf)
+    local display=ns:RowDisplayName(rawName,isPlayer,isSelf)
     local protected=issecretvalue and issecretvalue(display)
     if protected then
         bar.name:Hide(); bar.rawName:Show(); bar.rawName:SetText(display)
@@ -373,7 +395,7 @@ function UI:MakeValueStr(value, dur, mode, perSec, percent)
     local baseStr
     if ns.db.display.showPerSecond then
         local ps = type(perSec) == "number" and perSec or nil
-        if ps then baseStr = string.format("%s (%s)", ns:FormatNumber(value), ns:FormatNumber(ps))
+        if ps then baseStr = string.format("%s (%s)", ns:FormatNumber(value), ns.AbbrevRate(ps))
         else baseStr = ns:FormatNumber(value) end
     else baseStr = ns:FormatNumber(value) end
     if ns.db.display.showPercent and percent and percent > 0 then return string.format("%s  %.1f%%", baseStr, percent)
@@ -381,6 +403,9 @@ function UI:MakeValueStr(value, dur, mode, perSec, percent)
 end
 
 function UI:FillBars(bars, listObj, data, dur, mode)
+    -- This local-data path styles rows its own way; the API path must
+    -- re-apply its full structure the next time it reuses these rows.
+    for _, b in ipairs(bars) do b._styleKey = nil end
     local count = math.min(#data, MAX_BARS)
     if listObj and listObj._cell and self.EnsureCellBars then
         self:EnsureCellBars(listObj._cell, count)
@@ -415,7 +440,9 @@ function UI:FillBars(bars, listObj, data, dur, mode)
             bar.statusbar:SetStatusBarColor(cc[1], cc[2], cc[3], alpha)
             bar.rank:SetText(ns.db.display.showRank and (i..".") or "")
             bar.rank:SetTextColor(tr, tg, tb, ta)
-            self:SetBarDisplayName(bar,d.name)
+            local rowIsPlayer = mode ~= "enemyDamageTaken" and not d._isEnemy
+                and type(d.class) == "string" and d.class ~= ""
+            self:SetBarDisplayName(bar,d.name,rowIsPlayer,rowIsPlayer and d.guid == ns.state.playerGUID)
             if fixedNameColor then bar.name:SetTextColor(fixedNameColor[1], fixedNameColor[2], fixedNameColor[3], fixedNameColor[4] or 1); bar.rawName:SetTextColor(fixedNameColor[1], fixedNameColor[2], fixedNameColor[3], fixedNameColor[4] or 1)
             else bar.name:SetTextColor(cc[1], cc[2], cc[3]); bar.rawName:SetTextColor(cc[1], cc[2], cc[3]) end
             if bar.specIcon then
@@ -476,8 +503,46 @@ function UI:FillBarsFromAPI(bars, listObj, mode, sessionType, sessionID, rawSess
     if maxSecret then maxValue=maxAmt else maxValue=maxAmt or 1 end
     local now = GetTime()
 
+    local display = ns.db.display
+    local showRank = display.showRank and true or false
+    local showSpecIcon = display.showSpecIcon and true or false
+    local fc = fixedNameColor
+    local nameFormatActive = ns:GetNameFormat() ~= "full"
+    -- One short string per cell per tick buys skipping ~25 widget calls per
+    -- row: fonts, textures, rank text and value colours are re-applied only
+    -- when this key changes (or the row changes slot/list/statistic).
+    local styleKey = (self._barStyleGen or 0) .. "\1" .. tostring(texPath) .. "\1" .. tostring(bh)
+        .. "\1" .. tostring(gap) .. "\1" .. tostring(alpha) .. "\1" .. tostring(font)
+        .. "\1" .. tostring(fSz) .. "\1" .. tostring(fOut) .. "\1" .. tostring(fShad)
+        .. "\1" .. tostring(nameFont) .. "\1" .. tostring(nameSz) .. "\1" .. tostring(nameOut)
+        .. "\1" .. tostring(nameShad) .. "\1" .. tostring(tr) .. "," .. tostring(tg) .. ","
+        .. tostring(tb) .. "," .. tostring(ta) .. "\1" .. (showRank and "r" or "-")
+        .. "\1" .. tostring(ns:GetNameFormat()) .. "\1" .. tostring(display.iconPack)
+        .. "\1" .. (showSpecIcon and "i" or "-") .. "\1"
+        .. (fc and (tostring(fc[1]) .. "," .. tostring(fc[2]) .. "," .. tostring(fc[3]) .. "," .. tostring(fc[4])) or "class")
+
+    -- Only rows inside the scroll viewport (plus one row of margin each way)
+    -- receive per-tick content.  A grid cell typically shows 5-8 of up to 40
+    -- rows; scrolling queues an immediate repaint (UIGrid), so a row is filled
+    -- before it can be seen.
+    local visFirst, visLast = 1, count
+    local sf = listObj and listObj.sf
+    if sf and sf.GetVerticalScroll and not self._previewContext then
+        local stride = bh + gap
+        local viewH = sf:GetHeight() or 0
+        if stride > 0 and viewH > 0 then
+            local offset = sf:GetVerticalScroll() or 0
+            visFirst = math.max(1, math.floor(offset / stride))
+            visLast = math.min(count, math.ceil((offset + viewH) / stride) + 1)
+        end
+    end
+
     for i, bar in ipairs(bars) do
-        if i <= count then
+        if i <= count and (i < visFirst or i > visLast) and bar._fillShown then
+            -- Off-screen row that already holds a full render: leave it as is.
+            -- (A row never filled yet is still rendered below so its frame and
+            -- data exist the moment it scrolls into view.)
+        elseif i <= count then
             local src = sources[i]
             if not _isReadableTable(src) then
                 if bar.specIcon then bar.specIcon:Hide() end
@@ -525,9 +590,24 @@ function UI:FillBarsFromAPI(bars, listObj, mode, sessionType, sessionID, rawSess
                     bar._lastMax = (not maxSecret) and maxValue or nil
                 end
             else
-            self:PositionBarRow(bar,listObj,i,bh,gap)
-            self:AnchorBarTexts(bar); self:SetDeathColumnLayout(bar,false); self:ResetBarValueDisplay(bar); self:ApplyFont(bar.rank, font, fSz-1, fOut, fShad); self:ApplyBarNameFonts(bar,nameFont,nameSz,nameOut,nameShad); self:ApplyBarValueFonts(bar,font,fSz-1,fOut,fShad)
-            bar.fill:Hide(); bar.statusbar:Show()
+            local structural = bar._styleKey ~= styleKey or bar._styleSlot ~= i
+                or bar._styleMode ~= mode or bar._styleList ~= listObj
+            if structural then
+                self:PositionBarRow(bar,listObj,i,bh,gap)
+                self:AnchorBarTexts(bar); self:SetDeathColumnLayout(bar,false)
+                self:ApplyFont(bar.rank, font, fSz-1, fOut, fShad); self:ApplyBarNameFonts(bar,nameFont,nameSz,nameOut,nameShad); self:ApplyBarValueFonts(bar,font,fSz-1,fOut,fShad)
+                bar.fill:Hide(); bar.statusbar:Show()
+                bar.statusbar:SetStatusBarTexture(texPath); bar.fill:SetTexture(texPath)
+                bar.rank:SetText(showRank and RANK_TEXT[i] or "")
+                bar.rank:SetTextColor(tr, tg, tb, ta)
+                self:SetBarValueTextColor(bar,tr,tg,tb,ta)
+                bar._styleKey = styleKey; bar._styleSlot = i; bar._styleMode = mode; bar._styleList = listObj
+                -- Content memos are only valid on top of the structure above.
+                bar._colorKey = nil; bar._memoName = nil; bar._memoIcon = nil; bar._memoIconIn = nil
+            else
+                -- Row width follows the window; this is memoized on width.
+                self:AnchorBarTexts(bar)
+            end
             -- Identity is resolved before the visuals so the live row, the
             -- roster cache and the local snapshot can each supply what the
             -- others lack.  Blizzard does not publish classFilename/specIconID
@@ -539,7 +619,7 @@ function UI:FillBarsFromAPI(bars, listObj, mode, sessionType, sessionID, rawSess
                 or (not gateway and issecretvalue and issecretvalue(guid)) or false
             local localPlayer = (not gateway or gateway:IsAccessibleFast(src.isLocalPlayer))
                 and src.isLocalPlayer == true
-            local identity, specID, ilvl, score = nil, nil, 0, 0
+            local identity, specID, ilvl = nil, nil, 0
             if localPlayer then
                 identity = self:GetLocalPlayerSnapshot()
             elseif not isSecretGuid then
@@ -548,7 +628,6 @@ function UI:FillBarsFromAPI(bars, listObj, mode, sessionType, sessionID, rawSess
             if identity then
                 specID = identity.specID
                 ilvl = identity.ilvl or 0
-                score = identity.score or 0
             end
 
             local rawClass = src.classFilename
@@ -570,22 +649,28 @@ function UI:FillBarsFromAPI(bars, listObj, mode, sessionType, sessionID, rawSess
             -- Last resort, exactly what Details does: a protected icon value is
             -- still a valid argument to a secret-capable texture setter.  Never
             -- turn "cannot read" into "no icon".
-            local secretIconID = (type(rawSpecIconID) ~= "nil" and not specIconID
-                and gateway and not gateway:IsAccessibleFast(rawSpecIconID))
-                and rawSpecIconID or nil
+            local secretIconID
+            if type(rawSpecIconID) ~= "nil" and not specIconID
+                and gateway and not gateway:IsAccessibleFast(rawSpecIconID) then
+                -- Keep the opaque value out of `and/or` expressions: Lua
+                -- would coerce it to a boolean before Texture:SetTexture.
+                secretIconID = rawSpecIconID
+            end
 
             local cc = mode == "enemyDamageTaken" and ENEMY_BAR_COLOR
                 or (cls and ns.CLASS_COLORS[cls]) or NEUTRAL_CLASS_COLOR
 
-            bar.statusbar:SetStatusBarTexture(texPath); bar.fill:SetTexture(texPath)
-            bar.statusbar:SetStatusBarColor(cc[1], cc[2], cc[3], alpha)
-            local tex = bar.statusbar:GetStatusBarTexture(); if tex then tex:SetVertexColor(cc[1], cc[2], cc[3], alpha) end
-            bar.fill:SetVertexColor(cc[1], cc[2], cc[3], alpha)
+            -- Colour is keyed on the (public, NeverSecret-derived) colour table.
+            if bar._colorKey ~= cc then
+                bar._colorKey = cc
+                bar.statusbar:SetStatusBarColor(cc[1], cc[2], cc[3], alpha)
+                local tex = bar.statusbar:GetStatusBarTexture(); if tex then tex:SetVertexColor(cc[1], cc[2], cc[3], alpha) end
+                bar.fill:SetVertexColor(cc[1], cc[2], cc[3], alpha)
+                if fixedNameColor then bar.name:SetTextColor(fixedNameColor[1], fixedNameColor[2], fixedNameColor[3], fixedNameColor[4] or 1); bar.rawName:SetTextColor(fixedNameColor[1], fixedNameColor[2], fixedNameColor[3], fixedNameColor[4] or 1)
+                else bar.name:SetTextColor(cc[1], cc[2], cc[3]); bar.rawName:SetTextColor(cc[1], cc[2], cc[3]) end
+            end
 
             pcall(_safeSetStatusBar,bar.statusbar,maxValue,src.totalAmount)
-
-            bar.rank:SetText(ns.db.display.showRank and (i .. ".") or "")
-            bar.rank:SetTextColor(tr, tg, tb, ta)
 
             local nameRaw = src.name
             local nameStr = ""
@@ -598,16 +683,29 @@ function UI:FillBarsFromAPI(bars, listObj, mode, sessionType, sessionID, rawSess
                 local ok, str = pcall(tostring, nameRaw)
                 if ok and str then nameStr = str end
             end
-            self:SetBarDisplayName(bar,nameStr); bar._nameStr = nameStr
-
-            if fixedNameColor then bar.name:SetTextColor(fixedNameColor[1], fixedNameColor[2], fixedNameColor[3], fixedNameColor[4] or 1); bar.rawName:SetTextColor(fixedNameColor[1], fixedNameColor[2], fixedNameColor[3], fixedNameColor[4] or 1)
-            else bar.name:SetTextColor(cc[1], cc[2], cc[3]); bar.rawName:SetTextColor(cc[1], cc[2], cc[3]) end
+            -- Name Format: players only (a class, no creature id, not an enemy
+            -- row).  Your own row reads your unit name once a format is set, so
+            -- it does not depend on the (possibly protected) API name at all.
+            local creatureID = src.sourceCreatureID
+            local rowIsPlayer = mode ~= "enemyDamageTaken" and cls ~= nil
+                and (not gateway or gateway:IsAccessibleFast(creatureID)) and creatureID == nil
+            local selfShaped = localPlayer and rowIsPlayer and nameFormatActive
+            -- A protected name can belong to anyone who moved into this slot,
+            -- so it is passed through every tick; a public one is set once.
+            if isSecret and not selfShaped then
+                self:SetBarDisplayName(bar,nameStr,rowIsPlayer,localPlayer); bar._memoName = nil
+            else
+                local memoKey = selfShaped and SELF_NAME_MEMO or nameStr
+                if bar._memoName ~= memoKey then
+                    self:SetBarDisplayName(bar,nameStr,rowIsPlayer,localPlayer); bar._memoName = memoKey
+                end
+            end
+            bar._nameStr = nameStr
 
             local rawRate = src.amountPerSecond
             local rateAvailable = _isSecretValue(rawRate) or type(rawRate) == "number"
             local amountSecret,rateSecret=self:SetAPIBarValue(bar,src.totalAmount,rawRate,
-                ns.db.display.showPerSecond and rateAvailable,COUNT_MODES[mode],L.COUNT_SUFFIX)
-            self:SetBarValueTextColor(bar,tr,tg,tb,ta)
+                display.showPerSecond and rateAvailable,COUNT_MODES[mode],L.COUNT_SUFFIX)
 
             if not bar._apiData then bar._apiData = {} end
             bar._apiData.isAPI = true; bar._apiData.sourceGUID = src.sourceGUID; bar._apiData.sourceCreatureID = src.sourceCreatureID
@@ -619,17 +717,48 @@ function UI:FillBarsFromAPI(bars, listObj, mode, sessionType, sessionID, rawSess
             bar._data = bar._apiData; bar._mode = mode; bar._isDeath = false
             bar._guid = guid; bar._classStr = cls
             bar._apiData.isLocalPlayer = localPlayer
-            bar._apiData.specID = specID; bar._apiData.ilvl = ilvl; bar._apiData.score = score
+            bar._apiData.specID = specID; bar._apiData.ilvl = ilvl
             bar._apiData.specIconID = specIconID
 
             if bar.specIcon then
-                local icon = ns:GetSpecIcon(specID, cls, specIconID)
-                if bar._mode == "enemyDamageTaken" then icon = "Interface\\TargetingFrame\\UI-TargetingFrame-Skull" end
-                if not ns.db.display.showSpecIcon then bar.specIcon:Hide()
-                elseif icon then bar.specIcon:SetTexture(icon); bar.specIcon:Show()
-                elseif type(secretIconID) ~= "nil" then
-                    bar.specIcon:SetTexture(secretIconID); bar.specIcon:Show()
-                else bar.specIcon:Hide() end
+                -- Public icons (spec, custom pack, class, skull) are resolved and
+                -- set only when their public inputs change.  A protected icon --
+                -- every specIconID on WoW Forever -- cannot be compared, so it is
+                -- handed straight to the secret-capable setter every tick, exactly
+                -- like Blizzard's own meter does.
+                if not showSpecIcon then
+                    if bar._memoIcon ~= false then bar.specIcon:Hide(); bar._memoIcon = false end
+                elseif mode == "enemyDamageTaken" then
+                    if bar._memoIcon ~= SKULL_ICON then
+                        bar.specIcon:SetTexture(SKULL_ICON); bar.specIcon:Show(); bar._memoIcon = SKULL_ICON
+                    end
+                else
+                    local publicIcon
+                    if bar._memoIconIn == true and bar._memoSpecID == specID
+                        and bar._memoSpecIconID == specIconID then
+                        publicIcon = bar._memoPublicIcon
+                    else
+                        publicIcon = ns:GetSpecIcon(specID, nil, specIconID)
+                        bar._memoIconIn = true; bar._memoSpecID = specID
+                        bar._memoSpecIconID = specIconID; bar._memoPublicIcon = publicIcon
+                    end
+                    if publicIcon then
+                        if bar._memoIcon ~= publicIcon then
+                            bar.specIcon:SetTexture(publicIcon); bar.specIcon:Show(); bar._memoIcon = publicIcon
+                        end
+                    elseif type(secretIconID) ~= "nil" then
+                        bar.specIcon:SetTexture(secretIconID); bar.specIcon:Show(); bar._memoIcon = nil
+                    else
+                        local classIcon = ns:GetSpecIcon(nil, cls, nil)
+                        if classIcon then
+                            if bar._memoIcon ~= classIcon then
+                                bar.specIcon:SetTexture(classIcon); bar.specIcon:Show(); bar._memoIcon = classIcon
+                            end
+                        elseif bar._memoIcon ~= false then
+                            bar.specIcon:Hide(); bar._memoIcon = false
+                        end
+                    end
+                end
             end
             self:PrioritizeBarValue(bar, amountSecret or rateSecret)
             bar.frame:Show()
@@ -653,6 +782,9 @@ end
 function UI:FillDeathBars(seg, bars, listObj, sessionType, sessionID, rawSession)
     bars = bars or self.priBars
     listObj = listObj or self.priList
+    -- Death rows use their own column layout; force the API path to rebuild
+    -- its structure when it takes these rows back.
+    for _, b in ipairs(bars or {}) do b._styleKey = nil end
 
     if self._pinnedSelf then
         local listKey = listObj._poolKey
@@ -760,12 +892,16 @@ function UI:FillDeathBars(seg, bars, listObj, sessionType, sessionID, rawSession
 
                 local cc = ns:GetClassColor(d.playerClass) or {0.7, 0.7, 0.7}
                 local deathName
+                -- Deaths are always group players: the Name Format applies.
+                local selfFlag, deathGUID = d.isSelf, d.playerGUID
+                local deathSelf = (not _isSecretValue(selfFlag) and selfFlag == true)
+                    or (not _isSecretValue(deathGUID) and deathGUID ~= nil and deathGUID == ns.state.playerGUID)
                 if issecretvalue and issecretvalue(d.playerName) then
                     deathName = d.playerName
-                    bar.deathPlayer:SetText(ns:DisplayName(deathName))
+                    bar.deathPlayer:SetText(ns:RowDisplayName(deathName, true, deathSelf))
                 else
                     deathName = type(d.playerName) == "string" and d.playerName or nil
-                    bar.deathPlayer:SetText(deathName and ns:DisplayName(deathName) or "")
+                    bar.deathPlayer:SetText(deathName and ns:RowDisplayName(deathName, true, deathSelf) or "")
                 end
                 if fixedNameColor then bar.deathPlayer:SetTextColor(fixedNameColor[1], fixedNameColor[2], fixedNameColor[3], fixedNameColor[4] or 1)
                 else bar.deathPlayer:SetTextColor(cc[1], cc[2], cc[3]) end
@@ -773,7 +909,7 @@ function UI:FillDeathBars(seg, bars, listObj, sessionType, sessionID, rawSession
                 local killStr = ""
                 if type(d.killingAbility) == "string" and d.killingAbility ~= "" then
                     killStr = (d._incomplete and "|cffaaaaaa" or "|cffff5555")
-                        .. d.killingAbility .. "|r"
+                        .. (ns.DeathEventLabel and ns:DeathEventLabel(d.killingAbility) or d.killingAbility) .. "|r"
                 end
                 if type(d.killerName) == "string" and d.killerName ~= "" then
                     local killer = ns:DisplayName(d.killerName)

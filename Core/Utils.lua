@@ -88,12 +88,18 @@ end
 -- 返回 nil 表示完全无图标 (调用者应自行决定是否显示职业图标兜底)
 function ns:GetSpecIcon(specID, class, specIconID)
     local pack = (ns.db and ns.db.display and ns.db.display.iconPack) or "default"
+    local gateway = ns.DamageMeterGateway
+    -- CombatSource.specIconID is public on Retail but may be a SecretValue on
+    -- Forever.  This helper returns ordinary/cached data only; callers that
+    -- own a secret-capable Texture pass protected values straight to it.
+    local publicIcon = (not gateway or gateway:IsAccessibleFast(specIconID))
+        and type(specIconID) == "number" and specIconID > 0 and specIconID or nil
 
     if pack == "default" then
         -- ★ 优先用 API 直接给的图标值 (队友自己都靠这个, 零延迟、不需要 inspect)
-        if specIconID and specIconID > 0 then return specIconID end
+        if publicIcon then return publicIcon end
         -- 没拿到 specIconID 时再走 specID 路径 (主要给本地玩家自己用)
-        if specID then
+        if specID and type(GetSpecializationInfoByID) == "function" then
             local _, _, _, icon = GetSpecializationInfoByID(specID)
             if icon then return icon end
         end
@@ -102,8 +108,8 @@ function ns:GetSpecIcon(specID, class, specIconID)
 
     -- 自定义图标包: specID -> tga 文件名映射
     -- specID 缺失时, 用 specIconID 反查 specID
-    if not specID and specIconID and specIconID > 0 and ns.ICON_TO_SPECID then
-        specID = ns.ICON_TO_SPECID[specIconID]
+    if not specID and publicIcon and ns.ICON_TO_SPECID then
+        specID = ns.ICON_TO_SPECID[publicIcon]
     end
     if specID then
         local packOverrides = ns.SPEC_ICON_PACK_OVERRIDES and ns.SPEC_ICON_PACK_OVERRIDES[pack]
@@ -113,7 +119,7 @@ function ns:GetSpecIcon(specID, class, specIconID)
         end
     end
     -- ★ 自定义包匹配失败时, 用 API 给的 specIconID 作二级兜底 (起码能看到一个图标)
-    if specIconID and specIconID > 0 then return specIconID end
+    if publicIcon then return publicIcon end
     return class and ns.CLASS_ICONS[class] or nil
 end
 
@@ -123,16 +129,77 @@ end
 -- 用于自定义图标包: 当 API 只返回 specIconID 时反查 specID
 -- 在 PLAYER_LOGIN 后调用一次即可, 数据不会变
 -- ============================================================
+-- ============================================================
+-- Specialization API, Forever-safe.
+-- Forever exposes specializations only as C_SpecializationInfo.*.  The bare
+-- globals (GetSpecialization, GetSpecializationInfo, ...) come from
+-- Blizzard_DeprecatedSpecialization, which Forever never loads
+-- (AllowLoadGameType: classic, standard), so on Forever every global-only
+-- lookup silently found nothing -- or threw where it was unguarded.  All spec
+-- reads go through these helpers; they prefer the namespaced function exactly
+-- as Forever's own UI does, keep the global for clients that still have it,
+-- and treat a missing, failing or protected answer as "unknown".
+-- tools/forever_api_check.js rejects the deprecated globals anywhere else.
+-- ============================================================
+local function SpecAPI(name)
+    local lib = C_SpecializationInfo
+    local fn = type(lib) == "table" and lib[name] or nil
+    if type(fn) ~= "function" then fn = _G[name] end
+    return type(fn) == "function" and fn or nil
+end
+
+local function PublicNumber(value)
+    if type(value) == "nil" then return nil end
+    if type(canaccessvalue) == "function" and canaccessvalue(value) ~= true then return nil end
+    if type(issecretvalue) == "function" and issecretvalue(value) == true then return nil end
+    if type(value) == "number" and value > 0 then return value end
+    return nil
+end
+
+-- The player's current specID and spec icon, or nil.
+function ns:GetPlayerSpec()
+    local getIndex, getInfo = SpecAPI("GetSpecialization"), SpecAPI("GetSpecializationInfo")
+    if not getIndex or not getInfo then return nil end
+    local ok, index = pcall(getIndex)
+    index = ok and PublicNumber(index) or nil
+    if not index then return nil end
+    local okInfo, specID, _, _, icon = pcall(getInfo, index)
+    if not okInfo then return nil end
+    specID = PublicNumber(specID)
+    if not specID then return nil end
+    return specID, PublicNumber(icon)
+end
+
+-- An inspected unit's specID, or nil (including while it is protected).
+function ns:GetInspectSpecID(unit)
+    local fn = SpecAPI("GetInspectSpecialization")
+    if not fn then return nil end
+    local ok, specID = pcall(fn, unit)
+    return ok and PublicNumber(specID) or nil
+end
+
 function ns:BuildIconToSpecIDMap()
     if ns.ICON_TO_SPECID then return end
     ns.ICON_TO_SPECID = {}
-    if not GetNumClasses or not GetNumSpecializationsForClassID or not GetSpecializationInfoForClassID then
-        return
+    local numSpecs = SpecAPI("GetNumSpecializationsForClassID")
+    if not numSpecs or type(GetSpecializationInfoForClassID) ~= "function" then return end
+    local classIDs
+    local allClassIDs = SpecAPI("GetAllClassIDs")
+    if allClassIDs then
+        local ok, ids = pcall(allClassIDs)
+        if ok and type(ids) == "table" then classIDs = ids end
     end
-    for classID = 1, GetNumClasses() do
-        local n = GetNumSpecializationsForClassID(classID) or 0
+    if not classIDs and type(GetNumClasses) == "function" then
+        classIDs = {}
+        for classID = 1, GetNumClasses() do classIDs[classID] = classID end
+    end
+    if not classIDs then return end
+    for _, classID in ipairs(classIDs) do
+        local okCount, n = pcall(numSpecs, classID)
+        n = okCount and PublicNumber(n) or 0
         for specIdx = 1, n do
-            local sid, _, _, icon = GetSpecializationInfoForClassID(classID, specIdx)
+            local okInfo, sid, _, _, icon = pcall(GetSpecializationInfoForClassID, classID, specIdx)
+            sid, icon = okInfo and PublicNumber(sid), okInfo and PublicNumber(icon)
             if icon and sid then
                 ns.ICON_TO_SPECID[icon] = sid
             end
@@ -151,28 +218,11 @@ ns.SCHOOL_COLORS = {
     [64] = {1.0, 0.5, 1.0},   -- Arcane
 }
 
--- 格式化数字
+-- 格式化数字：archived/local values take the same rules as live API values
+-- (see "Number format" below), so a fight reads the same before and after
+-- it is archived.
 function ns:FormatNumber(num)
-    if not num or num == 0 then return "0" end
-    local abs = math.abs(num)
-    
-    local lang = ns.currentLang
-    if not lang or lang == "auto" then
-        lang = (ns.db and ns.db.display and ns.db.display.language) or "auto"
-    end
-    if lang == "auto" then
-        lang = GetLocale()
-    end
-
-    if lang == "zhCN" or lang == "zhTW" then
-        if abs >= 1e8 then return string.format("%.2f亿", num / 1e8)
-        elseif abs >= 1e4 then return string.format("%.2f万", num / 1e4)
-        else return string.format("%.0f", num) end
-    else
-        if abs >= 1e6 then return string.format("%.2fM", num / 1e6)
-        elseif abs >= 1e3 then return string.format("%.1fK", num / 1e3)
-        else return string.format("%.0f", num) end
-    end
+    return ns.AbbrevNumber(num)
 end
 
 -- 格式化时间
@@ -322,22 +372,146 @@ function ns:ShortName(name)
 end
 
 function ns:DisplayName(name)
+    -- A name without its realm, never shortened (titles, tooltips, killers).
     -- Protected names must remain opaque.  Ambiguate is explicitly allowed
     -- to consume them; string matching, substring operations and measuring
-    -- are not.  Realm-visible mode therefore returns the API value verbatim.
+    -- are not.
     local protected=issecretvalue and issecretvalue(name)
     if protected then
-        if ns.db and ns.db.display and ns.db.display.showRealm then return name end
         if Ambiguate then local ok,result=pcall(Ambiguate,name,"short"); if ok then return result end end
         return name
     end
     if not name or name=="" then return "?" end
-    if ns.db and ns.db.display and ns.db.display.showRealm then return name end
     if Ambiguate then
         local ok, result = pcall(Ambiguate, name, "short")
         if ok and result then return result end
     end
     return name
+end
+
+-- ============================================================
+-- Player name format (WoW Forever surnames)
+-- ============================================================
+-- Forever characters carry a surname.  UnitName hands it back as its second
+-- value (the realm slot on retail) and Blizzard's own frames show
+-- "First Last".  The meter's Name Format shapes PLAYERS' names only:
+--   "full"  First Last          "first" First
+--   "last"  Last                "abbr"  F. Last
+--   number  at most that many characters (UTF-8 aware)
+-- A protected (secret) name cannot be inspected, so another player's name
+-- shows whole while it is protected (in combat).  Your own row reads your
+-- unit name instead, so it keeps its format in and out of combat.  Shaped
+-- names are cached (256 per format), so repaints build no strings.
+do
+    local floor = math.floor
+    local SEP = " "
+    if type(Constants) == "table" and type(Constants.CharacterNameSeparatorConsts) == "table" then
+        local sep = Constants.CharacterNameSeparatorConsts.CHARACTERNAME_SURNAME_SEPARATOR
+        if type(sep) == "string" and sep ~= "" then SEP = sep end
+    end
+    local SEP_PATTERN = SEP ~= " " and SEP:gsub("%W", "%%%0") or nil
+    local NAMED_FORMATS = { full = true, first = true, last = true, abbr = true }
+    local MAX_COUNT = 99
+
+    local function IsSecret(v) return issecretvalue ~= nil and issecretvalue(v) == true end
+    local function IsCount(v) return type(v) == "number" and v >= 1 and v <= MAX_COUNT and v == floor(v) end
+
+    function ns:IsValidNameFormat(v) return NAMED_FORMATS[v] == true or IsCount(v) end
+
+    function ns:GetNameFormat()
+        local display = ns.db and ns.db.display
+        local v = display and display.nameFormat
+        if v == nil or not ns:IsValidNameFormat(v) then return "full" end
+        return v
+    end
+
+    -- Characters, not bytes: a CJK glyph is three bytes.
+    local function Utf8Prefix(text, n)
+        local bytes, i, chars = #text, 1, 0
+        while i <= bytes do
+            if chars == n then return text:sub(1, i - 1) end
+            local b = text:byte(i)
+            i = i + ((b < 128 and 1) or (b < 224 and 2) or (b < 240 and 3) or 4)
+            chars = chars + 1
+        end
+        return text
+    end
+    ns.Utf8Prefix = Utf8Prefix
+
+    local joined = {}   -- [name][surname] = "name<SEP>surname"
+    function ns:WithSurname(name, surname, ignorePreference)
+        if IsSecret(name) or IsSecret(surname) then return name end
+        if type(name) ~= "string" or type(surname) ~= "string" or surname == "" then return name end
+        if not ignorePreference and C_PlayerInfo and C_PlayerInfo.ShouldDisplaySurname
+            and not C_PlayerInfo.ShouldDisplaySurname() then
+            -- Blizzard's show-surname preference covers your own surname only.
+            local myName, mySurname = UnitName("player")
+            if name == myName and surname == mySurname then return name end
+        end
+        local row = joined[name]
+        if not row then row = {}; joined[name] = row end
+        local full = row[surname]
+        if not full then
+            local tail = SEP .. surname
+            -- Some units already carry the surname in the first value.
+            full = (name:sub(-#tail) == tail) and name or (name .. tail)
+            row[surname] = full
+        end
+        return full
+    end
+
+    -- Your own display name, as Blizzard's frames show it.
+    function ns:LocalPlayerFullName()
+        local name, surname = UnitName("player")
+        if IsSecret(name) or type(name) ~= "string" or name == "" then return nil end
+        return ns:WithSurname(name, surname)
+    end
+
+    local short, counts = {}, {}   -- [format][name] = shaped name
+    function ns:ShortenName(name, mode)
+        if IsSecret(name) or type(name) ~= "string" or mode == "full" or not ns:IsValidNameFormat(mode) then
+            return name
+        end
+        local cache = short[mode]
+        if not cache then cache = {}; short[mode] = cache; counts[mode] = 0 end
+        local s = cache[name]
+        if s then return s end
+        local words = SEP_PATTERN and name:gsub(SEP_PATTERN, " ") or name
+        if mode == "first" then
+            s = words:match("^%s*(%S+)")
+        elseif mode == "last" then
+            s = words:match("(%S+)%s*$")
+        elseif mode == "abbr" then
+            local parts = {}
+            for word in words:gmatch("%S+") do parts[#parts + 1] = word end
+            if #parts >= 2 then
+                for i = 1, #parts - 1 do parts[i] = Utf8Prefix(parts[i], 1) .. "." end
+                s = table.concat(parts, " ")
+            end
+        else
+            -- No trailing space where the cut lands between two words.
+            s = Utf8Prefix(words, mode):match("^(.-)%s*$")
+        end
+        if not s or s == "" then s = name end
+        if counts[mode] >= 256 then wipe(cache); counts[mode] = 0 end
+        cache[name] = s
+        counts[mode] = counts[mode] + 1
+        return s
+    end
+
+    -- A meter row's name.  isPlayer: the row is a player (an NPC's or a pet's
+    -- name stays whole -- "Rot Hide Gnoll" never reads "Rot").  isSelf: your
+    -- own row, which reads your unit name whenever a format is set.
+    function ns:RowDisplayName(name, isPlayer, isSelf)
+        local mode = ns:GetNameFormat()
+        if mode == "full" or not isPlayer then return ns:DisplayName(name) end
+        if isSelf then
+            local own = ns:LocalPlayerFullName()
+            if own then return ns:ShortenName(own, mode) end
+        end
+        if IsSecret(name) then return ns:DisplayName(name) end
+        return ns:ShortenName(ns:DisplayName(name), mode)
+    end
 end
 
 -- 模式名称映射
@@ -391,7 +565,7 @@ end
 function ns:FormatValueStr(perSec, total, mode, dur)
     local unit = ns.MODE_UNITS[mode]
     if unit and dur and dur > 0 then
-        return string.format("%s(%s)", ns:FormatNumber(perSec), ns:FormatNumber(total))
+        return string.format("%s(%s)", ns.AbbrevRate(perSec), ns:FormatNumber(total))
     else
         return ns:FormatNumber(total)
     end
@@ -414,39 +588,111 @@ function ns:MergeDefaults(target, defaults)
     end
 end
 
+-- ============================================================
+-- Number format: a straight port of EllesmereUI
+-- ============================================================
+-- EllesmereUI_NumberFormat.lua, Precision "standard" on WoW Forever, as
+-- EllesmereUI.AbbreviateNumber uses it for its Damage Meters: the client's
+-- AbbreviateNumbers with one cached CreateAbbreviateConfig, for public and
+-- protected values alike.  The breakpoint tables and TrimTiers below are
+-- copied from that file unchanged.
+--   9999 stays "9999", 10123 reads "10.1K", 1.23M, 1.23B; 1.23万, 1.23亿.
+-- Per-second rates follow EUI_DamageMeters_Format.lua FormatBarValue: a public
+-- rate below 1 reads as 1; a protected rate cannot be compared and is passed
+-- through as it is (EllesmereUI: "secret sessions are short, so perSec is
+-- never sub-1 anyway").
 do
-    local lang = GetLocale()
-    local asian = lang == "zhCN" or lang == "zhTW" or lang == "koKR"
+    local tonumber = tonumber
 
-    local options
-    if asian then
-        -- 1.4.6 数值显示规则：中文/韩文使用 万/萬、亿/億的标准缩写精度。
-        options = {
-            {breakpoint=100000000, abbreviation="SECOND_NUMBER_CAP_NO_SPACE", significandDivisor=1000000, fractionDivisor=100, abbreviationIsGlobal=true},  -- 亿/億
-            {breakpoint=10000,     abbreviation="FIRST_NUMBER_CAP_NO_SPACE",  significandDivisor=100,     fractionDivisor=100, abbreviationIsGlobal=true},  -- 万/萬
-            {breakpoint=1,         abbreviation="",                            significandDivisor=1,       fractionDivisor=1,   abbreviationIsGlobal=false},
-        }
-    else
-        -- 1.4.6 数值显示规则：西文环境使用标准 K / M / B 缩写精度。
-        options = {
-            {breakpoint=1000000000, abbreviation="B", significandDivisor=10000000, fractionDivisor=100, abbreviationIsGlobal=false},
-            {breakpoint=1000000,    abbreviation="M", significandDivisor=10000,    fractionDivisor=100, abbreviationIsGlobal=false},
-            {breakpoint=1000,       abbreviation="K", significandDivisor=10,       fractionDivisor=100, abbreviationIsGlobal=false},
-            {breakpoint=1,          abbreviation="",  significandDivisor=1,        fractionDivisor=1,   abbreviationIsGlobal=false},
+    local function EnglishBreakpoints()
+        return {
+            { breakpoint = 1000000000, abbreviation = "B", significandDivisor = 10000000, fractionDivisor = 100, abbreviationIsGlobal = false },
+            { breakpoint = 1000000,    abbreviation = "M", significandDivisor = 10000,    fractionDivisor = 100, abbreviationIsGlobal = false },
+            { breakpoint = 1000,       abbreviation = "K", significandDivisor = 100,      fractionDivisor = 10,  abbreviationIsGlobal = false },
+            { breakpoint = 1,          abbreviation = "",  significandDivisor = 1,        fractionDivisor = 1,   abbreviationIsGlobal = false },
         }
     end
 
-    local cfg = CreateAbbreviateConfig(options)
-    local settings = {config = cfg}
+    -- Glyph order per locale: thousand, wan, yi.
+    local CJK_GLYPHS = {
+        zhCN = { "千", "万", "亿" },
+        zhTW = { "千", "萬", "億" },
+        koKR = { "천", "만", "억" },
+    }
+
+    local function CJKBreakpoints(g)
+        return {
+            { breakpoint = 100000000, abbreviation = g[3], significandDivisor = 1000000, fractionDivisor = 100, abbreviationIsGlobal = false },
+            { breakpoint = 10000,     abbreviation = g[2], significandDivisor = 100,     fractionDivisor = 100, abbreviationIsGlobal = false },
+            { breakpoint = 1000,      abbreviation = g[1], significandDivisor = 100,     fractionDivisor = 10,  abbreviationIsGlobal = false },
+            { breakpoint = 1,         abbreviation = "",   significandDivisor = 1,       fractionDivisor = 1,   abbreviationIsGlobal = false },
+        }
+    end
+
+    -- rows (largest first) -> a new list without the tiers below threshold, bar the
+    -- plain one (breakpoint 1 or 0). When nothing then starts AT threshold, the
+    -- largest dropped tier moves up to start there, keeping its divisors: at 10,000
+    -- the English K tier still reads 12345 as "12.3K", while the CJK thousands tier
+    -- just goes (the wan tier already starts at 10,000). A moved row is edited in
+    -- place, so pass freshly built rows.
+    local function TrimTiers(rows, threshold)
+        local out = {}
+        for i = 1, #rows do
+            local row = rows[i]
+            local bp = row.breakpoint
+            if bp >= threshold or bp <= 1 then
+                out[#out + 1] = row
+            elseif not out[1] or out[#out].breakpoint > threshold then
+                row.breakpoint = threshold
+                out[#out + 1] = row
+            end
+        end
+        return out
+    end
+
+    -- WoW Forever's numbers are small: nothing below 10,000 abbreviates.
+    local FOREVER_THRESHOLD = 10000
+
+    -- EllesmereUI keys the glyphs on its effective locale; LightDamage's is its
+    -- own language setting.
+    local function EffectiveLang()
+        local lang = ns.currentLang
+        if not lang or lang == "auto" then
+            lang = (ns.db and ns.db.display and ns.db.display.language) or "auto"
+        end
+        if lang == "auto" then lang = GetLocale() end
+        return lang
+    end
+
+    -- EllesmereUI's BuildConfig: built once per language, then a warm call is
+    -- an upvalue check.
+    local meterOpts, builtFor
+    local function MeterOptions()
+        local lang = EffectiveLang()
+        if meterOpts and lang == builtFor then return meterOpts end
+        local g = CJK_GLYPHS[lang]
+        local rows = g and CJKBreakpoints(g) or EnglishBreakpoints()
+        meterOpts = { config = CreateAbbreviateConfig(TrimTiers(rows, FOREVER_THRESHOLD)) }
+        builtFor = lang
+        return meterOpts
+    end
+    ns.NumberFormatOptions = MeterOptions
+
+    local function IsSecret(v) return issecretvalue ~= nil and issecretvalue(v) == true end
+
+    -- EllesmereUI.AbbreviateNumber.  A protected value goes to the client as
+    -- it is: comparing one, even with nil, raises.
     function ns.AbbrevNumber(n)
-        if n == nil then return "0" end
-        return AbbreviateNumbers(n, settings)
+        local opts = MeterOptions()
+        if IsSecret(n) then return AbbreviateNumbers(n, opts) end
+        return AbbreviateNumbers(tonumber(n) or 0, opts)
     end
+    ns.AbbrevProtectedNumber = ns.AbbrevNumber
 
-    -- Secret combat numbers cannot be compared with nil or handled by Lua
-    -- arithmetic. AbbreviateNumbers is the 12.1-safe formatter and returns an
-    -- opaque localized string that can be passed directly to a FontString.
-    function ns.AbbrevProtectedNumber(n)
-        return AbbreviateNumbers(n, settings)
+    -- EUI_DamageMeters_Format.lua FormatBarValue: "clamp to a min of 1, but only
+    -- for a plain number -- never compare a secret value".
+    function ns.AbbrevRate(n)
+        if not IsSecret(n) and type(n) == "number" and n < 1 then n = 1 end
+        return ns.AbbrevNumber(n)
     end
 end

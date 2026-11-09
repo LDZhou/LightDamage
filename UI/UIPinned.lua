@@ -20,10 +20,11 @@ local function _safeSetStatusBar(sb, maxV, val)
     end
 end
 
+-- Runs per source per cell per refresh: use the pcall-free predicate.
 local function IsReadableTable(value)
     if type(value) ~= "table" then return false end
     local gateway = ns.DamageMeterGateway
-    return not gateway or gateway:IsTableAccessible(value)
+    return not gateway or gateway:IsTableAccessibleFast(value)
 end
 
 function UI:MakePinnedSelfBar(container, sf, section)
@@ -76,7 +77,8 @@ function UI:FillPinnedFromData(pinnedBar, listObj, d, rank, dur, mode, maxV, pos
     pinnedBar.statusbar:SetStatusBarTexture(texPath)
     pinnedBar.rank:SetText(ns.db.display.showRank and (rank .. ".") or "")
     pinnedBar.rank:SetTextColor(tr, tg, tb, ta)
-    self:SetBarDisplayName(pinnedBar,d.name)
+    -- The pinned row is always your own.
+    self:SetBarDisplayName(pinnedBar,d.name,true,true)
     if fixedNameColor then pinnedBar.name:SetTextColor(fixedNameColor[1], fixedNameColor[2], fixedNameColor[3], fixedNameColor[4] or 1); pinnedBar.rawName:SetTextColor(fixedNameColor[1], fixedNameColor[2], fixedNameColor[3], fixedNameColor[4] or 1)
     else pinnedBar.name:SetTextColor(cc[1], cc[2], cc[3]); pinnedBar.rawName:SetTextColor(cc[1], cc[2], cc[3]) end
     pinnedBar.value:SetText(self:MakeValueStr(d.value, dur, mode, d.perSec, d.percent))
@@ -136,7 +138,7 @@ function UI:FillPinnedFromAPI(pinnedBar, listObj, src, rank, mode, maxAmt, sType
         local ok, str = pcall(tostring, nameRaw)
         if ok and str then nameStr = str end
     end
-    self:SetBarDisplayName(pinnedBar,nameStr)
+    self:SetBarDisplayName(pinnedBar,nameStr,true,true)
     if fixedNameColor then pinnedBar.name:SetTextColor(fixedNameColor[1], fixedNameColor[2], fixedNameColor[3], fixedNameColor[4] or 1); pinnedBar.rawName:SetTextColor(fixedNameColor[1], fixedNameColor[2], fixedNameColor[3], fixedNameColor[4] or 1)
     else pinnedBar.name:SetTextColor(cc[1], cc[2], cc[3]); pinnedBar.rawName:SetTextColor(cc[1], cc[2], cc[3]) end
 
@@ -148,16 +150,39 @@ function UI:FillPinnedFromAPI(pinnedBar, listObj, src, rank, mode, maxAmt, sType
     pinnedBar._apiData.sessionID = sessionID
     pinnedBar._apiData.isSecretAmount=amountSecret
     pinnedBar._apiData.isSecretRate=rateSecret
-    pinnedBar._apiData.specIconID = src.specIconID
+    local rawSpecIconID = src.specIconID
+    local gateway = ns.DamageMeterGateway
+    local specIconID = (not gateway or gateway:IsAccessibleFast(rawSpecIconID))
+        and type(rawSpecIconID) == "number" and rawSpecIconID > 0 and rawSpecIconID or nil
+    -- Only public values may enter recycled bar metadata. A protected icon is
+    -- still valid for Texture:SetTexture below, but must never be cached.
+    pinnedBar._apiData.specIconID = specIconID
     local snapshot = self:GetLocalPlayerSnapshot()
     local specID = snapshot and snapshot.specID
     pinnedBar._apiData.specID = specID
     pinnedBar._apiData.ilvl = snapshot and snapshot.ilvl or 0
-    pinnedBar._apiData.score = snapshot and snapshot.score or 0
     pinnedBar._data = pinnedBar._apiData; pinnedBar._mode = mode; pinnedBar._isDeath = false; pinnedBar._guid = src.sourceGUID; pinnedBar._nameStr = src.name; pinnedBar._classStr = cls
     if pinnedBar.specIcon then
-        local icon = ns:GetSpecIcon(specID, cls, src.specIconID)
-        if ns.db.display.showSpecIcon and icon then pinnedBar.specIcon:SetTexture(icon); pinnedBar.specIcon:Show() else pinnedBar.specIcon:Hide() end
+        local protectedIcon = type(rawSpecIconID) ~= "nil" and gateway
+            and not gateway:IsAccessibleFast(rawSpecIconID)
+        -- Resolve readable spec/custom-pack data without a class fallback
+        -- first. A protected raw icon is more specific than the generic class
+        -- fallback, but never replaces a user-selected spec icon.
+        local publicIcon = ns:GetSpecIcon(specID, nil, specIconID)
+        if not ns.db.display.showSpecIcon then
+            pinnedBar.specIcon:Hide()
+        elseif publicIcon then
+            pinnedBar.specIcon:SetTexture(publicIcon); pinnedBar.specIcon:Show()
+        elseif protectedIcon then
+            -- A SecretValue must only ever be handed straight to the
+            -- secret-capable setter: do not assign it to a variable that is
+            -- subsequently used in Lua boolean coercion.
+            pinnedBar.specIcon:SetTexture(rawSpecIconID); pinnedBar.specIcon:Show()
+        else
+            local classIcon = ns:GetSpecIcon(nil, cls, nil)
+            if classIcon then pinnedBar.specIcon:SetTexture(classIcon); pinnedBar.specIcon:Show()
+            else pinnedBar.specIcon:Hide() end
+        end
     end
     self:PrioritizeBarValue(pinnedBar, amountSecret or rateSecret)
     pinnedBar.frame:Show()
@@ -234,13 +259,18 @@ function UI:CheckPinnedSelfForAPI(listKey, listObj, sources, mode, maxAmt, sType
     local selfIdx, selfSrc = nil, nil
     local gateway = ns.DamageMeterGateway
     for i, src in ipairs(sources) do
-        if IsReadableTable(src) and (not gateway or gateway:IsAccessible(src.isLocalPlayer))
+        if IsReadableTable(src) and (not gateway or gateway:IsAccessibleFast(src.isLocalPlayer))
             and src.isLocalPlayer == true then
             selfIdx = i; selfSrc = src; break
         end
     end
     if not selfIdx or not selfSrc then self._pinnedSelfCache[listKey]=nil; pinnedBar.frame:Hide(); return end
-    self._pinnedSelfCache[listKey] = { type = "api", sources = sources, mode = mode, maxAmt = maxAmt, sType = sType, sessionID = sessionID }
+    -- Reuse the per-list record instead of allocating one per cell per tick.
+    local cached = self._pinnedSelfCache[listKey]
+    if not cached then cached = {}; self._pinnedSelfCache[listKey] = cached end
+    wipe(cached)
+    cached.type = "api"; cached.sources = sources; cached.mode = mode; cached.maxAmt = maxAmt
+    cached.sType = sType; cached.sessionID = sessionID
     local position = self:GetSelfViewportPosition(listObj, selfIdx)
     if position == "visible" then pinnedBar.frame:Hide(); return end
     self:ShrinkSfForPinned(listKey, listObj, count, position)

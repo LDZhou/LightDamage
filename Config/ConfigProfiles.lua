@@ -44,7 +44,10 @@ function Config:RefreshProfilesPage()
     y = self:H(inner, L.CONFIG_INTERFACE_AND_LANGUAGE, y)
     self._suppressSettingRefreshers = true
     y = self:Dropdown(inner, L.CONFIG_LANGUAGE_REQUIRES_RELOAD, y,
-        { {l=L.CONFIG_AUTO_CLIENT,v="auto"},{l="简体中文",v="zhCN"},{l="繁體中文",v="zhTW"},{l="English",v="enUS"},{l="Русский",v="ruRU"} },
+        -- Each language's own name, in its own script's font: readable on any client.
+        { {l=L.CONFIG_AUTO_CLIENT,v="auto"},
+          {l="简体中文",v="zhCN",font=ns.LANGUAGE_NAME_FONTS.zhCN},{l="繁體中文",v="zhTW",font=ns.LANGUAGE_NAME_FONTS.zhTW},
+          {l="English",v="enUS"},{l="Русский",v="ruRU"},{l="한국어",v="koKR",font=ns.LANGUAGE_NAME_FONTS.koKR} },
         function() return ns.db.display.language or "auto" end,
         function(v) ns.db.display.language=v; ReloadUI() end)
     self._suppressSettingRefreshers = false
@@ -58,7 +61,7 @@ function Config:RefreshProfilesPage()
     self:FillBg(input, 0.1, 0.1, 0.15, 1); self:CreateBorder(input, 0.3, 0.3, 0.4, 1); input:SetTextInsets(5, 5, 0, 0)
     local createBtn = CreateFrame("Button", nil, inner); createBtn:SetSize(80, 20); createBtn:SetPoint("LEFT", input, "RIGHT", 10, 0)
     self:FillBg(createBtn, 0.05, 0.20, 0.35, 1); self:CreateBorder(createBtn, 0.1, 0.45, 0.75, 1)
-    local ct = createBtn:CreateFontString(nil, "OVERLAY"); ct:SetFont(STANDARD_TEXT_FONT, 10, "OUTLINE"); ct:SetPoint("CENTER"); ct:SetText(L.PROFILE_NEW_PROFILE); ct:SetTextColor(0.4, 0.85, 1)
+    local ct = createBtn:CreateFontString(nil, "OVERLAY"); ct:SetFont(ns:LocaleFont(), 10, "OUTLINE"); ct:SetPoint("CENTER"); ct:SetText(L.PROFILE_NEW_PROFILE); ct:SetTextColor(0.4, 0.85, 1)
     createBtn:SetScript("OnEnter", function() ct:SetTextColor(1, 1, 1) end); createBtn:SetScript("OnLeave", function() ct:SetTextColor(0.4, 0.85, 1) end)
     createBtn:SetScript("OnClick", function()
         local txt = input:GetText():trim()
@@ -76,7 +79,7 @@ function Config:RefreshProfilesPage()
     end)
     for _, pName in ipairs(profileNames) do
         local isSelf = (pName == curName); local displayName = (pName == "默认") and L.DEFAULT or pName
-        local txt = inner:CreateFontString(nil, "OVERLAY"); txt:SetFont(STANDARD_TEXT_FONT, 11, isSelf and "OUTLINE" or "")
+        local txt = inner:CreateFontString(nil, "OVERLAY"); txt:SetFont(ns:LocaleFont(), 11, isSelf and "OUTLINE" or "")
         txt:SetPoint("TOPLEFT", 6, y); txt:SetTextColor(isSelf and 0.5 or 0.85, isSelf and 0.8 or 0.85, isSelf and 1.0 or 0.85)
         txt:SetText(displayName .. (isSelf and (" |cff888888["..L.CURRENT.."]|r") or ""))
 
@@ -84,7 +87,7 @@ function Config:RefreshProfilesPage()
         if not isSelf then
             local applyBtn = CreateFrame("Button", nil, inner); applyBtn:SetSize(76, 18); applyBtn:SetPoint("TOPLEFT", 180, y)
             self:FillBg(applyBtn, 0.05, 0.18, 0.30, 1); self:CreateBorder(applyBtn, 0.1, 0.4, 0.7, 1)
-            local at = applyBtn:CreateFontString(nil, "OVERLAY"); at:SetFont(STANDARD_TEXT_FONT, 10, "OUTLINE"); at:SetPoint("CENTER"); at:SetText(L.APPLY); at:SetTextColor(0.4, 0.85, 1)
+            local at = applyBtn:CreateFontString(nil, "OVERLAY"); at:SetFont(ns:LocaleFont(), 10, "OUTLINE"); at:SetPoint("CENTER"); at:SetText(L.APPLY); at:SetTextColor(0.4, 0.85, 1)
             applyBtn:SetScript("OnEnter", function() at:SetTextColor(1, 1, 1) end); applyBtn:SetScript("OnLeave", function() at:SetTextColor(0.4, 0.85, 1) end)
             applyBtn:SetScript("OnClick", function() ns:SwitchProfile(pName); self:RefreshProfilesPage() end); lastBtn = applyBtn
         end
@@ -92,7 +95,7 @@ function Config:RefreshProfilesPage()
             local renBtn = CreateFrame("Button", nil, inner); renBtn:SetSize(76, 18)
             if lastBtn then renBtn:SetPoint("LEFT", lastBtn, "RIGHT", 8, 0) else renBtn:SetPoint("TOPLEFT", 180, y) end
             self:FillBg(renBtn, 0.2, 0.2, 0.25, 1); self:CreateBorder(renBtn, 0.4, 0.4, 0.5, 1)
-            local rt = renBtn:CreateFontString(nil, "OVERLAY"); rt:SetFont(STANDARD_TEXT_FONT, 10, "OUTLINE"); rt:SetPoint("CENTER"); rt:SetText(L.RENAME); rt:SetTextColor(0.8, 0.8, 0.8)
+            local rt = renBtn:CreateFontString(nil, "OVERLAY"); rt:SetFont(ns:LocaleFont(), 10, "OUTLINE"); rt:SetPoint("CENTER"); rt:SetText(L.RENAME); rt:SetTextColor(0.8, 0.8, 0.8)
             renBtn:SetScript("OnEnter", function() rt:SetTextColor(1, 1, 1) end); renBtn:SetScript("OnLeave", function() rt:SetTextColor(0.8, 0.8, 0.8) end)
             renBtn:SetScript("OnClick", function()
                 StaticPopupDialogs["LIGHTDMG_RENAME_PROFILE"].text = L.PROFILE_ENTER_NEW_PROFILE_NAME; StaticPopupDialogs["LIGHTDMG_RENAME_PROFILE"].button1 = L.OK; StaticPopupDialogs["LIGHTDMG_RENAME_PROFILE"].button2 = L.CANCEL
@@ -101,7 +104,7 @@ function Config:RefreshProfilesPage()
             if not isSelf then
                 local delBtn = CreateFrame("Button", nil, inner); delBtn:SetSize(76, 18); delBtn:SetPoint("LEFT", lastBtn, "RIGHT", 8, 0)
                 self:FillBg(delBtn, 0.3, 0.05, 0.05, 1); self:CreateBorder(delBtn, 0.7, 0.1, 0.1, 1)
-                local dt = delBtn:CreateFontString(nil, "OVERLAY"); dt:SetFont(STANDARD_TEXT_FONT, 10, "OUTLINE"); dt:SetPoint("CENTER"); dt:SetText(L.DELETE); dt:SetTextColor(1, 0.4, 0.4)
+                local dt = delBtn:CreateFontString(nil, "OVERLAY"); dt:SetFont(ns:LocaleFont(), 10, "OUTLINE"); dt:SetPoint("CENTER"); dt:SetText(L.DELETE); dt:SetTextColor(1, 0.4, 0.4)
                 delBtn:SetScript("OnEnter", function() dt:SetTextColor(1, 1, 1) end); delBtn:SetScript("OnLeave", function() dt:SetTextColor(1, 0.4, 0.4) end)
                 delBtn:SetScript("OnClick", function()
                     StaticPopupDialogs["LIGHTDMG_CONFIRM_DELETE"].text = L.PROFILE_ARE_YOU_SURE_YOU_WANT_TO_DELETE_PROFILE_FORMAT; StaticPopupDialogs["LIGHTDMG_CONFIRM_DELETE"].button1 = L.OK; StaticPopupDialogs["LIGHTDMG_CONFIRM_DELETE"].button2 = L.CANCEL
@@ -112,7 +115,7 @@ function Config:RefreshProfilesPage()
         y = y - 26
     end
     y = y - 14
-    local about = inner:CreateFontString(nil, "OVERLAY"); about:SetFont(STANDARD_TEXT_FONT, 10, "")
+    local about = inner:CreateFontString(nil, "OVERLAY"); about:SetFont(ns:LocaleFont(), 10, "")
     about:SetPoint("TOPLEFT", 6, y); about:SetTextColor(.5,.5,.55); about:SetText("Light Damage " .. tostring(ns.version or "2.0"))
     inner:SetHeight(math.abs(y) + 36)
 end

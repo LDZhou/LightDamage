@@ -30,11 +30,10 @@ function UI:ToggleCollapse(collapse, skipAnim)
         self.collapseBtn.iconTex:SetTexture(TEX.."btn_collapse"); self.collapseBtn.iconTex:SetVertexColor(0.65,0.65,0.65,1)
         self.collapseBtn.texNormal = TEX.."btn_collapse"; self.collapseBtn.texHover = TEX.."btn_collapse"
         self.bodyFrame:Show(); self.tabBar:Show()
-        if self.summaryBar then self.summaryBar:Hide() end
         self:UpdateLockState()
     end
     local function onAnimComplete()
-        if self._collapsed then self.bodyFrame:Hide(); self.tabBar:Hide(); self.summaryBar:Hide()
+        if self._collapsed then self.bodyFrame:Hide(); self.tabBar:Hide()
         else
             self.frame:ClearAllPoints()
             if self._savedAnchor then self.frame:SetPoint(unpack(self._savedAnchor)) end
@@ -107,14 +106,12 @@ function UI:ApplyFadeAlpha(shouldFadeBars, shouldFadeBody)
     end
     if fdb.fadeBody then
         if self.bodyFrame then table.insert(bodyTargets, self.bodyFrame) end
-        if self.summaryBar then table.insert(bodyTargets, self.summaryBar) end
     end
     if not shouldFadeBars and not shouldFadeBody then
         if self.titleBar then table.insert(barsTargets, self.titleBar) end
         if self.tabBar then table.insert(barsTargets, self.tabBar) end
         if self.resizeHandle then table.insert(barsTargets, self.resizeHandle) end
         if self.bodyFrame then table.insert(bodyTargets, self.bodyFrame) end
-        if self.summaryBar then table.insert(bodyTargets, self.summaryBar) end
     end
     if #barsTargets == 0 and #bodyTargets == 0 then return end
     if fdb.enableAnim and not self._fadeAnimating then self:StartFadeAnim(barsTargets, barsAlpha, bodyTargets, bodyAlpha)

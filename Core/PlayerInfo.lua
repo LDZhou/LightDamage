@@ -1,6 +1,7 @@
 --[[
     Light Damage - PlayerInfo.lua
-    Event-driven roster enrichment (class/spec/item level/Mythic+ score).
+    Event-driven roster enrichment (class/spec/item level).  WoW Forever has
+    no Mythic+ rating, so no rating is read or cached.
 
     DamageMeter classFilename/specIconID remain the primary combat-row source.
     Inspect is an asynchronous enhancement only and never blocks rendering.
@@ -20,7 +21,6 @@ ns.PlayerInfo = PlayerInfo
 PlayerInfo.stats = {sweeps = 0, unitsScanned = 0, pvpSkips = 0, inspects = 0, inspectFails = 0}
 local stats = PlayerInfo.stats
 
-local SCORE_TTL = 300
 local INSPECT_TTL = 300
 local INSPECT_THROTTLE = 2.0
 local INSPECT_TIMEOUT = 6.0
@@ -48,16 +48,13 @@ local pumpTimerDue
 local lastNotifyAt = 0
 local issuingInspect = false
 
+-- canaccessvalue / issecretvalue are Blizzard's sanctioned predicates: they
+-- return a plain boolean for any input, secret values included, and never
+-- throw (see DamageMeterGateway:IsAccessibleFast), so no pcall is needed.
 local function IsAccessible(value)
     if type(value) == "nil" then return false end
-    if type(canaccessvalue) == "function" then
-        local ok, accessible = pcall(canaccessvalue, value)
-        if not ok or accessible ~= true then return false end
-    end
-    if type(issecretvalue) == "function" then
-        local ok, secret = pcall(issecretvalue, value)
-        if not ok or secret == true then return false end
-    end
+    if type(canaccessvalue) == "function" and canaccessvalue(value) ~= true then return false end
+    if type(issecretvalue) == "function" and issecretvalue(value) == true then return false end
     return true
 end
 
@@ -75,22 +72,20 @@ local function RestrictionIsActive(restrictionType)
     return ok and state ~= inactive
 end
 
--- Battlegrounds and arenas put the player in a raid group of up to 40, on a
--- roster that churns with every death and resurrection -- and none of the work
--- this module does can succeed there: CanInspect is false for the opposing
--- faction, and a Mythic+ rating is meaningless in a PvP match.  The combat rows
--- already carry classFilename and specIconID, which is what the bars actually
--- render, so the whole roster/inspect subsystem stands down.
+-- Battlegrounds put the player in a raid group of up to 40, on a roster that
+-- churns with every death and resurrection -- and none of the work this module
+-- does can succeed there: CanInspect is false for the opposing faction.  The
+-- combat rows already carry classFilename and specIconID, which is what the
+-- bars actually render, so the whole roster/inspect subsystem stands down.
 local function IsPvPInstance()
     local inInstance, instanceType = IsInInstance()
-    if not inInstance then return false end
-    return instanceType == "pvp" or instanceType == "arena"
+    return inInstance and instanceType == "pvp" or false
 end
 
 -- Inspect is the only part of player enrichment that must yield while the
--- player is actively affecting combat.  Challenge/encounter restrictions can
--- remain active for an entire run, including safe out-of-combat periods; they
--- must not suppress public rating reads or CanInspect-driven inspect work.
+-- player is actively affecting combat.  Encounter restrictions can remain
+-- active for an entire raid, including safe out-of-combat periods; they must
+-- not suppress CanInspect-driven inspect work.
 local function IsInspectPaused()
     if InCombatLockdown() or UnitAffectingCombat("player") then return true end
     local types = Enum and Enum.AddOnRestrictionType
@@ -111,8 +106,7 @@ local function CacheForGUID(guid)
     local cache = ns.PlayerInfoCache[guid]
     if not cache then
         cache = {
-            score = 0, ilvl = 0,
-            scoreKnown = false, ilvlKnown = false, specKnown = false,
+            ilvl = 0, ilvlKnown = false, specKnown = false,
             lastInspect = 0, lastSeenAt = GetTime(),
         }
         ns.PlayerInfoCache[guid] = cache
@@ -203,9 +197,8 @@ local function ReadLocalPlayer()
     cache.lastSeenAt = GetTime()
     cache.seenGeneration = rosterGeneration
 
-    local specIndex = GetSpecialization and GetSpecialization()
-    if specIndex then
-        local specID, _, _, icon = GetSpecializationInfo(specIndex)
+    if ns.GetPlayerSpec then
+        local specID, icon = ns:GetPlayerSpec()
         if specID then cache.specID = specID; cache.specKnown = true; cache.specAt = GetTime() end
         if icon then cache.specIconID = icon end
     end
@@ -215,38 +208,6 @@ local function ReadLocalPlayer()
         cache.ilvlKnown = true
         cache.ilvlAt = GetTime()
     end
-end
-
-local function ReadScore(unit, cache, now)
-    if cache.scoreKnown and now - (cache.scoreAt or 0) < SCORE_TTL then return end
-    if now < (cache.scoreRetryAt or 0) then return end
-    if not C_PlayerInfo or not C_PlayerInfo.GetPlayerMythicPlusRatingSummary then return end
-    local ok, summary = pcall(C_PlayerInfo.GetPlayerMythicPlusRatingSummary, unit)
-    local gateway = ns.DamageMeterGateway
-    local summaryReadable = ok and type(summary) == "table"
-        and (not gateway or gateway:IsTableAccessible(summary))
-    local scoreValue
-    if summaryReadable then
-        local readOK, value = pcall(function() return summary.currentSeasonScore end)
-        if readOK and IsAccessible(value) then scoreValue = value end
-    end
-    if type(scoreValue) ~= "nil" then
-        local score = tonumber(scoreValue)
-        if score then
-            local changed = not cache.scoreKnown or cache.score ~= score
-            cache.score = score
-            cache.scoreKnown = true -- zero is a valid cached result
-            cache.scoreAt = now
-            cache.scoreFailures = 0
-            cache.scoreRetryAt = nil
-            if changed then NotifyDataChanged("score") end
-            return
-        end
-    end
-    cache.scoreFailures = (cache.scoreFailures or 0) + 1
-    local retryDelay = Backoff(cache.scoreFailures)
-    cache.scoreRetryAt = now + retryDelay
-    ScheduleRetrySweep(retryDelay)
 end
 
 local function ProcessUnit(unit, isLocal, generation, now)
@@ -263,14 +224,8 @@ local function ProcessUnit(unit, isLocal, generation, now)
 
     local playerGUID = ns.state and ns.state.playerGUID
     local isSelf = isLocal or (IsAccessible(playerGUID) and guid == playerGUID)
-    if isSelf then
-        -- Local spec and item level come from direct APIs, but the Mythic+
-        -- rating still uses the same rating-summary API as every other player.
-        -- Read it before returning from the inspect-only portion of this path.
-        ReadScore(unit, cache, now)
-        return
-    end
-    ReadScore(unit, cache, now)
+    -- Local spec and item level come from direct APIs (ReadLocalPlayer).
+    if isSelf then return end
 
     if IsInspectPaused() then return end
 
@@ -387,14 +342,12 @@ local function OnInspectReady(eventGUID)
             cache.ilvlAt = GetTime()
             changed = true
         end
-        if GetInspectSpecialization then
-            local okSpec, specID = pcall(GetInspectSpecialization, request.unit)
-            if okSpec and IsAccessible(specID) and type(specID) == "number" and specID > 0 then
-                cache.specID = specID
-                cache.specKnown = true
-                cache.specAt = GetTime()
-                changed = true
-            end
+        local specID = ns.GetInspectSpecID and ns:GetInspectSpecID(request.unit)
+        if specID then
+            cache.specID = specID
+            cache.specKnown = true
+            cache.specAt = GetTime()
+            changed = true
         end
         cache.lastInspect = GetTime()
         cache.inspectFailures = 0
@@ -463,15 +416,6 @@ eventFrame:SetScript("OnEvent", function(_, event, arg1)
         ReadLocalPlayer()
         NotifyDataChanged("local")
         ScheduleRosterRefresh(0.1)
-    elseif event == "CHALLENGE_MODE_COMPLETED" then
-        -- A completed key can change every party member's rating immediately;
-        -- bypass the normal five-minute TTL on the next safe roster pass.
-        for _, cache in pairs(ns.PlayerInfoCache) do
-            cache.scoreKnown = false
-            cache.scoreAt = 0
-            cache.scoreRetryAt = nil
-        end
-        ScheduleRosterRefresh(2)
     else
         ScheduleRosterRefresh(event == "GROUP_ROSTER_UPDATE" and 0.2 or 0.1)
         if event == "PLAYER_REGEN_ENABLED" then SchedulePump(0.1) end
@@ -483,7 +427,7 @@ for _, event in ipairs({
     "PLAYER_REGEN_DISABLED", "PLAYER_REGEN_ENABLED",
     "PLAYER_EQUIPMENT_CHANGED", "PLAYER_SPECIALIZATION_CHANGED",
     "ACTIVE_TALENT_GROUP_CHANGED", "INSPECT_READY",
-    "ADDON_RESTRICTION_STATE_CHANGED", "CHALLENGE_MODE_COMPLETED",
+    "ADDON_RESTRICTION_STATE_CHANGED",
 }) do
     eventFrame:RegisterEvent(event)
 end

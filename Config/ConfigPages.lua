@@ -1,120 +1,12 @@
 --[[
     Light Damage - ConfigPages.lua
-    设置页面：Layout, Data, Look, Perf
+    设置页面：底部栏快捷按钮与外观页 (布局/数据/行为页见 ConfigLayouts.lua)
     注意：所有方法挂载到 ns.Config 上（ConfigCore.lua 已创建）
 ]]
 local addonName, ns = ...
 local L = ns.L
 local Config = ns.Config
 
-local PANEL_W   = 500
-local SIDEBAR_W = 110
-
--- ============================================================
--- Layout 页
--- ============================================================
-function Config:BuildLayoutPage()
-    local inner = self.pages["layout"].inner
-
-
-    local sec1 = CreateFrame("Frame", nil, inner); sec1:SetWidth(inner:GetWidth()); local y1 = 0
-    y1 = self:H(sec1, L.CONFIG_UI_LANGUAGE, y1)
-    y1 = self:Dropdown(sec1, L.CONFIG_LANGUAGE_REQUIRES_RELOAD, y1, { {l=L.CONFIG_AUTO_CLIENT, v="auto"}, {l="简体中文", v="zhCN"}, {l="繁体中文", v="zhTW"}, {l="English", v="enUS"}, {l="Русский", v="ruRU"} }, function() return ns.db.display.language or "auto" end, function(v) ns.db.display.language = v; ReloadUI() end)
-    sec1:SetHeight(math.abs(y1)); self.laySec1 = sec1
-
-    local posesLR = { {l=L.LEFT, v=1}, {l=L.RIGHT, v=2} }; local posesTB = { {l=L.TOP, v=1}, {l=L.BOTTOM, v=2} }
-    local dirs = { {l=L.CONFIG_LEFT_RIGHT_SPLIT, v="LR"}, {l=L.CONFIG_TOP_BOTTOM_SPLIT, v="TB"} }
-    local allModes = {}
-    for _, mode in ipairs(ns.MODE_ORDER) do
-        allModes[#allModes + 1] = {l = L[ns.MODE_NAMES[mode] or mode], v = mode}
-    end
-
-    local sec2 = CreateFrame("Frame", nil, inner); sec2:SetWidth(inner:GetWidth()); local y2 = 0
-    y2 = self:H(sec2, L.CONFIG_CURRENT_AND_OVERALL_WINDOW, y2)
-    y2 = self:Check(sec2, L.CONFIG_SHOW_CURRENT_AND_OVERALL, y2, function() return ns.db.split.showOverall end, function(v) ns.db.split.showOverall = v; self:RefreshUI(); self:UpdateLayoutVisibility() end, L.OVERALL_DATA_TOOLTIP)
-    local sec2_sub = CreateFrame("Frame", nil, sec2); sec2_sub:SetWidth(inner:GetWidth() - 16); sec2_sub:SetPoint("TOPLEFT", sec2, "TOPLEFT", 16, y2); local y2s = 0
-    y2s = self:Desc(sec2_sub, y2s, L.CONFIG_ENABLE_SCENARIO)
-    y2s = self:Check(sec2_sub, L.MYTHIC_PLUS, y2s, function() return ns.db.split.overallShowMPlus end, function(v) ns.db.split.overallShowMPlus=v; self:RefreshUI(); self:UpdateLayoutVisibility() end)
-    y2s = self:Check(sec2_sub, L.RAID_INSTANCE, y2s, function() return ns.db.split.overallShowRaid end, function(v) ns.db.split.overallShowRaid=v; self:RefreshUI(); self:UpdateLayoutVisibility() end)
-    y2s = self:Check(sec2_sub, L.OTHER_INSTANCES_INCL_DELVES_BGS_ARENAS, y2s, function() return ns.db.split.overallShowDungeon end, function(v) ns.db.split.overallShowDungeon=v; self:RefreshUI(); self:UpdateLayoutVisibility() end)
-    y2s = self:Check(sec2_sub, L.NON_INSTANCE_OPEN_WORLD, y2s, function() return ns.db.split.overallShowOutdoor end, function(v) ns.db.split.overallShowOutdoor=v; self:RefreshUI(); self:UpdateLayoutVisibility() end)
-    y2s = y2s - 8
-    local curPosBtn
-    y2s, self.ovrDirBtn = self:Dropdown(sec2_sub, L.CONFIG_CURRENT_OVERALL_SPLIT, y2s, dirs, function() return ns.db.split.overallDir or "LR" end, function(v) ns.db.split.overallDir = v; ns.db.split.splitDir = (v == "LR") and "TB" or "LR"; if curPosBtn then curPosBtn.UpdateOpts(v == "TB" and posesTB or posesLR) end; if self.priPosBtn then self.priPosBtn.UpdateOpts(ns.db.split.splitDir == "TB" and posesTB or posesLR) end; if self.splitDirBtn then self.splitDirBtn.UpdateOpts(dirs) end; self:RefreshUI(); self:UpdateLayoutVisibility() end)
-    y2s, curPosBtn = self:Dropdown(sec2_sub, L.CURRENT_DATA_POSITION, y2s, (ns.db.split.overallDir == "TB") and posesTB or posesLR, function() return ns.db.split.currentPos or 1 end, function(v) ns.db.split.currentPos = v; self:RefreshUI() end)
-    sec2_sub:SetHeight(math.abs(y2s)); self.laySec2Sub = sec2_sub; self.laySec2 = sec2
-
-    local sec3 = CreateFrame("Frame", nil, inner); sec3:SetWidth(inner:GetWidth()); local y3 = 0
-    y3 = self:H(sec3, L.CONFIG_DUAL_DATA_DISPLAY, y3)
-    y3 = self:Check(sec3, L.CONFIG_ENABLE_DUAL_DATA, y3, function() return ns.db.split.enabled end, function(v) ns.db.split.enabled = v; if v then if ns.db.display.mode ~= "split" then ns.db.display.mode = "split" end else if ns.db.display.mode == "split" then ns.db.display.mode = ns.db.split.primaryMode or "damage" end end; self:RefreshUI(); self:UpdateLayoutVisibility() end)
-    local sec3_sub = CreateFrame("Frame", nil, sec3); sec3_sub:SetWidth(inner:GetWidth() - 16); sec3_sub:SetPoint("TOPLEFT", sec3, "TOPLEFT", 16, y3); local y3s = 0
-    y3s = self:Desc(sec3_sub, y3s, L.CONFIG_ENABLE_SCENARIO)
-    y3s = self:Check(sec3_sub, L.MYTHIC_PLUS, y3s, function() return ns.db.split.splitShowMPlus end, function(v) ns.db.split.splitShowMPlus=v; if v and ns.db.split.enabled and ns.state.instanceCategory == "mplus" then ns.db.display.mode = "split" end; self:RefreshUI() end)
-    y3s = self:Check(sec3_sub, L.RAID_INSTANCE, y3s, function() return ns.db.split.splitShowRaid end, function(v) ns.db.split.splitShowRaid=v; if v and ns.db.split.enabled and ns.state.instanceCategory == "raid" then ns.db.display.mode = "split" end; self:RefreshUI() end)
-    y3s = self:Check(sec3_sub, L.OTHER_INSTANCES_INCL_DELVES_BGS_ARENAS, y3s, function() return ns.db.split.splitShowDungeon end, function(v) ns.db.split.splitShowDungeon=v; if v and ns.db.split.enabled and ns.state.instanceCategory == "dungeon" then ns.db.display.mode = "split" end; self:RefreshUI() end)
-    y3s = self:Check(sec3_sub, L.NON_INSTANCE_OPEN_WORLD, y3s, function() return ns.db.split.splitShowOutdoor end, function(v) ns.db.split.splitShowOutdoor=v; if v and ns.db.split.enabled and ns.state.instanceCategory == "outdoor" then ns.db.display.mode = "split" end; self:RefreshUI() end)
-    y3s = y3s - 8
-    y3s, self.splitDirBtn = self:Dropdown(sec3_sub, L.CONFIG_DUAL_DATA_SPLIT, y3s, dirs, function() return ns.db.split.splitDir or "TB" end, function(v) ns.db.split.splitDir = v; ns.db.split.overallDir = (v == "LR") and "TB" or "LR"; if self.priPosBtn then self.priPosBtn.UpdateOpts(v == "TB" and posesTB or posesLR) end; if curPosBtn then curPosBtn.UpdateOpts(ns.db.split.overallDir == "TB" and posesTB or posesLR) end; if self.ovrDirBtn then self.ovrDirBtn.UpdateOpts(dirs) end; self:RefreshUI(); self:UpdateLayoutVisibility() end)
-    y3s, self.priPosBtn = self:Dropdown(sec3_sub, L.PRIMARY_DATA_POSITION, y3s, (ns.db.split.splitDir == "TB") and posesTB or posesLR, function() return ns.db.split.primaryPos or 1 end, function(v) ns.db.split.primaryPos = v; self:RefreshUI() end)
-    y3s = self:Dropdown(sec3_sub, L.CONFIG_PRIMARY_CONTENT, y3s, allModes, function() return ns.db.split.primaryMode end, function(v) ns.db.split.primaryMode=v; self:RefreshUI() end)
-    y3s = self:Dropdown(sec3_sub, L.CONFIG_SECONDARY_CONTENT, y3s, allModes, function() return ns.db.split.secondaryMode end, function(v) ns.db.split.secondaryMode=v; self:RefreshUI() end)
-    sec3_sub:SetHeight(math.abs(y3s)); self.laySec3Sub = sec3_sub; self.laySec3 = sec3
-
-    local sec4 = CreateFrame("Frame", nil, inner); sec4:SetWidth(inner:GetWidth()); local y4 = 0
-    y4 = self:H(sec4, L.CONFIG_ADAPTIVE_LAYOUT_RATIO, y4)
-    y4 = self:Slider(sec4, L.CONFIG_TOP_BOTTOM_RATIO, y4, 0.2, 0.8, 0.01, function() return ns.db.split.tbRatio or 0.5 end, function(v) ns.db.split.tbRatio = v; self:RefreshUI() end, true)
-    y4 = self:Slider(sec4, L.CONFIG_LEFT_RIGHT_RATIO, y4, 0.2, 0.8, 0.01, function() return ns.db.split.lrRatio or 0.5 end, function(v) ns.db.split.lrRatio = v; self:RefreshUI() end, true)
-    sec4:SetHeight(math.abs(y4)); self.laySec4 = sec4
-
-    local sec5 = CreateFrame("Frame", nil, inner); sec5:SetWidth(inner:GetWidth()); local y5 = 0
-    y5 = self:H(sec5, L.CONFIG_PER_SCENE_WINDOW_SIZE, y5)
-    y5 = self:Check(sec5, L.CONFIG_PER_SCENE_WINDOW_SIZE, y5,
-        function() return ns.db.window.rememberSceneSize end,
-        function(v)
-            ns.db.window.rememberSceneSize = v
-            if v then
-                local cat = ns.state.instanceCategory or "outdoor"
-                if not ns.db.window.sceneSizes then ns.db.window.sceneSizes = {} end
-                if not ns.db.window.sceneSizes[cat] then
-                    ns.db.window.sceneSizes[cat] = { width = ns.db.window.width, height = ns.db.window.height }
-                end
-            end
-            self:UpdateLayoutVisibility()
-        end)
-    y5 = self:Desc(sec5, y5, L.SCENE_SIZE_DESC)
-    self._laySec5BaseH = math.abs(y5)
-
-    local sec5_sub = CreateFrame("Frame", nil, sec5); sec5_sub:SetWidth(inner:GetWidth() - 16); sec5_sub:SetPoint("TOPLEFT", sec5, "TOPLEFT", 16, y5); local y5s = 0
-    local anchorOpts = {
-        {l=L.TOP_LEFT, v="TOPLEFT"}, {l=L.TOP, v="TOP"}, {l=L.TOP_RIGHT, v="TOPRIGHT"},
-        {l=L.LEFT, v="LEFT"}, {l=L.CENTER, v="CENTER"}, {l=L.RIGHT, v="RIGHT"},
-        {l=L.BOTTOM_LEFT, v="BOTTOMLEFT"}, {l=L.BOTTOM, v="BOTTOM"}, {l=L.BOTTOM_RIGHT, v="BOTTOMRIGHT"},
-    }
-    y5s = self:Dropdown(sec5_sub, L.CONFIG_RESIZE_ANCHOR, y5s, anchorOpts,
-        function() return ns.db.window.sceneAnchor or "TOPLEFT" end,
-        function(v) ns.db.window.sceneAnchor = v end)
-    y5s = self:Desc(sec5_sub, y5s, L.SCENE_ANCHOR_DESC)
-    sec5_sub:SetHeight(math.abs(y5s)); self.laySec5Sub = sec5_sub; self.laySec5 = sec5
-
-    self:UpdateLayoutVisibility()
-end
-
-function Config:UpdateLayoutVisibility()
-    local inner = self.pages["layout"].inner
-    if ns.db.split.showOverall then self.laySec2Sub:Show(); self.laySec2:SetHeight(48 + self.laySec2Sub:GetHeight()) else self.laySec2Sub:Hide(); self.laySec2:SetHeight(48) end
-    if ns.db.split.enabled then self.laySec3Sub:Show(); self.laySec3:SetHeight(48 + self.laySec3Sub:GetHeight()) else self.laySec3Sub:Hide(); self.laySec3:SetHeight(48) end
-    self.laySec1:SetPoint("TOPLEFT", inner, "TOPLEFT", 0, 0)
-    self.laySec2:SetPoint("TOPLEFT", self.laySec1, "BOTTOMLEFT", 0, -12)
-    self.laySec3:SetPoint("TOPLEFT", self.laySec2, "BOTTOMLEFT", 0, -12)
-    self.laySec4:SetPoint("TOPLEFT", self.laySec3, "BOTTOMLEFT", 0, -12)
-
-    local sec5BaseH = self._laySec5BaseH or 48
-    if ns.db.window.rememberSceneSize then self.laySec5Sub:Show(); self.laySec5:SetHeight(sec5BaseH + self.laySec5Sub:GetHeight()) else self.laySec5Sub:Hide(); self.laySec5:SetHeight(sec5BaseH) end
-    self.laySec5:SetPoint("TOPLEFT", self.laySec4, "BOTTOMLEFT", 0, -12)
-
-    local totalH = self.laySec1:GetHeight() + self.laySec2:GetHeight() + self.laySec3:GetHeight() + self.laySec4:GetHeight() + self.laySec5:GetHeight() + 60
-    inner:SetHeight(totalH); self:UpdatePageScroll("layout")
-end
 
 -- ============================================================
 -- Data 页
@@ -156,86 +48,6 @@ function Config:BuildBottomBarSettings(page)
     return y
 end
 
--- Kept only as a migration/reference implementation. The active data page is
--- built by ConfigLayouts.lua; giving this legacy builder a distinct name
--- prevents load order from silently replacing either implementation again.
-function Config:BuildLegacyDataPage()
-    local inner = self.pages["data"].inner; local y = 0
-    y = self:H(inner, L.CONFIG_DATA_DISPLAY_FORMAT, y)
-    y = self:Check(inner, L.CONFIG_SHOW_TOTAL_DAMAGE_AND_DPS, y, function() return ns.db.display.showPerSecond end, function(v) ns.db.display.showPerSecond=v; self:RefreshUI() end)
-    y = self:Check(inner, L.CONFIG_SHOW_CONTRIBUTION_PERCENT_OUT_OF_COMBAT, y, function() return ns.db.display.showPercent end, function(v) ns.db.display.showPercent=v; self:RefreshUI() end)
-    y = self:Check(inner, L.CONFIG_SHOW_RANK_NUM, y, function() return ns.db.display.showRank end, function(v) ns.db.display.showRank=v; self:RefreshUI() end)
-    y = self:Check(inner, L.CONFIG_SPEC_ICON_ON_LEFT, y, function() return ns.db.display.showSpecIcon end, function(v) ns.db.display.showSpecIcon=v; self:RefreshUI() end)
-    y = self:Check(inner, L.CONFIG_SHOW_PLAYER_REALM, y, function() return ns.db.display.showRealm end, function(v) ns.db.display.showRealm=v; self:RefreshUI() end)
-    y = self:Check(inner, L.CONFIG_ALWAYS_SHOW_SELF_IN_RANKING, y, function() return ns.db.display.alwaysShowSelf end, function(v) ns.db.display.alwaysShowSelf=v; self:RefreshUI() end)
-    y = self:Check(inner, L.CONFIG_SHOW_OVERALL_SUMMARY_ROW_INSTANCE_ONLY, y, function() return ns.db.mythicPlus.dualDisplay end, function(v) ns.db.mythicPlus.dualDisplay=v; self:RefreshUI() end)
-    self._dataTopY = y
-
-    -- Section: 生成全程段落
-    local secGen = CreateFrame("Frame", nil, inner); secGen:SetWidth(inner:GetWidth()); local yGen = 0
-    yGen = self:Check(secGen, L.GENERATE_OVERALL_SEGMENT_AFTER_LEAVING_INSTANCE, yGen,
-        function() return ns.db.mythicPlus.enabled end,
-        function(v) ns.db.mythicPlus.enabled=v; self:UpdateDataVisibility() end)
-    local dataGenSub = CreateFrame("Frame", nil, secGen); dataGenSub:SetWidth(inner:GetWidth() - 16)
-    dataGenSub:SetPoint("TOPLEFT", secGen, "TOPLEFT", 16, yGen); local yg = 0
-    yg = self:Desc(dataGenSub, yg, L.GENERATE_OVERALL_SEGMENT_IN)
-    yg = self:Check(dataGenSub, L.MYTHIC_PLUS, yg, function() return ns.db.mythicPlus.genOverallMPlus end, function(v) ns.db.mythicPlus.genOverallMPlus=v end)
-    yg = self:Check(dataGenSub, L.RAID_INSTANCE, yg, function() return ns.db.mythicPlus.genOverallRaid end, function(v) ns.db.mythicPlus.genOverallRaid=v end)
-    yg = self:Check(dataGenSub, L.OTHER_INSTANCES_INCL_DELVES_BGS_ARENAS, yg, function() return ns.db.mythicPlus.genOverallDungeon end, function(v) ns.db.mythicPlus.genOverallDungeon=v end)
-    dataGenSub:SetHeight(math.abs(yg))
-    self._dataGenSub = dataGenSub; self._dataSecGen = secGen; self._dataSecGenBaseH = math.abs(yGen)
-
-    -- Section: 删除小怪段落
-    local secClean = CreateFrame("Frame", nil, inner); secClean:SetWidth(inner:GetWidth()); local yClean = 0
-    yClean = self:Check(secClean, L.CONFIG_AUTO_DELETE_TRASH_SEGMENTS_AFTER_LEAVING_INSTANCE, yClean,
-        function() return ns.db.mythicPlus.autoCleanTrash end,
-        function(v) ns.db.mythicPlus.autoCleanTrash=v; self:UpdateDataVisibility() end)
-    local dataCleanSub = CreateFrame("Frame", nil, secClean); dataCleanSub:SetWidth(inner:GetWidth() - 16)
-    dataCleanSub:SetPoint("TOPLEFT", secClean, "TOPLEFT", 16, yClean); local yc = 0
-    yc = self:Desc(dataCleanSub, yc, L.DELETE_TRASH_SEGMENTS_IN)
-    yc = self:Check(dataCleanSub, L.MYTHIC_PLUS, yc, function() return ns.db.mythicPlus.cleanTrashMPlus end, function(v) ns.db.mythicPlus.cleanTrashMPlus=v end)
-    yc = self:Check(dataCleanSub, L.RAID_INSTANCE, yc, function() return ns.db.mythicPlus.cleanTrashRaid end, function(v) ns.db.mythicPlus.cleanTrashRaid=v end)
-    yc = self:Check(dataCleanSub, L.OTHER_INSTANCES_INCL_DELVES_BGS_ARENAS, yc, function() return ns.db.mythicPlus.cleanTrashDungeon end, function(v) ns.db.mythicPlus.cleanTrashDungeon=v end)
-    dataCleanSub:SetHeight(math.abs(yc))
-    self._dataCleanSub = dataCleanSub; self._dataSecClean = secClean; self._dataSecCleanBaseH = math.abs(yClean)
-
-    -- Bottom-bar shortcuts are data navigation, so they live with data options.
-    local secRest = CreateFrame("Frame", nil, inner); secRest:SetWidth(inner:GetWidth()); local yRest = 0
-    yRest = self:BuildBottomBarSettings(secRest)
-    secRest:SetHeight(math.abs(yRest) + 8)
-    self._dataSecRest = secRest
-
-    self:UpdateDataVisibility()
-end
-
-function Config:UpdateDataVisibility()
-    if not self._dataSecGen then return end
-    local inner = self.pages["data"].inner; if not inner then return end
-
-    if ns.db.mythicPlus.enabled then
-        self._dataGenSub:Show()
-        self._dataSecGen:SetHeight(self._dataSecGenBaseH + self._dataGenSub:GetHeight())
-    else
-        self._dataGenSub:Hide()
-        self._dataSecGen:SetHeight(self._dataSecGenBaseH)
-    end
-
-    if ns.db.mythicPlus.autoCleanTrash then
-        self._dataCleanSub:Show()
-        self._dataSecClean:SetHeight(self._dataSecCleanBaseH + self._dataCleanSub:GetHeight())
-    else
-        self._dataCleanSub:Hide()
-        self._dataSecClean:SetHeight(self._dataSecCleanBaseH)
-    end
-
-    self._dataSecGen:SetPoint("TOPLEFT", inner, "TOPLEFT", 0, self._dataTopY)
-    self._dataSecClean:SetPoint("TOPLEFT", self._dataSecGen, "BOTTOMLEFT", 0, 0)
-    self._dataSecRest:SetPoint("TOPLEFT", self._dataSecClean, "BOTTOMLEFT", 0, 0)
-
-    local totalH = math.abs(self._dataTopY) + self._dataSecGen:GetHeight() + self._dataSecClean:GetHeight() + self._dataSecRest:GetHeight() + 20
-    inner:SetHeight(totalH)
-    self:UpdatePageScroll("data")
-end
 -- ============================================================
 -- Look 页
 -- ============================================================
@@ -278,7 +90,7 @@ function Config:BuildLookSubTabs(inner)
         btn.bg:SetAllPoints()
         btn.bg:SetColorTexture(0, 0.65, 1, 0.18)
         local text = btn:CreateFontString(nil, "OVERLAY")
-        text:SetFont(STANDARD_TEXT_FONT, 10, "OUTLINE")
+        text:SetFont(ns:LocaleFont(), 10, "OUTLINE")
         text:SetPoint("CENTER")
         text:SetText(tab.label)
         text:SetTextColor(0.6, 0.6, 0.6)
@@ -452,31 +264,4 @@ function Config:BuildLookPage()
     page:SetHeight(math.abs(y) + 8)
 
     self:ShowLookSubPage(self.activeLookSubPage or "general")
-end
-
--- ============================================================
--- Perf 页
--- ============================================================
--- Kept only as a migration/reference implementation, like BuildLegacyDataPage.
--- The active behaviour page is built by ConfigLayouts.lua; the distinct name
--- stops load order from silently deciding which one the player sees.
-function Config:BuildLegacyPerfPage()
-    local inner = self.pages["perf"].inner; local y = 0
-    y = self:H(inner, L.CONFIG_SMART_REFRESH, y)
-    y = self:Slider(inner, L.CONFIG_COMBAT_REFRESH_SECONDS, y, 0.1, 1.0, 0.1, function() return ns.db.smartRefresh.combatInterval end, function(v) ns.db.smartRefresh.combatInterval=v end)
-    y = self:Slider(inner, L.CONFIG_OUT_OF_COMBAT_REFRESH_SECONDS, y, 0.5, 5.0, 0.5, function() return ns.db.smartRefresh.idleInterval end, function(v) ns.db.smartRefresh.idleInterval=v end)
-    y = y - 12
-    y = self:H(inner, L.DATA_TRACKING, y)
-    y = self:Slider(inner, L.MAX_HISTORY_SEGMENTS, y, 5, 100, 1,
-        function() return ns.db.tracking.historyDisplayLimit or ns.db.tracking.maxSegments or 20 end,
-        function(v)
-            ns.db.tracking.historyDisplayLimit = v
-            ns.db.tracking.maxSegments = v -- legacy readers/migration compatibility
-            if ns.CombatTracker and ns.CombatTracker.SmartTrimHistory
-                and ns.CombatTracker:SmartTrimHistory(true) > 0 and ns.SaveSessionHistory then
-                ns:SaveSessionHistory()
-            end
-            ns.Segments:SetViewSegment(ns.Segments.viewIndex)
-        end)
-    inner:SetHeight(math.abs(y) + 20)
 end

@@ -57,6 +57,17 @@ ns.defaults = {
     detailWindow = {
         width = 380, height = 420,
     },
+    -- Tools page: the Final Fantasy XIV-style target arrow and the nameplate
+    -- buff reminder (families[key] = false switches one buff off).
+    tools = {
+        targetArrow = true,
+        nameplateBuffs = {
+            enabled     = true,
+            onlyMyClass = true,
+            showMissing = true,
+            families    = {},
+        },
+    },
     detailDisplay = {
         barHeight     = 20,
         barThickness  = 20,
@@ -80,7 +91,7 @@ ns.defaults = {
         showRank      = true,
         showSpecIcon  = true,
         iconPack      = "default",
-        showRealm     = false,
+        nameFormat    = "full",
         classColors   = true,
         barHeight     = 19,
         barThickness  = 19,
@@ -148,30 +159,24 @@ ns.defaults = {
         primaryMode       = "damage",
         secondaryMode     = "healing",
         primaryPos        = 1,
-        splitShowMPlus    = true,
         splitShowRaid     = true,
         splitShowDungeon  = true,
         splitShowOutdoor  = false,
         showOverall       = true,
         overallDir        = "LR",
         currentPos        = 1,
-        overallShowMPlus  = true,
         overallShowRaid   = true,
         overallShowDungeon= true,
         overallShowOutdoor= false,
         tbRatio           = 0.55,
         lrRatio           = 0.50,
     },
+    -- Instance lifecycle switches.  The saved key keeps its historical name so
+    -- existing profiles load unchanged; WoW Forever has no Mythic+ and the
+    -- per-scene choices live in fullRunSettings / cleanTrashSettings.
     mythicPlus = {
         enabled           = true,
-        autoSegment       = true,
         autoCleanTrash    = true,
-        genOverallMPlus   = true,
-        genOverallRaid    = false,
-        genOverallDungeon = true,
-        cleanTrashMPlus   = false,
-        cleanTrashRaid    = true,
-        cleanTrashDungeon = false,
     },
     tracking = {
         mergePlayerPets = true,
@@ -190,21 +195,19 @@ ns.defaults = {
     -- size; each scene still keeps its own layoutId in sceneWorkspaces.
     shareWindowGeometry = false,
     sharedWorkspace = {windowWidth=420,windowHeight=300,point="CENTER",relPoint="CENTER",x=320,y=-170},
+    -- WoW Forever scenes: raids, dungeons, battlegrounds and the open world.
+    -- (No Mythic+ and no arenas exist on this client.)
     sceneWorkspaces = {
-        mplus={layoutId="preset2",windowWidth=420,windowHeight=300,point="CENTER",relPoint="CENTER",x=320,y=-170},
         raid={layoutId="preset2",windowWidth=420,windowHeight=300,point="CENTER",relPoint="CENTER",x=320,y=-170},
         dungeon={layoutId="preset2",windowWidth=420,windowHeight=300,point="CENTER",relPoint="CENTER",x=320,y=-170},
-        arena={layoutId="preset2",windowWidth=420,windowHeight=300,point="CENTER",relPoint="CENTER",x=320,y=-170},
         battleground={layoutId="preset2",windowWidth=420,windowHeight=300,point="CENTER",relPoint="CENTER",x=320,y=-170},
         outdoor={layoutId="preset2",windowWidth=420,windowHeight=300,point="CENTER",relPoint="CENTER",x=320,y=-170},
     },
     fullRunSettings = {
-        mplus=true, raid=false, dungeon=true,
-        arena=false, battleground=false, outdoor=false,
+        raid=false, dungeon=true, battleground=false, outdoor=false,
     },
     cleanTrashSettings = {
-        mplus=false, raid=true, dungeon=false,
-        arena=false, battleground=false, outdoor=false,
+        raid=true, dungeon=false, battleground=false, outdoor=false,
     },
     profileSchema = 2,
     useBlizzMeter = true,
@@ -231,12 +234,6 @@ ns.state = {
     isInInstance     = false,
     wasInInstance    = false,
     instanceType     = nil,
-    inMythicPlus     = false,
-    mythicPlusLevel  = 0,
-    mythicPlusMapID  = nil,
-    mythicPlusMapName= nil,
-    mplusRuntimeLatch= false,
-    mplusResetLatch  = false,
     sceneKey         = "outdoor",
     playerGUID       = nil,
     playerName       = nil,
@@ -374,12 +371,21 @@ function Core:OnInitialize()
             pcall(ns.Layouts.MigrateProfile,ns.Layouts,active)
         end
         ns:MergeDefaults(LightDamageGlobal.profiles[LightDamageDB.activeProfile], ns.defaults)
+        if ns.ReleaseUnusedLocales then ns:ReleaseUnusedLocales() end
 
         ns.state.playerGUID = UnitGUID("player")
         ns.state.playerName = UnitName("player")
         local _, classEng   = UnitClass("player")
         ns.state.playerClass = classEng
-        ns.state.mplusResetLatch = ns.db.mplusResetLatch == true
+        -- Retail builds persisted a Mythic+ reset latch here; it has no meaning
+        -- on Forever and must not survive in a migrated character save.
+        ns.db.mplusResetLatch = nil
+        -- Forever names carry a surname, not a realm: the realm switch became
+        -- the Name Format.  An unknown format falls back to the full name.
+        if ns.db.display then
+            ns.db.display.showRealm = nil
+            if not ns:IsValidNameFormat(ns.db.display.nameFormat) then ns.db.display.nameFormat = "full" end
+        end
 
         ns:BuildIconToSpecIDMap()
 
@@ -391,9 +397,11 @@ function Core:OnInitialize()
             return
         end
 
-        if ns.MythicPlus   then ns.MythicPlus:Init()   end
         if ns.DeathTracker then ns.DeathTracker:Init()  end
         if ns.Analysis     then ns.Analysis:Init()     end
+        -- Tools page modules: each follows its own switch in ns.db.tools.
+        if ns.TargetArrow    then ns.TargetArrow:Apply()    end
+        if ns.NameplateBuffs then ns.NameplateBuffs:Apply() end
 
         ns:StartSmartRefresh()
         
@@ -409,9 +417,7 @@ function Core:OnInitialize()
         -- 注册事件
         local events = {
             "ZONE_CHANGED_NEW_AREA", "ENCOUNTER_START", "ENCOUNTER_END",
-            "GROUP_ROSTER_UPDATE", "CHALLENGE_MODE_START",
-            "CHALLENGE_MODE_COMPLETED", "CHALLENGE_MODE_RESET",
-            "PLAYER_DEAD", "PLAYER_LOGOUT",
+            "GROUP_ROSTER_UPDATE", "PLAYER_DEAD", "PLAYER_LOGOUT",
         }
         for _, ev in ipairs(events) do self:RegisterEvent(ev) end
         if ns.CombatTracker then ns.CombatTracker:RegisterEvents() end
@@ -462,44 +468,12 @@ function Core:OnEvent(event, ...)
             end
         end)
     elseif event == "ZONE_CHANGED_NEW_AREA" then
-        local wasInInstance = ns.state.isInInstance
         ns:UpdateInstanceStatus("ZONE_CHANGED_NEW_AREA")
         ns:InvalidateGUIDCache()
-
-        if wasInInstance and not ns.state.isInInstance then
-            if ns.MythicPlus and ns.MythicPlus:IsActive() then
-                ns.MythicPlus:OnLeaveInstance()
-            end
-        end
-
         -- CombatTracker is the single owner of instance-edge archive/reset.
         -- Core only updates scene/UI state here.
     elseif event == "GROUP_ROSTER_UPDATE" then
         ns:InvalidateGUIDCache()
-    elseif event == "CHALLENGE_MODE_START" then
-        -- The event itself is authoritative even when map metadata is one or
-        -- more frames late.  This makes the first scene frame Mythic+.
-        ns.state.mplusRuntimeLatch = true
-        ns.state.mplusResetLatch = false
-        ns.db.mplusResetLatch = nil
-        ns:UpdateInstanceStatus("CHALLENGE_MODE_START", true)
-        ns:ScheduleMythicMetadataRetry("CHALLENGE_MODE_START")
-        if ns.MythicPlus then ns.MythicPlus:OnStart(...) end
-    elseif event == "CHALLENGE_MODE_COMPLETED" then
-        -- Keep the runtime latch until leaving or an explicit reset; Blizzard
-        -- can report the challenge inactive immediately after completion.
-        ns.state.mplusRuntimeLatch = true
-        ns.state.mplusResetLatch = false
-        ns.db.mplusResetLatch = nil
-        if ns.MythicPlus then ns.MythicPlus:OnCompleted(...) end
-        ns:UpdateInstanceStatus("CHALLENGE_MODE_COMPLETED", true)
-    elseif event == "CHALLENGE_MODE_RESET" then
-        if ns.MythicPlus then ns.MythicPlus:OnReset() end
-        ns.state.mplusRuntimeLatch = false
-        ns.state.mplusResetLatch = true
-        ns.db.mplusResetLatch = true
-        ns.state._mythicMetadataToken = (ns.state._mythicMetadataToken or 0) + 1
-        ns:UpdateInstanceStatus("CHALLENGE_MODE_RESET", true)
     elseif event == "PLAYER_DEAD" then
         if ns.DeathTracker then ns.DeathTracker:OnPlayerDead() end
     elseif event == "PLAYER_LOGOUT" then
@@ -576,8 +550,14 @@ local function RefreshInterval()
     return math.max(0.1, tonumber(value) or (ns.state.inCombat and 0.3 or 2.0))
 end
 
+-- Effective visibility: a window hidden with the whole UI (Alt+Z, cinematics)
+-- keeps IsShown() but is not drawn, so the ticker must not run for it.  Its
+-- OnShow hook re-arms the refresh when the UI comes back.
 local function WindowShown()
-    return (ns.UI and ns.UI.frame and ns.UI.frame:IsShown()) and true or false
+    local frame = ns.UI and ns.UI.frame
+    if not frame then return false end
+    if frame.IsVisible then return frame:IsVisible() and true or false end
+    return frame:IsShown() and true or false
 end
 
 local function StopRefreshTicker()
@@ -652,6 +632,16 @@ end
 -- Alias used by data gateway/history-store style modules.
 ns.MarkRefreshDirty = ns.RequestRefresh
 
+-- Hot path for DAMAGE_METER_CURRENT_SESSION_UPDATED, which fires many times per
+-- second in combat.  While the render ticker is running, marking the data
+-- dirty is all that event owes; only an idle window needs the full request.
+function ns:MarkLiveDataDirty()
+    refreshDirty = true
+    if ns.UI then ns.UI._barsDirty = true end
+    if refreshTicker then return end
+    ns:RequestRefresh("damage-meter-current")
+end
+
 function ns:AttachRefreshVisibilityHooks()
     local frame = ns.UI and ns.UI.frame
     if not frame or frame._lightDamageRefreshHooks then return false end
@@ -674,44 +664,14 @@ end
 -- ============================================================
 -- 副本状态检测
 -- ============================================================
-local function GetChallengeMetadata()
-    local mapID, level, mapName
-    if C_ChallengeMode then
-        if C_ChallengeMode.GetActiveChallengeMapID then
-            local ok, value = pcall(C_ChallengeMode.GetActiveChallengeMapID)
-            if ok then mapID = value end
-        end
-        if C_ChallengeMode.GetActiveKeystoneInfo then
-            local ok, value = pcall(C_ChallengeMode.GetActiveKeystoneInfo)
-            if ok and type(value) == "number" then level = value end
-        end
-        if mapID and C_ChallengeMode.GetMapUIInfo then
-            local ok, value = pcall(C_ChallengeMode.GetMapUIInfo, mapID)
-            if ok then mapName = value end
-        end
-    end
-    return mapID, level or 0, mapName
-end
-
-function ns:ResolveSceneKey(inInstance, instanceType, difficultyID)
-    local mapID = GetChallengeMetadata()
-    local apiActive = false
-    if C_ChallengeMode and C_ChallengeMode.IsChallengeModeActive then
-        local ok, value = pcall(C_ChallengeMode.IsChallengeModeActive)
-        apiActive = ok and value == true
-    end
-
-    local isMPlus = not ns.state.mplusResetLatch and
-        (ns.state.mplusRuntimeLatch or apiActive or mapID ~= nil or difficultyID == 8)
-    if isMPlus then return "mplus", true end
-    if inInstance and instanceType == "arena" then return "arena", false end
-    if inInstance and instanceType == "pvp" then return "battleground", false end
-    if inInstance and instanceType == "raid" then return "raid", false end
-    -- Blizzard can introduce new PvE instanceType values (followers, delves,
-    -- scenarios, etc.).  Once PvP and raids have been handled explicitly,
-    -- every remaining real instance shares the normal-dungeon workspace.
-    if inInstance then return "dungeon", false end
-    return "outdoor", false
+-- WoW Forever content maps onto four scenes.  Battlegrounds report "pvp";
+-- every other real instance (dungeons and any future PvE type) shares the
+-- dungeon workspace.  There is no Mythic+ or arena on this client.
+function ns:ResolveSceneKey(inInstance, instanceType)
+    if inInstance and instanceType == "pvp" then return "battleground" end
+    if inInstance and instanceType == "raid" then return "raid" end
+    if inInstance then return "dungeon" end
+    return "outdoor"
 end
 
 function ns:ApplySceneWorkspace(scene, reason, force)
@@ -733,88 +693,30 @@ function ns:ApplySceneWorkspace(scene, reason, force)
     return true
 end
 
-function ns:ScheduleMythicMetadataRetry(reason)
-    ns.state._mythicMetadataToken = (ns.state._mythicMetadataToken or 0) + 1
-    local token = ns.state._mythicMetadataToken
-    local delays = { 0, 0.15, 0.35, 0.7, 1.2, 2.0, 3.0 }
-
-    local function probe(index)
-        if token ~= ns.state._mythicMetadataToken then return end
-        if not ns.state.mplusRuntimeLatch and ns.state.sceneKey ~= "mplus" then return end
-        local mapID, level, mapName = GetChallengeMetadata()
-        if mapID then
-            ns.state.mythicPlusMapID = mapID
-            ns.state.mythicPlusMapName = mapName
-            ns.state.mythicPlusLevel = level or 0
-            if ns.MythicPlus then
-                ns.MythicPlus._mapID = mapID
-                ns.MythicPlus._mapName = mapName or ns.MythicPlus._mapName
-                ns.MythicPlus._level = (level and level > 0) and level or ns.MythicPlus._level
-            end
-            if ns.CombatTracker then
-                ns.CombatTracker._currentMythicLevel = level or 0
-                ns.CombatTracker._currentMythicMapName = mapName
-            end
-            ns:RequestRefresh("mplus-metadata", true)
-            return
-        end
-        index = index + 1
-        if index <= #delays then C_Timer.After(delays[index], function() probe(index) end) end
-    end
-    probe(1)
-end
-
-function ns:UpdateInstanceStatus(reason, skipMPlusEnter)
+function ns:UpdateInstanceStatus(reason)
     local inInstance, instanceType = IsInInstance()
 
-    if instanceType == "scenario" or instanceType == "party" or instanceType == "raid" or instanceType == "arena" or instanceType == "pvp" then
+    if instanceType == "party" or instanceType == "raid" or instanceType == "pvp" then
         inInstance = true
-    end
-    if instanceType == "neighborhood" or instanceType == "interior" then
-        inInstance = false
     end
 
     ns.state.wasInInstance = ns.state.isInInstance
     ns.state.isInInstance = inInstance
     ns.state.instanceType = instanceType
-    local _, _, difficultyID = GetInstanceInfo()
 
-    if not inInstance and not ns.state.mplusRuntimeLatch then
-        ns.state.mplusResetLatch = false
-        ns.db.mplusResetLatch = nil
-    elseif not inInstance and ns.state.mplusRuntimeLatch and reason ~= "CHALLENGE_MODE_START" then
-        ns.state.mplusRuntimeLatch = false
-        ns.state.mplusResetLatch = false
-        ns.db.mplusResetLatch = nil
-        ns.state._mythicMetadataToken = (ns.state._mythicMetadataToken or 0) + 1
-    end
+    local scene = ns:ResolveSceneKey(inInstance, instanceType)
 
-    local wasInMPlus = ns.state.inMythicPlus
-    local scene, isMPlus = ns:ResolveSceneKey(inInstance, instanceType, difficultyID)
-    ns.state.inMythicPlus = isMPlus
-
-    -- 兼容旧代码的四场景分类器
+    -- Fade/collapse rules only distinguish raid, other instances and the
+    -- open world (battlegrounds count as "other instances").
     local cat = "outdoor"
     if inInstance then
-        if instanceType == "raid" then
-            cat = "raid"
-        elseif instanceType == "party" or instanceType == "scenario" or instanceType == "arena" or instanceType == "pvp" then
-            cat = "dungeon"
-        end
-    end
-    if isMPlus then
-        cat = "mplus"
+        cat = instanceType == "raid" and "raid" or "dungeon"
     end
 
     local oldCat = ns.state.instanceCategory
     ns.state.instanceCategory = cat
 
     ns:ApplySceneWorkspace(scene, reason)
-
-    if isMPlus and not wasInMPlus and not skipMPlusEnter
-        and reason ~= nil and reason ~= "PLAYER_ENTERING_WORLD" then
-        if ns.MythicPlus then ns.MythicPlus:OnEnterDungeon() end
-    end
 
     -- 进出副本时刷新渐隐状态（修复"副本中永不隐藏"不即时生效）
     if oldCat ~= cat and ns.UI and ns.UI.CheckAutoFade then
@@ -865,28 +767,19 @@ function ns:HandleSlashCommand(msg)
 
     elseif msg:match("^lang") then
         local langInput = msg:match("^lang%s+(%w+)$")
-        if not langInput then
-            print("|cff00ccff[Light Damage]|r lang: enUS / zhCN / zhTW")
+        local LANGS = { auto = "auto", enus = "enUS", zhcn = "zhCN", zhtw = "zhTW", ruru = "ruRU", kokr = "koKR" }
+        local usage = "|cff00ccff[Light Damage]|r lang: auto / enUS / zhCN / zhTW / ruRU / koKR"
+        local targetLang = langInput and LANGS[langInput:lower()]
+        if not targetLang then
+            print(usage)
             return
         end
 
-        langInput = langInput:lower()
-        local targetLang = "zhCN"
-        if langInput == "enus" then
-            targetLang = "enUS"
-        elseif langInput == "zhtw" then
-            targetLang = "zhTW"
-        elseif langInput == "zhcn" then
-            targetLang = "zhCN"
-        else
-            print("|cff00ccff[Light Damage]|r lang: enUS / zhCN / zhTW")
-            return
-        end
-
-        if ns.SwitchLanguage then
-            ns:SwitchLanguage(targetLang)
-            if ns.Config and ns.Config.RefreshUI then ns.Config:RefreshUI() end
-        end
+        -- Unused locale tables are released after login, so a language
+        -- change is persisted and applied through a reload, exactly like the
+        -- settings dropdown.
+        ns.db.display.language = targetLang
+        ReloadUI()
 
     elseif msg == "baseline" then
         if ns.CombatTracker then
@@ -899,7 +792,7 @@ function ns:HandleSlashCommand(msg)
     elseif msg == "resetlog" then
         ns._resetLog = not ns._resetLog and true or false
         if ns._resetLog then
-            print("|cffff8800[resetlog]|r ON — now do 团本->野外->普通副本->大秘境. Watch the "
+            print("|cffff8800[resetlog]|r ON — now do 团本->野外->普通副本->战场. Watch the "
                 .. "REQUEST / BEFORE / AFTER / DEFERRED lines; send them to me.")
         else
             print("|cffff8800[resetlog]|r OFF")
@@ -1043,13 +936,11 @@ function ns:HandleSlashCommand(msg)
             print(string.format("  sessionGenByID=%d  primaryByGen=%d  observedGen=%d",
                 countKeys(CT._sessionGenerationByID), countKeys(CT._primarySessionByGeneration),
                 countKeys(CT._meterObservedGenerations)))
-            print(string.format("  synthetic=%d  supplemental=%d  archiveFirstSeen=%d  pendingActions=%d",
-                countKeys(CT._syntheticSessionIDs), countKeys(CT._supplementalSessionIDs),
+            print(string.format("  supplemental=%d  archiveFirstSeen=%d  pendingActions=%d",
+                countKeys(CT._supplementalSessionIDs),
                 countKeys(CT._archiveFirstSeenAt), #(CT._actions or {})))
-            print(string.format("  watchdog=%s  edgeWatcher=%s  mythicBoundary=%s  pendingMythic=%s",
-                tostring(CT._watchdog ~= nil), tostring(CT._combatEdgeWatcher ~= nil),
-                tostring(CT._mythicRunBoundary ~= nil),
-                tostring(ns.MythicPlus and ns.MythicPlus._pendingMythicSeg ~= nil)))
+            print(string.format("  watchdog=%s  edgeWatcher=%s",
+                tostring(CT._watchdog ~= nil), tostring(CT._combatEdgeWatcher ~= nil)))
         end
         print(string.format("  playerCache=%d", countKeys(ns.PlayerInfoCache)))
         -- Roster enrichment is linear in group size and fires on events that are
@@ -1099,6 +990,11 @@ function ns:HandleSlashCommand(msg)
         end
         current.at = GetTime()
         ns._diagPrevious = current
+    elseif msg == "np" then
+        -- Nameplate buff reminder: state, and the target plate step by step.
+        if ns.NameplateBuffs then
+            for _, line in ipairs(ns.NameplateBuffs:Diagnose()) do print(line) end
+        end
     elseif msg == "debug" then
         ns:PrintDebugInfo()
     elseif msg == "api" then
@@ -1154,7 +1050,7 @@ function ns:PrintDebugInfo()
     print("  UnitAffectingCombat:", UnitAffectingCombat("player"))
     print("  playerGUID:", ns.state.playerGUID)
     print("  isInInstance:", ns.state.isInInstance)
-    print("  inMythicPlus:", ns.state.inMythicPlus)
+    print("  scene:", ns.state.sceneKey)
     print("  Segments:", ns.Segments ~= nil)
     if ns.Segments then
         print("  Segments.overall:", ns.Segments.overall ~= nil)

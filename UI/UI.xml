@@ -5,9 +5,10 @@
     <Script file="UIPinned.lua"/>
     <Script file="UIRefresh.lua"/>
     <Script file="UICollapse.lua"/>
-    <Script file="UITabs.lua"/>
     <Script file="UIGrid.lua"/>
     <Script file="PrivateTooltip.lua"/>
     <Script file="DetailView.lua"/>
     <Script file="HistoryList.lua"/>
+    <Script file="TargetArrow.lua"/>
+    <Script file="NameplateBuffs.lua"/>
 </Ui>

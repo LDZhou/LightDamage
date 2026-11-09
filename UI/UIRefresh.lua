@@ -1,6 +1,6 @@
 --[[
     Light Damage - UIRefresh.lua
-    刷新逻辑:Refresh, RefreshTitle, RefreshHead, ShowTooltip, FillOvrBars
+    刷新逻辑:RefreshTitle, RefreshHead, ShowTooltip (单元格刷新主循环见 UIGrid.lua)
 
     API-first:
     - 死亡模式不再强制走本地 deathLog
@@ -32,7 +32,7 @@ local function SegmentDuration(seg)
     return ns.Analysis and ns.Analysis:GetSegmentDuration(seg) or (seg and seg.duration or 0)
 end
 
-local function TooltipNumber(value, isProtected)
+local function TooltipNumber(value, isProtected, isRate)
     if isProtected then
         local formatter = ns.AbbrevProtectedNumber
         if formatter then
@@ -41,7 +41,7 @@ local function TooltipNumber(value, isProtected)
         end
         return L.COMBAT_DATA_LOCKED
     end
-    return ns.AbbrevNumber(value)
+    return isRate and ns.AbbrevRate(value) or ns.AbbrevNumber(value)
 end
 
 function UI:BuildLocalPlayerSnapshot()
@@ -50,14 +50,11 @@ function UI:BuildLocalPlayerSnapshot()
     local cache = guidAccessible and ns.PlayerInfoCache and ns.PlayerInfoCache[guid] or {}
     if not guidAccessible then guid = nil end
     local specID, specIconID = cache.specID, cache.specIconID
-    local ilvl, score = cache.ilvl or 0, cache.score or 0
+    local ilvl = cache.ilvl or 0
 
-    if not specID then
-        local index = GetSpecialization and GetSpecialization()
-        if index then
-            local id, _, _, icon = GetSpecializationInfo(index)
-            specID, specIconID = id or specID, icon or specIconID
-        end
+    if not specID and ns.GetPlayerSpec then
+        local id, icon = ns:GetPlayerSpec()
+        specID, specIconID = id or specID, icon or specIconID
     end
     if ilvl <= 0 then
         local _, equipped = GetAverageItemLevel()
@@ -74,7 +71,7 @@ function UI:BuildLocalPlayerSnapshot()
 
     self._localPlayerSnapshot = {
         guid = guid, specID = specID, specIconID = specIconID,
-        class = class, ilvl = ilvl, score = score,
+        class = class, ilvl = ilvl,
     }
     return self._localPlayerSnapshot
 end
@@ -119,25 +116,25 @@ end
 function UI:ObserveDamageMeterSourceOnce(source)
     if type(source) ~= "table" then return end
     local gateway = ns.DamageMeterGateway
-    if gateway and not gateway:IsTableAccessible(source) then return end
+    -- Per source per cell per refresh: use the pcall-free predicates.
+    if gateway and not gateway:IsTableAccessibleFast(source) then return end
     local seen = self._observedSources
     if not seen then seen = {}; self._observedSources = seen end
-    -- source is table-accessible (checked above), so direct field reads cannot
-    -- error; only the value may be secret, which IsAccessible guards.  This runs
-    -- per source per refresh, so the former pcall(function()...) wrappers were
-    -- pure per-frame closure garbage.
     local key
     local localValue = source.isLocalPlayer
-    if (not gateway or gateway:IsAccessible(localValue)) and localValue == true then
+    if (not gateway or gateway:IsAccessibleFast(localValue)) and localValue == true then
         key = "local"
     else
         local guid = source.sourceGUID
-        if (not gateway or gateway:IsAccessible(guid)) and type(guid) == "string" then
+        if (not gateway or gateway:IsAccessibleFast(guid)) and type(guid) == "string" then
             key = guid
         end
     end
-    if key and seen[key] then return end
-    if key then seen[key] = true end
+    -- PlayerInfo can only enrich a row it can identify: the local player or a
+    -- public GUID -- exactly the rows that have a key.  A protected-GUID row
+    -- (most rows in combat) used to pay several pcalls for a guaranteed no-op.
+    if not key or seen[key] then return end
+    seen[key] = true
     if ns.ObserveDamageMeterSource then ns:ObserveDamageMeterSource(source) end
 end
 
@@ -307,76 +304,6 @@ function UI:FillModeBars(bars, listObj, head, mode, seg, dur, sessionType, sessi
     end
 end
 
-function UI:Refresh()
-    if not self.frame or not self.frame:IsShown() then return end
-    self:BeginDataRefresh()
-
-    local segs = ns.Segments
-    -- Reuse one merged-segment build across every consumer in this refresh; the
-    -- data cannot change during a synchronous refresh, so this is identical to
-    -- rebuilding each call, minus the repeated allocations and API reads.
-    if segs then segs:BeginMergeCache() end
-    local currentSource = self:GetDisplaySource("current")
-    local totalSource = self:GetDisplaySource("total")
-    local seg, dur = currentSource.segment, currentSource.duration
-    local sp   = ns.db.split
-    local mode = ns.db.display.mode
-    local useOvr = self:IsOverallColumnActive()
-    local isSplitView = self:IsSplitActiveInCurrentScene() and (mode == "split")
-
-    local now = GetTime()
-    if not self._lastTitleRefresh or (now - self._lastTitleRefresh) > 0.5 then
-        self._lastTitleRefresh = now
-        self:RefreshTitle()
-    end
-
-    if self.splitTab then
-        if isSplitView then self.splitTab.abg:Show(); self:SetTabTextColor(self.splitTab.text, true)
-        else self.splitTab.abg:Hide(); self:SetTabTextColor(self.splitTab.text, false) end
-    end
-    for _, t in ipairs(self.tabs) do
-        if mode == t.mode then t.abg:Show(); self:SetTabTextColor(t.text, true)
-        else t.abg:Hide(); self:SetTabTextColor(t.text, false) end
-    end
-
-    if isSplitView then
-        self:FillModeBars(self.priBars, self.priList, self.priHead, sp.primaryMode, seg, dur, nil, nil, currentSource)
-        self:FillModeBars(self.secBars, self.secList, self.secHead, sp.secondaryMode, seg, dur, nil, nil, currentSource)
-        if useOvr then self:FillOvrBars(true, sp, mode) end
-    else
-        self:FillModeBars(self.priBars, self.priList, self.priHead, mode, seg, dur, nil, nil, currentSource)
-        if useOvr then self:FillOvrBars(false, sp, mode) end
-    end
-
-    if useOvr and self.ovrContainer and self.ovrContainer:IsShown() then
-        local ovrTitleWord = L.OVERALL
-        if segs and segs.overall and segs.overall._isMerged then ovrTitleWord = L.OVERALL_SEGMENT end
-        if isSplitView then
-            local priLabel = L[ns.MODE_NAMES[sp.primaryMode] or ""]
-            local secLabel = L[ns.MODE_NAMES[sp.secondaryMode] or ""]
-            self:SetModeHeaderText(self.ovrPriHead.label, string.format(L.OVERALL_MODE_HEADER_FORMAT, ovrTitleWord, priLabel), sp.primaryMode)
-            self:SetModeHeaderText(self.ovrSecHead.label, string.format(L.OVERALL_MODE_HEADER_FORMAT, ovrTitleWord, secLabel), sp.secondaryMode)
-        else
-            local modeLabel = L[ns.MODE_NAMES[mode] or ""]
-            self:SetModeHeaderText(self.ovrPriHead.label, string.format(L.OVERALL_MODE_HEADER_FORMAT, ovrTitleWord, modeLabel), mode)
-        end
-    end
-
-    if segs then segs:EndMergeCache() end
-end
-
-function UI:FillOvrBars(isSplitView, sp, mode)
-    local source = self:GetDisplaySource("total")
-    local seg, dur = source.segment, source.duration
-
-    if isSplitView then
-        self:FillModeBars(self.ovrPriBars, self.ovrPriList, self.ovrPriHead, sp.primaryMode, seg, dur, nil, nil, source)
-        self:FillModeBars(self.ovrSecBars, self.ovrSecList, self.ovrSecHead, sp.secondaryMode, seg, dur, nil, nil, source)
-    else
-        self:FillModeBars(self.ovrPriBars, self.ovrPriList, self.ovrPriHead, mode, seg, dur, nil, nil, source)
-    end
-end
-
 function UI:RefreshTitle()
     if not self.frame or not self.frame:IsShown() then return end
     if not self.titleText then return end
@@ -417,7 +344,7 @@ function UI:RefreshTitle()
         end
     else
         local seg = segs and segs:GetViewSegment()
-        if seg and seg._keystoneTime and seg._keystoneTime > 0 then dur = seg._keystoneTime else dur = seg and (seg.duration or 0) or 0 end
+        dur = seg and (seg.duration or 0) or 0
     end
 
     local tStr = dur > 0 and ("|cffaaaaaa" .. ns:FormatTime(dur) .. "|r") or ""
@@ -428,28 +355,24 @@ function UI:RefreshTitle()
         return
     end
 
-    if ns.MythicPlus and ns.MythicPlus:IsActive() and ns.state.inMythicPlus then
-        local info = ns.MythicPlus:GetHeaderInfo()
-        if info then
-            local levelStr = (info.level and info.level > 0) and string.format("|cff4cb8e8+%d|r ", info.level) or ""
-            local nameStr = info.name and ("|cff4cb8e8" .. info.name .. "|r") or ""
-            self.titleText:SetText(dot .. segL .. " " .. levelStr .. nameStr)
-            return
-        end
-    end
-
     self.titleText:SetText(dot .. segL)
 end
 
 function UI:RefreshHead(h, mode, seg, dur, apiSessionType, apiSessionID)
     if not h:IsShown() then return end
-    local mn = L[ns.MODE_NAMES[mode] or mode]
+    -- A Total cell supplies its own "Total <stat>" title (UIGrid) so the label
+    -- is written once per tick, not overwritten a second time.
+    local mn = h._titleOverride or L[ns.MODE_NAMES[mode] or mode]
     self:SetModeHeaderText(h.label, mn, mode)
 
     -- Cell headers only identify the statistic and range.  Team-wide summary
     -- text duplicated the bar data and made compact overview cells noisy.
-    h.info:SetText(""); h.info:Hide()
-    h.rawInfo:SetText(""); h.rawInfo:Hide()
+    -- Nothing else writes these fields, so clearing them once is enough.
+    if not h._infoCleared then
+        h.info:SetText(""); h.info:Hide()
+        h.rawInfo:SetText(""); h.rawInfo:Hide()
+        h._infoCleared = true
+    end
 end
 
 -- ============================================================
@@ -481,10 +404,10 @@ function UI:ShowTooltip(bar, section)
 
     local guid = bar._guid
     local seg = bar._detailSegment or (ns.Segments and ns.Segments:GetViewSegment())
-    local specID, ilvl, score
+    local specID, ilvl
 
     if d and d.isAPI then
-        specID = d.specID; ilvl = d.ilvl or 0; score = d.score or 0
+        specID = d.specID; ilvl = d.ilvl or 0
     elseif seg and seg.isActive then
         -- Raw combat GUIDs can be secret in 12.x.  Never use one as a normal
         -- Lua table key or in a conditional comparison; row-carried public
@@ -493,27 +416,25 @@ function UI:ShowTooltip(bar, section)
         local cache = guidAccessible and ns.PlayerInfoCache and ns.PlayerInfoCache[guid] or {}
         specID = (d and d.specID) or cache.specID
         ilvl = (d and d.ilvl) or cache.ilvl or 0
-        score = cache.score or 0
         if guidAccessible and guid == ns.state.playerGUID then
             local snapshot = self:GetLocalPlayerSnapshot()
             specID = snapshot and snapshot.specID or specID
             ilvl = snapshot and snapshot.ilvl or ilvl
-            score = snapshot and snapshot.score or score
         end
-        if d then d.specID = specID; d.ilvl = ilvl; d.score = score end
+        if d then d.specID = specID; d.ilvl = ilvl end
     else
         specID = d and d.specID
         ilvl = d and d.ilvl or 0
-        score = d and d.score or 0
     end
 
     local specName = ""
-    if specID then
+    local hasSpecByID = type(GetSpecializationInfoByID) == "function"
+    if specID and hasSpecByID then
         local _, name = GetSpecializationInfoByID(specID)
         if name then specName = name end
     end
     local specIconID = d and d.specIconID
-    if specName == "" and specIconID and not IsSecret(specIconID)
+    if hasSpecByID and specName == "" and not IsSecret(specIconID) and type(specIconID) == "number"
         and specIconID > 0 and ns.ICON_TO_SPECID then
         local sid = ns.ICON_TO_SPECID[specIconID]
         if sid then
@@ -523,15 +444,10 @@ function UI:ShowTooltip(bar, section)
     end
 
     local function AddPlayerInfoLines()
-        if specName ~= "" or (ilvl and ilvl > 0) or (score and score > 0) then
+        if specName ~= "" or (ilvl and ilvl > 0) then
             tip:AddLine(" ")
             if specName ~= "" then tip:AddDoubleLine(L.SPEC, specName, 0.7,0.7,0.7, 1,1,1) end
             if ilvl and ilvl > 0 then tip:AddDoubleLine(L.AVG_ITEM_LEVEL, tostring(ilvl), 0.7,0.7,0.7, 1,0.85,0) end
-            if score and score > 0 then
-                local color = C_ChallengeMode and C_ChallengeMode.GetDungeonScoreRarityColor and C_ChallengeMode.GetDungeonScoreRarityColor(score)
-                if color then tip:AddDoubleLine(L.MYTHIC_PLUS_RATING, color:WrapTextInColorCode(tostring(score)), 0.7,0.7,0.7, 1,1,1)
-                else tip:AddDoubleLine(L.MYTHIC_PLUS_RATING, tostring(score), 0.7,0.7,0.7, 1,0.5,0) end
-            end
         end
     end
 
@@ -550,7 +466,9 @@ function UI:ShowTooltip(bar, section)
         AddPlayerInfoLines()
         tip:AddLine(" ")
         if type(d.killingAbility) == "string" and d.killingAbility ~= "" then
-            tip:AddDoubleLine(L.FATAL_SPELL, d.killingAbility, 0.7,0.7,0.7, 1,0.3,0.3)
+            tip:AddDoubleLine(L.FATAL_SPELL,
+                ns.DeathEventLabel and ns:DeathEventLabel(d.killingAbility) or d.killingAbility,
+                0.7,0.7,0.7, 1,0.3,0.3)
         end
         if type(d.killerName) == "string" and d.killerName ~= "" then
             tip:AddDoubleLine(L.KILLER, ns:DisplayName(d.killerName), 0.7,0.7,0.7, 1,1,1)
@@ -579,7 +497,7 @@ function UI:ShowTooltip(bar, section)
         if COUNT_MODES[bar._mode] then
             tip:AddDoubleLine((L[ns.MODE_NAMES[bar._mode] or bar._mode])..L.COUNT_SUFFIX, amountText, 0.7,0.7,0.7, 1,1,1)
         elseif ns.db.display.showPerSecond then
-            local rateText = TooltipNumber(d.amountPerSecond, d.isSecretRate)
+            local rateText = TooltipNumber(d.amountPerSecond, d.isSecretRate, true)
             tip:AddDoubleLine(L[ns.MODE_NAMES[bar._mode] or bar._mode], amountText, 0.7,0.7,0.7, 1,1,1)
             tip:AddDoubleLine(L.PER_SECONDS, rateText, 0.7,0.7,0.7, 1,0.85,0)
         else
@@ -599,7 +517,7 @@ function UI:ShowTooltip(bar, section)
     tip:AddLine(L.SEGMENT)
     tip:AddDoubleLine(mn, ns:FormatNumber(d.value), 0.7,0.7,0.7, 1,1,1)
     if type(d.perSec) == "number" and ns.MODE_UNITS[mode] then
-        tip:AddDoubleLine(ns.MODE_UNITS[mode], ns:FormatNumber(d.perSec), 0.7,0.7,0.7, 1,0.85,0)
+        tip:AddDoubleLine(ns.MODE_UNITS[mode], ns.AbbrevRate(d.perSec), 0.7,0.7,0.7, 1,0.85,0)
     end
     tip:AddDoubleLine(L.PERCENT, string.format("%.1f%%", d.percent or 0), 0.7,0.7,0.7, 1,1,1)
     if d.petDamage and d.petDamage > 0 and mode == "damage" then tip:AddDoubleLine(L.INCL_PET, ns:FormatNumber(d.petDamage), 0.5,0.5,0.5, 0.7,0.7,0.7) end

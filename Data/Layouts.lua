@@ -19,11 +19,12 @@ Layouts.MIN_COL_W = 72
 Layouts.MIN_ROW_H = 36
 Layouts.GAP = 2
 
-Layouts.SCENES = { "mplus", "raid", "dungeon", "arena", "battleground", "outdoor" }
+-- WoW Forever scenes (no Mythic+, no arenas).
+Layouts.SCENES = { "raid", "dungeon", "battleground", "outdoor" }
 Layouts.STATS = { "damage", "healing", "interrupts", "dispels", "deaths",
     "damageTaken", "avoidableDamageTaken", "enemyDamageTaken" }
 Layouts.RANGES = { "follow", "total" }
-local SCENE_NAME_KEYS={mplus="SCENE_MPLUS",raid="SCENE_RAID",dungeon="SCENE_DUNGEON",arena="SCENE_ARENA",battleground="SCENE_BATTLEGROUND",outdoor="SCENE_OUTDOOR"}
+local SCENE_NAME_KEYS={raid="SCENE_RAID",dungeon="SCENE_DUNGEON",battleground="SCENE_BATTLEGROUND",outdoor="SCENE_OUTDOOR"}
 
 local VALID_SCENE, VALID_STAT, VALID_RANGE = {}, {}, {}
 local SCENE_ORDER = {}
@@ -214,9 +215,8 @@ local function defaultWorkspace()
 end
 
 local function sceneUses(old, prefix, scene)
-    if scene == "mplus" then return old[prefix.."MPlus"] ~= false end
     if scene == "raid" then return old[prefix.."Raid"] ~= false end
-    if scene == "dungeon" or scene == "arena" or scene == "battleground" then return old[prefix.."Dungeon"] ~= false end
+    if scene == "dungeon" or scene == "battleground" then return old[prefix.."Dungeon"] ~= false end
     return old[prefix.."Outdoor"] == true
 end
 
@@ -322,7 +322,7 @@ function Layouts:MigrateProfile(profile)
             local def=buildLegacyLayout(profile,scene,id)
             profile.layoutDefs[id]=def
             local ws=defaultWorkspace()
-            local oldKey=(scene=="arena" or scene=="battleground") and "dungeon" or scene
+            local oldKey=scene=="battleground" and "dungeon" or scene
             local size=oldWindow.rememberSceneSize == true and oldWindow.sceneSizes and oldWindow.sceneSizes[oldKey]
             ws.layoutId=id
             ws.windowWidth=tonumber(size and size.width) or tonumber(oldWindow.width) or 420
@@ -335,19 +335,15 @@ function Layouts:MigrateProfile(profile)
         -- Multiplying them together would permanently erase a player's saved
         -- scene selections merely because the master happened to be off during
         -- migration.
-        profile.fullRunSettings.mplus = mp.genOverallMPlus ~= false
         profile.fullRunSettings.raid = mp.genOverallRaid ~= false
         profile.fullRunSettings.dungeon = mp.genOverallDungeon ~= false
-        -- 1.x grouped dungeon/scenario/arena/battleground under “other
+        -- 1.x grouped dungeons and battlegrounds under “other
         -- instances”; preserve that behavior when expanding it into scenes.
-        profile.fullRunSettings.arena = profile.fullRunSettings.dungeon
         profile.fullRunSettings.battleground = profile.fullRunSettings.dungeon
         profile.fullRunSettings.outdoor=false
-        profile.cleanTrashSettings.mplus = mp.cleanTrashMPlus ~= false
         profile.cleanTrashSettings.raid = mp.cleanTrashRaid ~= false
         profile.cleanTrashSettings.dungeon = mp.cleanTrashDungeon ~= false
         -- PvP scenes never contain trash segments.
-        profile.cleanTrashSettings.arena = false
         profile.cleanTrashSettings.battleground = false
         profile.cleanTrashSettings.outdoor=false
         if profile.display and profile.display.mode == "split" then profile.display.mode="overview" end
@@ -381,12 +377,26 @@ function Layouts:MigrateProfile(profile)
         -- Preserve every explicit player choice.  Only a truly missing value
         -- adopts the current product default.
         if profile.fullRunSettings[scene]==nil then
-            profile.fullRunSettings[scene]=(scene=="mplus" or scene=="dungeon")
+            profile.fullRunSettings[scene]=(scene=="dungeon")
         end
         if profile.cleanTrashSettings[scene]==nil then profile.cleanTrashSettings[scene]=(scene=="raid") end
     end
+    -- WoW Forever has no Mythic+ and no arenas.  Drop the retail-era scene
+    -- state a migrated profile may still carry so it can never be resolved.
+    for _,key in ipairs({"mplus","arena"}) do
+        profile.sceneWorkspaces[key]=nil
+        profile.fullRunSettings[key]=nil
+        profile.cleanTrashSettings[key]=nil
+    end
+    if type(profile.split)=="table" then
+        profile.split.splitShowMPlus=nil
+        profile.split.overallShowMPlus=nil
+    end
+    if type(profile.mythicPlus)=="table" then
+        local mp=profile.mythicPlus
+        mp.genOverallMPlus=nil; mp.cleanTrashMPlus=nil; mp.autoSegment=nil
+    end
     -- Enforce the product invariant even for profiles created by older builds.
-    profile.cleanTrashSettings.arena=false
     profile.cleanTrashSettings.battleground=false
     profile.cleanTrashSettings.outdoor=false
     if profile.display then
