@@ -878,6 +878,20 @@ end
 -------------------------------------------------------------------------------
 --  Attach / detach
 -------------------------------------------------------------------------------
+-- A nameplate's unit token.  WoW Forever keeps it in unitToken (the base
+-- mixin's SetUnit; GetUnit returns it); namePlateUnitToken is retail's field
+-- and is never set here.
+local function PlateToken(np)
+    if not np then return nil end
+    local t = np.unitToken or np.namePlateUnitToken
+    if t == nil and np.GetUnit then
+        local ok, u = pcall(np.GetUnit, np)
+        if ok then t = u end
+    end
+    if t == nil or issecretvalue(t) or type(t) ~= "string" then return nil end
+    return t
+end
+
 local function Wanted(unit)
     return UnitIsPlayer(unit) and not UnitIsUnit(unit, "player") and not UnitCanAttack("player", unit)
 end
@@ -892,7 +906,7 @@ local function Detach(unit)
     HideOverlay(b.missing)
     -- Unbound only: a hidden container neither listens nor parses, and the
     -- next attach binds its unit afresh.
-    b.plate, b.anchor, b.unit = nil, nil, nil
+    b.plate, b.anchor, b.via, b.unit = nil, nil, nil, nil
     Park(b.holder)
     pool[#pool + 1] = b
     if running then ServeWaiting() end
@@ -903,7 +917,7 @@ function Attach(unit)
     if not nameplate then Fail(unit, "no nameplate"); Detach(unit) return end
     if not Wanted(unit) then Fail(unit, "not a friendly player"); Detach(unit) return end
     if nameplate:IsForbidden() then Fail(unit, "the game locks this plate"); Detach(unit) return end
-    local found, parent, anchor, plate = pcall(NameOf, nameplate, unit)
+    local found, parent, anchor, plate, via = pcall(NameOf, nameplate, unit)
     if not found then
         anchorError = anchorError or tostring(parent)
         Fail(unit, "the plate could not be read")
@@ -927,7 +941,7 @@ function Attach(unit)
         UnwatchArrow(b)
         WatchArrow(b, plate)
     end
-    b.plate, b.anchor = plate, anchor
+    b.plate, b.anchor, b.via = plate, anchor, via
     -- A plate may refuse a child or an anchor in some content: no row on
     -- that plate then.
     local ok, err = pcall(b.holder.SetParent, b.holder, parent)
@@ -1172,7 +1186,7 @@ local function Start()
         end
     end
     local plates = C_NamePlate.GetNamePlates and C_NamePlate.GetNamePlates() or {}
-    for _, nameplate in ipairs(plates) do Adopt(nameplate.namePlateUnitToken) end
+    for _, nameplate in ipairs(plates) do Adopt(PlateToken(nameplate)) end
     for i = 1, PLATE_TOKENS do Adopt("nameplate" .. i) end
 end
 
@@ -1214,6 +1228,17 @@ end
 
 local STATE_WORD = { [true] = "has", [false] = "LACKS" }
 
+-- Why a buff reads unknown on a unit, in Evaluate's own order.
+local function UnknownWhy(i, unit, restricted)
+    if not UnitExists(unit) then return "no unit" end
+    if not UnitIsConnected(unit) then return "offline" end
+    if not UnitIsVisible(unit) then return "out of sight" end
+    if restricted and not Trusted(i) then return "hidden by the game" end
+    if not Serves(FAMILIES[i], unit) then return "not for this class" end
+    if #FamilyNames(i) == 0 then return "spell names not loaded" end
+    return "aura read was secret"
+end
+
 function NB:Diagnose()
     local out = {}
     local function add(fmt, ...) out[#out + 1] = "|cff00ccffLD np|r " .. string.format(fmt, ...) end
@@ -1233,6 +1258,31 @@ function NB:Diagnose()
         #reminded > 0 and table.concat(reminded, ",") or "none", tostring(displayAny))
     add("plates watched=%d rows=%d waiting=%d spare=%d builds failed=%d",
         Count(watching), Count(active), Count(waiting), #pool, buildFailures)
+    -- Every friendly player that has a plate right now, against the plates
+    -- the reminder is tracking: a gap means plates it never heard about.
+    local okScan, scanErr = pcall(function()
+        local now, untracked = 0, {}
+        for i = 1, PLATE_TOKENS do
+            local u = "nameplate" .. i
+            if UnitExists(u) and C_NamePlate.GetNamePlateForUnit(u) and Wanted(u) then
+                now = now + 1
+                if not watching[u] then untracked[#untracked + 1] = u end
+            end
+        end
+        add("friendly player plates on screen=%d, not tracked=%d%s", now, #untracked,
+            #untracked > 0 and (" (" .. table.concat(untracked, ",", 1, math.min(#untracked, 4)) .. ")") or "")
+        local cvar = C_CVar and C_CVar.GetCVar
+        if cvar then
+            local parts = {}
+            for _, name in ipairs({"nameplateShowFriends", "nameplateShowFriendlyPlayers",
+                "nameplateShowOnlyNames", "nameplateMaxDistance"}) do
+                local ok, v = pcall(cvar, name)
+                if ok and v ~= nil then parts[#parts + 1] = name:gsub("^nameplate", "") .. "=" .. tostring(v) end
+            end
+            if #parts > 0 then add("cvars: %s", table.concat(parts, " ")) end
+        end
+    end)
+    if not okScan then add("plate scan failed: %s", tostring(scanErr)) end
     if buildError then add("build error: %s", buildError) end
     if anchorError then add("anchor error: %s", anchorError) end
     for reason, n in pairs(failCounts) do add("no row x%d: %s", n, reason) end
@@ -1244,9 +1294,10 @@ function NB:Diagnose()
     local ok, err = pcall(function()
         local np = C_NamePlate.GetNamePlateForUnit("target")
         if not np then add("target: no nameplate") return end
-        local token = np.namePlateUnitToken
-        add("target plate=%s player=%s attackable=%s",
-            tostring(token), tostring(UnitIsPlayer("target")), tostring(UnitCanAttack("player", "target")))
+        local token = PlateToken(np)
+        add("target plate=%s tracked=%s player=%s attackable=%s",
+            tostring(token), tostring(token ~= nil and watching[token] == true),
+            tostring(UnitIsPlayer("target")), tostring(UnitCanAttack("player", "target")))
         local uf = np.UnitFrame
         local forbidden = uf and uf:IsForbidden()
         local _, _, _, via = NameOf(np, token or "target")
@@ -1261,14 +1312,25 @@ function NB:Diagnose()
         end
         add("target row: shown=%s visible=%s missing icons=%d",
             tostring(b.holder:IsShown()), tostring(b.holder:IsVisible()), b.missing:IsShown() and MissingList(token) or 0)
+        -- Where the row was hung when it attached, and whether that spot is
+        -- still on screen: a plate addon can hide or swap the frame later.
+        local parent = b.holder:GetParent()
+        add("target row attached via: %s | that frame visible=%s | anchor visible=%s",
+            tostring(b.via), tostring(parent and parent:IsVisible()),
+            tostring(b.anchor and b.anchor.IsVisible and b.anchor:IsVisible()))
         local st, parts = state[token], {}
+        local restricted = AurasRestricted()
         for i = 1, NUM do
             local key = FAMILIES[i].key
             if tracked[key] then
-                parts[#parts + 1] = key .. "=" .. (STATE_WORD[st and st[key]] or "unknown")
+                local word = STATE_WORD[st and st[key]]
+                if not word then word = "unknown(" .. UnknownWhy(i, token, restricted) .. ")" end
+                parts[#parts + 1] = key .. "=" .. word
             end
         end
         if #parts > 0 then add("target buffs: %s", table.concat(parts, " ")) end
+        add("target read: restricted=%s solo=%s role=%s", tostring(restricted), tostring(solo),
+            tostring(RoleOf(token)))
     end)
     if not ok then add("target check failed: %s", tostring(err)) end
     return out
