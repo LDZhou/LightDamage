@@ -296,7 +296,6 @@ LAYOUT_RANGE_TOTAL_SHORT = "總計",
     EQUALIZE = "相鄰均分",
     COMBAT_DATA_LOCKED = "[API 限制，請脫戰後查看]",
     CATEGORY_TOOLS = "小工具",
-    TOOLS_ENABLE = "啟用",
     TOOLS_TARGET_ARROW = "Final Fantasy XIV 風格目標箭頭",
     TOOLS_TARGET_ARROW_DESC = "在目前目標的名條上方顯示一個箭頭，切換目標時從上方滑入。箭頭顏色代表目標是誰：藍色是你自己、隊友或其他玩家，紅色是敵對，黃色是中立，綠色是友好，灰色是已死亡。戰鬥中，你能攻擊的目標都顯示為紅色。",
     TOOLS_STANDALONE_ACTIVE = "獨立插件 %s 仍在啟用。為避免重複顯示，這裡的設定暫不生效；請在插件列表中停用 %s，然後重新載入介面。",
@@ -322,4 +321,8 @@ LAYOUT_RANGE_TOTAL_SHORT = "總計",
     -- Bottom bar: the short-label switch and its legend's separator.
     BOTTOM_BAR_ABBREVIATE = "底欄使用縮寫",
     LIST_SEPARATOR = "、",
+    -- Tools: item levels on the character panel.
+    TOOLS_ITEM_LEVEL = "角色面板物品等級",
+    TOOLS_ITEM_LEVEL_DESC = "在角色面板每個裝備格底部顯示該裝備的物品等級（依品質著色），並在面板右上方的圖示下面顯示平均物品等級。暴雪內建的角色面板和 EllesmereUI 等介面皮膚都能用。",
+    TOOLS_ITEM_LEVEL_AVERAGE = "物品等級 %d",
 })

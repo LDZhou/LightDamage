@@ -10,5 +10,6 @@
     <Script file="DetailView.lua"/>
     <Script file="HistoryList.lua"/>
     <Script file="TargetArrow.lua"/>
+    <Script file="ItemLevel.lua"/>
     <Script file="NameplateBuffs.lua"/>
 </Ui>

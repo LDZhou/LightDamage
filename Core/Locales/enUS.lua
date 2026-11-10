@@ -296,7 +296,6 @@ LAYOUT_RANGE_TOTAL_SHORT = "Tot",
     EQUALIZE = "Equalize Pair",
     COMBAT_DATA_LOCKED = "[API limited; view after combat]",
     CATEGORY_TOOLS = "Tools",
-    TOOLS_ENABLE = "Enable",
     TOOLS_TARGET_ARROW = "Final Fantasy XIV-style Target Arrow",
     TOOLS_TARGET_ARROW_DESC = "Shows an arrow above your current target's nameplate that slides in when you change targets. Its colour tells you who the target is: blue for you, your group or other players, red for hostile, yellow for neutral, green for friendly and grey for dead. In combat, anything you can attack is red.",
     TOOLS_STANDALONE_ACTIVE = "The standalone %s addon is still enabled. To avoid showing everything twice, this setting does nothing until you disable %s in the AddOns list and reload the UI.",
@@ -322,4 +321,8 @@ LAYOUT_RANGE_TOTAL_SHORT = "Tot",
     -- Bottom bar: the short-label switch and its legend's separator.
     BOTTOM_BAR_ABBREVIATE = "Short labels on the bottom bar",
     LIST_SEPARATOR = ", ",
+    -- Tools: item levels on the character panel.
+    TOOLS_ITEM_LEVEL = "Item levels on the character panel",
+    TOOLS_ITEM_LEVEL_DESC = "Shows each equipped item's level at the bottom of its slot, in the item's quality colour, and your average item level under the icons at the top right of the character panel. Works on Blizzard's character panel and under skins such as EllesmereUI.",
+    TOOLS_ITEM_LEVEL_AVERAGE = "Item Level %d",
 })

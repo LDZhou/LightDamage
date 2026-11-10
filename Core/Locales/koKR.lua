@@ -296,7 +296,6 @@ ns:RegisterLocale("koKR", {
     EQUALIZE = "균등 분할",
     COMBAT_DATA_LOCKED = "[API 제한: 전투가 끝난 뒤 확인하세요]",
     CATEGORY_TOOLS = "도구",
-    TOOLS_ENABLE = "사용",
     TOOLS_TARGET_ARROW = "Final Fantasy XIV 스타일 대상 화살표",
     TOOLS_TARGET_ARROW_DESC = "현재 대상의 이름표 위에 화살표를 표시하며, 대상을 바꾸면 화살표가 위에서 미끄러지듯 내려옵니다. 화살표 색은 대상이 누구인지 알려 줍니다: 파란색은 나, 파티원 또는 다른 플레이어, 빨간색은 적대, 노란색은 중립, 초록색은 우호, 회색은 죽은 대상입니다. 전투 중에는 공격할 수 있는 대상이 모두 빨간색으로 표시됩니다.",
     TOOLS_STANDALONE_ACTIVE = "별도 애드온 %s이(가) 아직 켜져 있습니다. 중복 표시를 막기 위해, 애드온 목록에서 %s을(를) 끄고 UI를 다시 불러올 때까지 이 설정은 적용되지 않습니다.",
@@ -322,4 +321,8 @@ ns:RegisterLocale("koKR", {
     -- Bottom bar: the short-label switch and its legend's separator.
     BOTTOM_BAR_ABBREVIATE = "하단 바에 줄임말 사용",
     LIST_SEPARATOR = ", ",
+    -- Tools: item levels on the character panel.
+    TOOLS_ITEM_LEVEL = "캐릭터 창 아이템 레벨",
+    TOOLS_ITEM_LEVEL_DESC = "캐릭터 창의 각 장비 칸 아래쪽에 그 장비의 아이템 레벨을 품질 색으로 표시하고, 창 오른쪽 위 아이콘 아래에 평균 아이템 레벨을 표시합니다. 블리자드 기본 캐릭터 창과 EllesmereUI 같은 인터페이스 스킨 모두에서 작동합니다.",
+    TOOLS_ITEM_LEVEL_AVERAGE = "아이템 레벨 %d",
 })

@@ -57,12 +57,16 @@ ns.defaults = {
     detailWindow = {
         width = 380, height = 420,
     },
-    -- Tools page: the Final Fantasy XIV-style target arrow and the nameplate
-    -- buff reminder (families[key] = false switches one buff off).
+    -- Tools page: the Final Fantasy XIV-style target arrow, item levels on
+    -- the character panel and the nameplate buff reminder (families[key] =
+    -- false switches one buff off).  Every tool starts off: a new player
+    -- turns on the ones they want.  A profile that already saved a choice
+    -- keeps it.
     tools = {
-        targetArrow = true,
+        targetArrow = false,
+        itemLevel   = false,
         nameplateBuffs = {
-            enabled     = true,
+            enabled     = false,
             onlyMyClass = true,
             showMissing = true,
             families    = {},
@@ -401,6 +405,7 @@ function Core:OnInitialize()
         if ns.Analysis     then ns.Analysis:Init()     end
         -- Tools page modules: each follows its own switch in ns.db.tools.
         if ns.TargetArrow    then ns.TargetArrow:Apply()    end
+        if ns.ItemLevel      then ns.ItemLevel:Apply()      end
         if ns.NameplateBuffs then ns.NameplateBuffs:Apply() end
 
         ns:StartSmartRefresh()

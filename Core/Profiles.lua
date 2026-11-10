@@ -54,6 +54,7 @@ function ns:SwitchProfile(name)
         end
     end
     if ns.TargetArrow then ns.TargetArrow:Apply() end
+    if ns.ItemLevel then ns.ItemLevel:Apply() end
     if ns.NameplateBuffs then ns.NameplateBuffs:Apply() end
     if ns.Config then
         if ns.Config.panel then
