@@ -1,6 +1,6 @@
 --[[
     Light Damage - ConfigTools.lua
-    设置页面：小工具 (Final Fantasy XIV 风格目标箭头、角色面板物品等级、姓名板增益提醒)
+    设置页面：其他工具 (Final Fantasy XIV 风格目标箭头、角色面板物品等级、姓名板增益提醒)
     所有方法挂载到 ns.Config 上（ConfigCore.lua 已创建）
 
     Compact layout: one switch per tool, its explanation behind the "?" next
@@ -128,7 +128,7 @@ function Config:BuildToolsPage()
         function(v) Tools().targetArrow = v and true or false; if arrow then arrow:Apply() end end,
         L.TOOLS_TARGET_ARROW_DESC)
     if arrow and arrow:IsStandaloneLoaded() then
-        y = self:ToolsNote(inner, y, string.format(L.TOOLS_STANDALONE_ACTIVE, "TargetArrow", "TargetArrow"))
+        y = self:ToolsNote(inner, y, string.format(L.TOOLS_STANDALONE_ACTIVE, "TargetArrow"))
     end
 
     y = self:Check(inner, L.TOOLS_ITEM_LEVEL, y,
@@ -141,7 +141,7 @@ function Config:BuildToolsPage()
         function(v) BuffSettings().enabled = v and true or false; ApplyBuffs() end,
         L.TOOLS_NAMEPLATE_BUFFS_DESC)
     if NB and NB:IsStandaloneLoaded() then
-        y = self:ToolsNote(inner, y, string.format(L.TOOLS_STANDALONE_ACTIVE, "NameplateFortitude", "NameplateFortitude"))
+        y = self:ToolsNote(inner, y, string.format(L.TOOLS_STANDALONE_ACTIVE, "NameplateFortitude"))
     end
 
     -- The reminder's two options, side by side under its switch.

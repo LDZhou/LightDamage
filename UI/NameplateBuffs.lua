@@ -823,7 +823,7 @@ end
 -- plate if it is one, and how the spot was found.
 local function NameOf(nameplate, unit)
     local plate = EUIPlate(nameplate, unit)
-    if plate then return plate, plate.name, plate, "EllesmereUI plate" end
+    if plate then return plate, plate.name, plate, "addon plate" end
     local uf = nameplate.UnitFrame
     if uf and not uf:IsForbidden() and uf:GetParent() == nameplate and uf.name and Drawn(uf.name) then
         return uf, uf.name, nil, "Blizzard name"

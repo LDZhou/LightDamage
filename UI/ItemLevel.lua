@@ -2,11 +2,10 @@
     Light Damage - ItemLevel.lua  (WoW Forever)
     Tools: item levels on the character panel.
 
-    * Each equipped item's level at the bottom of its slot, in the item's
-      quality colour.  Shirt, tabard and ammo carry none (nor do they on
-      retail).
-    * The average equipped item level, centred under the paper doll's sidebar
-      tabs (the top-right icons), shown and hidden with them.
+    * Each equipped item's level at the bottom of its slot, in white.  Shirt,
+      tabard and ammo carry none (nor do they on retail).
+    * The average equipped item level, in white, centred under the paper
+      doll's sidebar tabs (the top-right icons), shown and hidden with them.
 
     Built on Blizzard's own Forever character frame (CharacterHeadSlot ...,
     PaperDollSidebarTabs), so it works on the stock sheet and under skins such
@@ -113,14 +112,8 @@ local function PaintSlot(button)
         return
     end
     waiting[button] = nil
-    local r, g, b = 1, 1, 1
-    local quality = GetInventoryItemQuality("player", slotID)
-    if quality and C_Item.GetItemQualityColor then
-        local qr, qg, qb = C_Item.GetItemQualityColor(quality)
-        if qr then r, g, b = qr, qg, qb end
-    end
     fs:SetText(level)
-    fs:SetTextColor(r, g, b)
+    fs:SetTextColor(1, 1, 1)
     fs:Show()
 end
 
@@ -155,7 +148,7 @@ local function PaintAverage()
     fs:ClearAllPoints()
     fs:SetPoint("TOP", _G.PaperDollSidebarTabs, "TOP", 0, -drop)
     fs:SetFormattedText(L.TOOLS_ITEM_LEVEL_AVERAGE, level)
-    fs:SetTextColor(1, 0.82, 0)
+    fs:SetTextColor(1, 1, 1)
     fs:Show()
 end
 

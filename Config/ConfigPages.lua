@@ -54,7 +54,6 @@ function Config:BuildBottomBarSettings(page)
     y = y - 8
     -- Which statistics sit on the bar.
     y = self:Desc(page, y, L.BOTTOM_BAR_SETTINGS_DESC)
-    y = self:Desc(page, y, L.BOTTOM_BAR_OVERVIEW_ALWAYS)
     for _,mode in ipairs(ns.MODE_ORDER) do
         local m=mode
         y = self:Check(page, L[ns.MODE_NAMES[m] or m], y,
